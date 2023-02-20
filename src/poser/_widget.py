@@ -227,6 +227,10 @@ class PoserWidget(Container):
         self.decoder_data_dir = None
         self.ground_truth_ethogram = None
         self.ethogram = None
+        self.regions_layer = None
+        self.points_layer = None
+        self.track_layer = None
+        self.regions = []
 
         self.add_1d_widget()
         self.viewer.dims.events.current_step.connect(self.update_slider)
@@ -298,6 +302,7 @@ class PoserWidget(Container):
         self.behaviours = []
         # self.choices = []
         self.b_labels = None
+        self.regions = []
 
         self.classification_data = {}
         self.point_subset = np.array([])
@@ -379,13 +384,19 @@ class PoserWidget(Container):
         # if (event.axis == 0):
         print(event)
         self.frame = event.value[0]
-        try:
-            self.frame_line.data = np.c_[
-                [self.frame, self.frame], [0, self.frame_line.data[1, 0]]
-            ]
+        # try:
 
-        except:
-            print("Failed to update frame line")
+        if self.behaviour_no > 0:
+            add_frame = self.behaviours[self.behaviour_no][0]
+        else:
+            add_frame = 0
+        self.frame_line.data = np.c_[
+            [self.frame + add_frame, self.frame + add_frame],
+            [0, self.frame_line.data[1, 0]],
+        ]
+
+        # except:
+        #    print("Failed to update frame line")
 
         print(f"updating slider frame {self.frame}")
 
@@ -447,7 +458,9 @@ class PoserWidget(Container):
         self.frame = 0
 
         self.frame_line = self.viewer1d.add_line(
-            np.c_[[self.frame, self.frame], [0, 10]], color="gray"
+            np.c_[[self.frame, self.frame], [0, 10]],
+            color="gray",
+            name="Frame",
         )
 
         # Moving frames? - redundant
@@ -472,13 +485,17 @@ class PoserWidget(Container):
         t = np.arange(self.gauss_filtered.shape[0])
 
         self.viewer1d.add_line(
-            np.c_[t, self.gauss_filtered], color="magenta", label="Movement"
+            np.c_[t, self.gauss_filtered],
+            color="magenta",
+            label="Movement",
+            name="Movement",
         )
         thresh = np.median(self.gauss_filtered) + self.threshold
         self.viewer1d.add_line(
             np.c_[[0, self.gauss_filtered.shape[0]], [thresh, thresh]],
             color="cyan",
             label="Movement threshold",
+            name="Threshold",
         )
         self.viewer1d.reset_view()
         self.label_menu.choices = choices
@@ -487,17 +504,21 @@ class PoserWidget(Container):
         ]
 
     def plot_behaving_region(self):
+        self.regions.append(([self.start, self.stop], "vertical"))
+        print(self.regions)
         choices = self.label_menu.choices
-        regions = [
-            ([self.start, self.stop], "vertical"),
-        ]
-
-        layer = self.viewer1d.add_region(
-            regions,
-            color=["green"],
-            opacity=0.4,
-            name="Behaviour",
-        )
+        # regions = [
+        #    ([self.start, self.stop], "vertical"),
+        # ]
+        if self.regions_layer is None:
+            self.regions_layer = self.viewer1d.add_region(
+                self.regions,
+                color=["green"],
+                opacity=0.4,
+                name="Behaviour",
+            )
+        else:
+            self.regions_layer.data = self.regions
         self.label_menu.choices = choices
 
     def reset_viewer1d_layers(self):
@@ -862,6 +883,7 @@ class PoserWidget(Container):
             visible=True,
             properties=properties,
             text=text_params,
+            name="Movement",
         )
         self.label_menu.choices = self.choices
 
@@ -969,12 +991,13 @@ class PoserWidget(Container):
 
         self.labeled = True
         self.labeled_h5_file.close()
+        self.individual_changed(self.ind)  # reload ind data
         self.ind_spinbox.max = max(self.classification_data.keys())
-        self.ind_spinbox.value = 0
+        # self.ind_spinbox.value = 0
         self.spinbox.value = 0
 
         self.tracks = None  # set this to none as it's not saved
-        self.ind = 0
+        # self.ind = 0
 
         # self.choices = pd.Series([label["classification"] for k,label in self.classification_data[1].items()]).unique().tolist()
         # print(self.choices)
@@ -1053,26 +1076,33 @@ class PoserWidget(Container):
         N = self.dlc_data.shape[0]
         etho = np.zeros((len(self.label_dict), N))
 
-        for bout, data in self.classification_data[self.ind].items():
-            idx = np.arange(data["start"], data["stop"])
-            label = self.label_dict[data["classification"]]
-            etho[label, idx] = 1
+        if len(self.classification_data.keys()) > 0:
+            for bout, data in self.classification_data[self.ind].items():
+                idx = np.arange(data["start"], data["stop"])
+                label = self.label_dict[data["classification"]]
+                etho[label, idx] = 1
 
         return etho
 
     def populate_groundt_etho(self, etho):
         if self.ground_truth_ethogram is not None:
             self.ground_truth_ethogram.data = etho
+            self.ground_truth_ethogram.visible = False
+            self.ground_truth_ethogram.visible = True
         else:
             self.ground_truth_ethogram = self.viewer1d.add_image(
-                etho, name="Ground truth"
+                etho, name="Ground truth", opacity=0.5
             )
 
     def populate_predicted_etho(self, etho):
         if self.ethogram is not None:
             self.ethogram.data = etho
+            self.ethogram.visible = False
+            self.ethogram.visible = True
         else:
-            self.ethogram = self.viewer1d.add_image(etho, name="Predicted")
+            self.ethogram = self.viewer1d.add_image(
+                etho, name="Predicted", opacity=0.5
+            )
 
     def convert_txt_todict(self, event):
         """Reads event text file and converts it to usable format to display behaviours in GUI."""
@@ -1166,17 +1196,24 @@ class PoserWidget(Container):
         last_ind = self.ind
         self.ind = event
         print(f"New individual is individual {self.ind}")
+        if self.ind > 0:
+            # check ind in data
+            if self.labeled == True:
+                print(type(self.ind))
+                # self.im_subset.data = self.im
+                self.spinbox.max = len(
+                    self.classification_data[self.ind].keys()
+                )
+                print(f"number of labelled behaviours is {self.spinbox.max}")
+                self.label_menu.choices = self.choices
+                self.populate_chkpt_dropdown()  # because keeps erasing dropdown choices
 
-        # check ind in data
-        if self.labeled == True:
-            print(type(self.ind))
-            self.im_subset.data = self.im
-            self.spinbox.max = len(self.classification_data[self.ind].keys())
-            print(f"number of labelled behaviours is {self.spinbox.max}")
-            self.label_menu.choices = self.choices
-            self.populate_chkpt_dropdown()  # because keeps erasing dropdown choices
+                # if len(self.behaviours) == 0: this would cover loading the class h5 file directly without extracting bouts
+                # loop through class data and append start stops to self behaviours
 
-        else:
+            else:
+                pass
+
             exists = len(
                 [
                     n
@@ -1199,9 +1236,13 @@ class PoserWidget(Container):
                 self.im_subset.data = self.im
 
                 # create points layer
-                self.points_layer = self.viewer.add_points(
-                    self.points, size=3, visible=False
-                )
+                if self.points_layer is None:
+                    self.points_layer = self.viewer.add_points(
+                        self.points, size=3, visible=True
+                    )
+                else:
+                    self.points_layer.data = self.points
+
                 # self.track_layer = self.viewer.add_tracks(self.tracks, tail_length = 100, tail_width = 3)
                 self.label_menu.choices = self.choices
                 self.populate_chkpt_dropdown()  # because keeps erasing dropdown choices
@@ -1216,8 +1257,8 @@ class PoserWidget(Container):
                     (-1, *center.shape)
                 )  # subtract center nodes
 
-        etho = self.classification_data_to_ethogram()
-        self.populate_groundt_etho(etho)
+            etho = self.classification_data_to_ethogram()
+            self.populate_groundt_etho(etho)
 
     def extract_behaviours(self, value=None):
         print(f"Extracting behaviours using {self.extract_method} method")
@@ -1383,11 +1424,20 @@ class PoserWidget(Container):
                     self.point_subset = self.point_subset - np.array(
                         [self.start, 0, 0]
                     )  # zero z because add_image has zeroed
-
-                    self.track_subset = self.tracks[self.start : self.stop]
-                    self.track_subset = self.track_subset - np.array(
-                        [0, self.start, 0, 0]
-                    )  # zero z because add_image has zeroed
+                    if self.tracks is not None:
+                        self.track_subset = self.tracks[self.start : self.stop]
+                        self.track_subset = self.track_subset - np.array(
+                            [0, self.start, 0, 0]
+                        )  # zero z because add_image has zeroed
+                        try:
+                            self.track_layer.data = self.track_subset
+                        except:
+                            self.track_layer = self.viewer.add_tracks(
+                                self.track_subset,
+                                tail_length=500,
+                                tail_width=3,
+                            )
+                            self.label_menu.choices = self.choices
 
                     self.ci_subset = (
                         self.ci.iloc[:, self.start : self.stop]
@@ -1409,13 +1459,6 @@ class PoserWidget(Container):
 
                     # self.points_layer.data = self.point_subset
                     # self.points_layer = self.viewer.add_points(self.point_subset, size=5)
-                    try:
-                        self.track_layer.data = self.track_subset
-                    except:
-                        self.track_layer = self.viewer.add_tracks(
-                            self.track_subset, tail_length=500, tail_width=3
-                        )
-                        self.label_menu.choices = self.choices
 
                     if self.label_menu.choices == ():
                         print(self.label_menu.choices)
@@ -1439,7 +1482,11 @@ class PoserWidget(Container):
             elif len(self.behaviours) == 0:
                 self.show_data(self.behaviour_no - 1)
 
-                # save value classification value to something
+        elif self.behaviour_no == 0:
+            # restore full length
+            self.points_layer.data = self.points
+            self.track_layer.data = self.tracks
+            self.im_subset.data = self.im
 
     def save_to_h5(self, event):
         """converts classification data to pytables format for efficient storage.
@@ -1755,6 +1802,19 @@ class PoserWidget(Container):
         self.label_menu.choices = self.choices
 
         # maybe loop and create new classification_data
+        if len(self.classification_data[self.ind].keys()) == len(
+            self.behaviours
+        ):
+            # loop classification data and just change label
+            for nb, (b, b_data) in enumerate(
+                self.classification_data[self.ind].items()
+            ):
+                b["classification"] = self.b_labels[nb]
+        else:
+            # invoke behaviour changed loop
+            for b in range(len(self.behaviours)):
+                self.behaviour_changed(b + 1)
+            self.behaviour_changed(0)
 
     def convert_classification_files(self, train_files):
         # use folder and convert classification files
