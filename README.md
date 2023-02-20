@@ -25,7 +25,7 @@ https://napari.org/stable/plugins/index.html
 
 You can install `PoseR` via [pip]:
 
-    pip install PoseR
+    pip install Pose-R
 
 
 
