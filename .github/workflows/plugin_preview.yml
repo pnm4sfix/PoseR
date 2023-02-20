@@ -1,0 +1,23 @@
+name: napari hub Preview Page
+
+
+on:
+  pull_request:
+    branches:
+      - '**'
+
+
+jobs:
+  preview-page:
+    name: Preview Page Deploy
+	runs-on: ubuntu-latest
+
+
+	steps:
+	  - name: Checkout repo
+	  	uses: actions/checkout@v2
+
+	  - name: napari hub Preview Page Builder
+		uses: chanzuckerberg/napari-hub-preview-action@v0.1.5
+		with:
+		  hub-ref: main
