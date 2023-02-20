@@ -20,7 +20,7 @@ https://github.com/napari/cookiecutter-napari-plugin#getting-started
 and review the napari docs for plugin developers:
 https://napari.org/stable/plugins/index.html
 -->
-![alt text]('https://github.com/pnm4sfix/PoseR/blob/main/Figure 1 - PluginOverview.png'?raw=true)
+![alt text](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/Figure 1 - PluginOverview.png?raw=true)
 
 ## Installation
 
