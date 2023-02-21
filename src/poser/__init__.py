@@ -2,9 +2,10 @@ try:
     from ._version import version as __version__
 except ImportError:
     __version__ = "unknown"
-from ._widget import ExampleQWidget, example_magic_widget
 
-__all__ = (
-    "ExampleQWidget",
-    "example_magic_widget",
-)
+from poser._widget import PoserWidget
+from poser._loader import HyperParams
+from poser._loader import ZebData
+from poser.utils import Animation
+
+__all__ = "PoserWidget"

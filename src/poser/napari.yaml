@@ -3,19 +3,14 @@ display_name: PoseR
 contributions:
   commands:
     - id: PoseR.make_qwidget
-      python_name: poser._widget:ExampleQWidget
-      title: Make example QWidget
-    - id: PoseR.make_magic_widget
-      python_name: poser._widget:example_magic_widget
-      title: Make example magic widget
-    - id: PoseR.make_func_widget
-      python_name: poser._widget:example_function_widget
-      title: Make example function widget
+      python_name: poser._widget:PoserWidget
+      title: Make Poser Widget
+    - id: PoseR.make_hparams
+      python_name: poser._loader:HyperParams
+      title: Make hparams
+    - id: PoseR.make_dataset
+      python_name: poser._loader:ZebData
+      title: Make dataset
   widgets:
     - command: PoseR.make_qwidget
-      display_name: Example QWidget
-    - command: PoseR.make_magic_widget
-      display_name: Example Magic Widget
-    - command: PoseR.make_func_widget
-      autogenerate: true
-      display_name: Example Function Widget
+      display_name: PoseR

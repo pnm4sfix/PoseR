@@ -1,7 +1,7 @@
 # PoseR
 
 [![License BSD-3](https://img.shields.io/pypi/l/PoseR.svg?color=green)](https://github.com/pnm4sfix/PoseR/raw/main/LICENSE)
-[![PyPI](https://img.shields.io/pypi/v/PoseR.svg?color=green)](https://pypi.org/project/PoseR)
+[![PyPI](https://img.shields.io/pypi/v/Pose-R.svg?color=green)](https://pypi.org/project/Pose-R)
 [![Python Version](https://img.shields.io/pypi/pyversions/PoseR.svg?color=green)](https://python.org)
 [![tests](https://github.com/pnm4sfix/PoseR/workflows/tests/badge.svg)](https://github.com/pnm4sfix/PoseR/actions)
 [![codecov](https://codecov.io/gh/pnm4sfix/PoseR/branch/main/graph/badge.svg)](https://codecov.io/gh/pnm4sfix/PoseR)
@@ -20,12 +20,34 @@ https://github.com/napari/cookiecutter-napari-plugin#getting-started
 and review the napari docs for plugin developers:
 https://napari.org/stable/plugins/index.html
 -->
+![alt text](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/logo.png?raw=true)
 
 ## Installation
 
+Create an anaconda environment:
+
+    conda create -n PoseR python=3.10
+
+Activate PoseR environment:
+
+    conda activate PoseR
+
+Install CUDA if using NVIDIA GPU:
+
+    conda install -c "nvidia/label/cuda-11.7.0" cuda
+
+Install Pytorch:
+For GPU:
+
+    conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
+
+For CPU only version:
+
+    conda install pytorch torchvision torchaudio cpuonly -c pytorch
+
 You can install `PoseR` via [pip]:
 
-    pip install PoseR
+    pip install Pose-R
 
 
 
