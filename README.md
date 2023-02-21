@@ -47,7 +47,7 @@ For CPU only version:
 
 You can install `PoseR` via [pip]:
 
-    pip install Pose-R
+    pip install PoseR-napari
 
 
 
