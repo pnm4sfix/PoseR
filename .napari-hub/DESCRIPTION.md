@@ -14,23 +14,23 @@ A deep learning toolbox for decoding animal behaviour
 
 ## Load pose data
 
-![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/LoadData.gif?raw=true)
+![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/LoadData2.gif?raw=true)
 
 ## Extract windows of behaviour
 
-![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/ExtractBehaviours.gif)
+![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/ExtractBehaviours2.gif?raw=true)
 
 ## Annotate behaviours and save labels
 
-![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/AnnotateBehaviours.gif)
+![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/AnnotateBehaviours2.gif?raw=true)
 
 ## Train models on annotated data and predict behaviours
 
-![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/PredictBehaviours.gif)
+![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/PredictBehaviours2.gif?raw=true)
 
 ## Load annotated data and compare predictions vs annotated ground truth
 
-![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/ComparePredictionsVsGroundT.gif)
+![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/ComparePredictionsVsGroundT2.gif?raw=true)
 
 ## Decode behaviours live frame by frame
 
