@@ -34,7 +34,7 @@ A deep learning toolbox for decoding animal behaviour
 
 ## Decode behaviours live frame by frame
 
-![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/LiveDecode2.gif)
+![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/LiveDecode2.gif?raw=true)
 
 This [napari] plugin was generated with [Cookiecutter] using [@napari]'s [cookiecutter-napari-plugin] template.
 
