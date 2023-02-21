@@ -14,7 +14,7 @@ A deep learning toolbox for decoding animal behaviour
 
 ## Load pose data
 
-![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/LoadData.gif)
+![](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/LoadData.gif?raw=true)
 
 ## Extract windows of behaviour
 
