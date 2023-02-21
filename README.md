@@ -44,6 +44,10 @@ For GPU:
 For CPU only version:
 
     conda install pytorch torchvision torchaudio cpuonly -c pytorch
+    
+Install napari:
+
+    pip install napari["all"]
 
 You can install `PoseR` via [pip]:
 
