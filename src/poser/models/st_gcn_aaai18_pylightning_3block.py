@@ -8,7 +8,7 @@ from pytorch_lightning import LightningModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset
 from torchmetrics.functional.classification.accuracy import accuracy
-from torchvision.transforms import Lambda
+
 
 # import sys
 # sys.path.insert(1, "../")
@@ -263,11 +263,12 @@ class ST_GCN_18(LightningModule):
         if stage == "predict":
             pass
         else:
-            target_transform = Lambda(
-                lambda y: torch.zeros(
-                    self.num_classes, dtype=torch.float
-                ).scatter_(0, torch.tensor(y), value=1)
-            )
+            target_transform = None
+            # target_transform = Lambda(
+            #    lambda y: torch.zeros(
+            #        self.num_classes, dtype=torch.float
+            #    ).scatter_(0, torch.tensor(y), value=1)
+            # )
             self.train_data = ZebData(
                 os.path.join(self.data_dir, "Zebtrain.npy"),
                 os.path.join(self.data_dir, "Zebtrain_labels.npy"),
