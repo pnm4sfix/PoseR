@@ -1,8 +1,8 @@
 # PoseR
 
 [![License BSD-3](https://img.shields.io/pypi/l/PoseR.svg?color=green)](https://github.com/pnm4sfix/PoseR/raw/main/LICENSE)
-[![PyPI](https://img.shields.io/pypi/v/Pose-R.svg?color=green)](https://pypi.org/project/Pose-R)
-[![Python Version](https://img.shields.io/pypi/pyversions/PoseR.svg?color=green)](https://python.org)
+[![PyPI](https://img.shields.io/pypi/v/PoseR-napari.svg?color=green)](https://pypi.org/project/PoseR-napari)
+[![Python Version](https://img.shields.io/pypi/pyversions/PoseR-napari.svg?color=green)](https://python.org)
 [![tests](https://github.com/pnm4sfix/PoseR/workflows/tests/badge.svg)](https://github.com/pnm4sfix/PoseR/actions)
 [![codecov](https://codecov.io/gh/pnm4sfix/PoseR/branch/main/graph/badge.svg)](https://codecov.io/gh/pnm4sfix/PoseR)
 [![napari hub](https://img.shields.io/endpoint?url=https://api.napari-hub.org/shields/PoseR)](https://napari-hub.org/plugins/PoseR)

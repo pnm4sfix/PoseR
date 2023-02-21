@@ -1,16 +1,16 @@
-name: PoseR
+name: PoseR-napari
 display_name: PoseR
 contributions:
   commands:
-    - id: PoseR.make_qwidget
+    - id: PoseR-napari.make_qwidget
       python_name: poser._widget:PoserWidget
       title: Make Poser Widget
-    - id: PoseR.make_hparams
+    - id: PoseR-napari.make_hparams
       python_name: poser._loader:HyperParams
       title: Make hparams
-    - id: PoseR.make_dataset
+    - id: PoseR-napari.make_dataset
       python_name: poser._loader:ZebData
       title: Make dataset
   widgets:
-    - command: PoseR.make_qwidget
+    - command: PoseR-napari.make_qwidget
       display_name: PoseR
