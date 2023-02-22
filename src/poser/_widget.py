@@ -2218,7 +2218,7 @@ class PoserWidget(Container):
             "label_dict": self.label_dict,
         }
 
-        graph_cfg = {"layout": self.graph_layout}
+        graph_cfg = {"layout": self.graph_layout, "center": self.center_node}
 
         hparams = HyperParams(self.batch_size, self.lr, self.dropout)
 

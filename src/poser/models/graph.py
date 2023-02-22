@@ -24,11 +24,17 @@ class Graph:
     """
 
     def __init__(
-        self, layout="zebrafish", strategy="spatial", max_hop=1, dilation=1
+        self,
+        layout="zebrafish",
+        strategy="spatial",
+        max_hop=1,
+        dilation=1,
+        center=0,
     ):
         self.max_hop = max_hop
         self.dilation = dilation
         self.layout = layout
+        self.center = center
         self.get_edge(layout)
         self.hop_dis = get_hop_distance(
             self.num_node, self.edge, max_hop=max_hop
@@ -326,6 +332,12 @@ class Graph:
             neighbor_link = [(i - 1, j - 1) for (i, j) in neighbor_1base]
             self.edge = self_link + neighbor_link
             self.center = 10
+
+        elif type(layout) == list:
+            self.num_node = np.unique(np.array(layout)).shape[0]
+            self_link = [(i, i) for i in range(self.num_node)]
+            neighbor_1base = layout
+            self.edge = self_link + neighbor_link
 
         else:
             # print(layout)
