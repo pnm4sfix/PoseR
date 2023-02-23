@@ -7,6 +7,7 @@ see: https://napari.org/stable/plugins/guides.html?#widgets
 Replace code below according to your needs.
 """
 
+from cProfile import label
 import sys
 
 sys.path.insert(1, "./")
@@ -230,6 +231,7 @@ class PoserWidget(Container):
         self.regions_layer = None
         self.points_layer = None
         self.track_layer = None
+        self.detection_layer = None
         self.regions = []
 
         self.add_1d_widget()
@@ -247,12 +249,13 @@ class PoserWidget(Container):
 
         self.model_dropdown = ComboBox(
             label="Model type",
-            choices=["ZebLR", "Zeb2.0"],
+            choices=["Detection", "PoseEstimation", "BehaviourDecode"],
             tooltip="Select model for predicting behaviour",
+            value="BehaviourDecode",
         )
 
         self.chkpt_dropdown = ComboBox(
-            label="Model type",
+            label="Checkpoint",
             choices=[],
             tooltip="Select chkpt for predicting behaviour",
         )
@@ -277,6 +280,7 @@ class PoserWidget(Container):
             [
                 self.batch_size_spinbox,
                 self.lr_spinbox,
+                self.model_dropdown,
                 self.chkpt_dropdown,
                 self.train_button,
                 self.live_checkbox,
@@ -352,29 +356,36 @@ class PoserWidget(Container):
         print(f"decoder config is {self.config_data}")
         self.view_data()
 
-    def populate_chkpt_dropdown(self):
+    def populate_chkpt_dropdown(self, event=None):
         # get all checkpoint files and allow user to select one
 
-        log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
-        if os.path.exists(log_folder):
-            version_folders = [
-                version_folder
-                for version_folder in os.listdir(log_folder)
-                if "version" in version_folder
-            ]
+        if (event == None) | (event == "BehaviourDecode"):
+            log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
+            if os.path.exists(log_folder):
+                version_folders = [
+                    version_folder
+                    for version_folder in os.listdir(log_folder)
+                    if "version" in version_folder
+                ]
 
+                self.ckpt_files = []
+                for version_folder in version_folders:
+                    version_folder_files = os.listdir(
+                        os.path.join(log_folder, version_folder)
+                    )
+
+                    for sub_file in version_folder_files:
+                        if ".ckpt" in sub_file:
+                            ckpt_file = os.path.join(version_folder, sub_file)
+                            self.ckpt_files.append(ckpt_file)
+
+            else:
+                self.ckpt_files = []
+
+        elif event == "Detection":
             self.ckpt_files = []
-            for version_folder in version_folders:
-                version_folder_files = os.listdir(
-                    os.path.join(log_folder, version_folder)
-                )
 
-                for sub_file in version_folder_files:
-                    if ".ckpt" in sub_file:
-                        ckpt_file = os.path.join(version_folder, sub_file)
-                        self.ckpt_files.append(ckpt_file)
-
-        else:
+        elif event == "PoseEstimation":
             self.ckpt_files = []
 
         self.chkpt_dropdown.choices = self.ckpt_files
@@ -404,42 +415,103 @@ class PoserWidget(Container):
             # create behaviour from points
             # pass to mode
             # softmax logits and add to a ethogram in viewer1d
-            denominator = self.config_data["data_cfg"]["denominator"]
-            T_method = self.config_data["data_cfg"]["T"]
-            fps = self.config_data["data_cfg"]["fps"]
 
-            if T_method == "window":
-                T = 2 * int(fps / denominator)
+            if self.model_dropdown.value == "Detection":
+                results = self.model(self.im_subset.data[self.frame])
+                result_df = results.pandas().xyxy[0]
+                print(result_df)
 
-            elif type(T_method) == "int":
-                T = T_method  # these methods assume behaviours last the same amount of time -which is a big assumption
+                if self.detection_layer == None:
+                    labels = ["0"]
+                    properties = {
+                        "label": labels,
+                    }
 
-            elif T_method == "None":
-                T = 43
-            self.behaviours = [
-                (self.frame + n, self.frame + n + T)
-                for n in range(self.batch_size)
-            ]
-            # check if frame already processed
-            if self.ethogram.data[:, self.frame].sum() == 0:
-                self.preprocess_bouts()
+                    # text_params = {
+                    #    "text": "label: {label}",
+                    #    "size": 12,
+                    #    "color": "green",
+                    #    "anchor": "upper_left",
+                    #    "translation": [-3, 0],
+                    #    }
 
-                model_input = self.zebdata[: self.batch_size][0].to(
-                    self.device
-                )
-                with torch.no_grad():
-                    probs = self.model(model_input).cpu().numpy()
+                    self.detection_layer = self.viewer.add_shapes(
+                        np.zeros((1, 4, 3)),
+                        shape_type="rectangle",
+                        edge_width=5,
+                        edge_color="#55ff00",
+                        face_color="transparent",
+                        visible=True,
+                        properties=properties,
+                        # text = text_params,
+                    )
 
-                self.ethogram.data[
-                    :, self.frame : self.frame + self.batch_size
-                ] = probs.T
-                # have to switch the layer off and on for chnage to be seen
-                self.ethogram.visible = False
-                self.ethogram.visible = True
-                # self.viewer1d.reset_view()
-                print(f"Probs are {probs}")
-            else:
-                print("Frame already processed")
+                labels = self.detection_layer.properties["label"].tolist()
+                shape_data = self.detection_layer.data
+
+                print(f"shape data shape is {len(shape_data)}")
+                print(f"labels are {labels}")
+                for row in range(result_df.shape[0]):
+                    labels.append(result_df.loc[row, "name"])
+
+                    x_min = result_df.loc[row, "xmin"]
+                    x_max = result_df.loc[row, "xmax"]
+                    y_min = result_df.loc[row, "ymin"]
+                    y_max = result_df.loc[row, "ymax"]
+
+                    new_shape = np.array(
+                        [
+                            [self.frame, y_min, x_min],
+                            [self.frame, y_min, x_max],
+                            [self.frame, y_max, x_max],
+                            [self.frame, y_max, x_min],
+                        ]
+                    )
+
+                    shape_data.append(new_shape)
+                    # shape_data = np.array(shape_data)
+
+                print(labels)
+                self.detection_layer.data = shape_data
+                self.detection_layer.properties = {"label": labels}
+
+            elif self.model_dropdown.value == "BehaviourDecode":
+                denominator = self.config_data["data_cfg"]["denominator"]
+                T_method = self.config_data["data_cfg"]["T"]
+                fps = self.config_data["data_cfg"]["fps"]
+
+                if T_method == "window":
+                    T = 2 * int(fps / denominator)
+
+                elif type(T_method) == "int":
+                    T = T_method  # these methods assume behaviours last the same amount of time -which is a big assumption
+
+                elif T_method == "None":
+                    T = 43
+                self.behaviours = [
+                    (self.frame + n, self.frame + n + T)
+                    for n in range(self.batch_size)
+                ]
+                # check if frame already processed
+                if self.ethogram.data[:, self.frame].sum() == 0:
+                    self.preprocess_bouts()
+
+                    model_input = self.zebdata[: self.batch_size][0].to(
+                        self.device
+                    )
+                    with torch.no_grad():
+                        probs = self.model(model_input).cpu().numpy()
+
+                    self.ethogram.data[
+                        :, self.frame : self.frame + self.batch_size
+                    ] = probs.T
+                    # have to switch the layer off and on for chnage to be seen
+                    self.ethogram.visible = False
+                    self.ethogram.visible = True
+                    # self.viewer1d.reset_view()
+                    print(f"Probs are {probs}")
+                else:
+                    print("Frame already processed")
 
     # def extract_behaviour_from_frame(self):
     #    T = 43 # assign this better in future
@@ -1658,12 +1730,39 @@ class PoserWidget(Container):
         print("napari has", len(self.viewer.layers), "layers")
 
     def analyse(self, value):
-        self.preprocess_bouts()  ## assumes behaviours extracted
-        self.predict_behaviours()
-        self.update_classification_data_with_predictions()
-        etho = self.classification_data_to_ethogram()
-        self.populate_predicted_etho(etho)
-        self.populate_chkpt_dropdown()
+        if self.model_dropdown.value == "BehaviourDecode":
+            self.preprocess_bouts()  ## assumes behaviours extracted
+            self.predict_behaviours()
+            self.update_classification_data_with_predictions()
+            etho = self.classification_data_to_ethogram()
+            self.populate_predicted_etho(etho)
+            self.populate_chkpt_dropdown()
+
+        elif self.model_dropdown.value == "Detection":
+            self.predict_object_detection()
+
+    def predict_object_detection(self):
+        self.initialise_params()
+
+        if self.detection_backbone == "YOLOv5":
+            self.model = torch.hub.load(
+                "ultralytics/yolov5", "yolov5s", pretrained=True
+            )
+
+            if self.accelerator == "gpu":
+                self.device = torch.device("cuda")
+            elif self.accelerator == "cpu":
+                self.device = torch.device("cpu")
+
+            self.model.to(self.device)
+
+            visible_layer = [
+                layer for layer in self.viewer.layers if layer.visible
+            ][0]
+
+            for frame in range(visible_layer.data.shape[0]):
+                results = self.model(visible_layer.data[frame])
+                print(results.pandas().xyxy[0])
 
     def preprocess_bouts(self):
         # arrange in N, C, T, V format
@@ -1973,57 +2072,73 @@ class PoserWidget(Container):
         if self.live_checkbox.value:
             data_cfg, graph_cfg, hparams = self.initialise_params()
 
-            log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
-            self.chkpt = os.path.join(
-                log_folder, self.chkpt_dropdown.value
-            )  # spinbox
-            if self.backbone == "ST-GCN":
-                self.model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
-                    in_channels=self.numChannels,
-                    num_class=self.numlabels,
-                    num_workers=self.num_workers,
-                    graph_cfg=graph_cfg,
-                    data_cfg=data_cfg,
-                    hparams=hparams,
-                ).load_from_checkpoint(
-                    self.chkpt,
-                    in_channels=self.numChannels,
-                    num_workers=self.num_workers,
-                    num_class=self.numlabels,
-                    graph_cfg=graph_cfg,
-                    data_cfg=data_cfg,
-                    hparams=hparams,
+            if self.model_dropdown.value == "Detection":
+                if self.detection_backbone == "YOLOv5":
+                    self.model = torch.hub.load(
+                        "ultralytics/yolov5", "yolov5s", pretrained=True
+                    )
+
+                    if self.accelerator == "gpu":
+                        self.device = torch.device("cuda")
+                    elif self.accelerator == "cpu":
+                        self.device = torch.device("cpu")
+
+                    self.model.to(self.device)
+
+            elif self.model_dropdown.value == "BehaviourDecode":
+                log_folder = os.path.join(
+                    self.decoder_data_dir, "lightning_logs"
                 )
+                self.chkpt = os.path.join(
+                    log_folder, self.chkpt_dropdown.value
+                )  # spinbox
+                if self.backbone == "ST-GCN":
+                    self.model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
+                        in_channels=self.numChannels,
+                        num_class=self.numlabels,
+                        num_workers=self.num_workers,
+                        graph_cfg=graph_cfg,
+                        data_cfg=data_cfg,
+                        hparams=hparams,
+                    ).load_from_checkpoint(
+                        self.chkpt,
+                        in_channels=self.numChannels,
+                        num_workers=self.num_workers,
+                        num_class=self.numlabels,
+                        graph_cfg=graph_cfg,
+                        data_cfg=data_cfg,
+                        hparams=hparams,
+                    )
 
-            self.model.freeze()
+                self.model.freeze()
 
-            if self.accelerator == "gpu":
-                self.device = torch.device("cuda")
-            elif self.accelerator == "cpu":
-                self.device = torch.device("cpu")
+                if self.accelerator == "gpu":
+                    self.device = torch.device("cuda")
+                elif self.accelerator == "cpu":
+                    self.device = torch.device("cpu")
 
-            self.model.to(self.device)
+                self.model.to(self.device)
 
-            self.ethogram_im = np.zeros(
-                (self.numlabels, self.dlc_data.shape[0])
-            )
-            # self.viewer1d.clear_canvas()
+                self.ethogram_im = np.zeros(
+                    (self.numlabels, self.dlc_data.shape[0])
+                )
+                # self.viewer1d.clear_canvas()
 
-            self.ethogram = self.viewer1d.add_image(
-                self.ethogram_im,
-                blending="opaque",
-                colormap="inferno",
-                visible=True,
-            )
-            print(f"Model succesfully loaded onto device {self.device}")
+                self.ethogram = self.viewer1d.add_image(
+                    self.ethogram_im,
+                    blending="opaque",
+                    colormap="inferno",
+                    visible=True,
+                )
+                print(f"Model succesfully loaded onto device {self.device}")
 
-            # elif self.backbone == "C3D":
-            #   model = c3d.C3D(num_class =self.numlabels,
-            #                    num_channels = self.numChannels,
-            #                    data_cfg = data_cfg,
-            #                    hparams= hparams,
-            #                    num_workers = self.num_workers
-            #                    )
+                # elif self.backbone == "C3D":
+                #   model = c3d.C3D(num_class =self.numlabels,
+                #                    num_channels = self.numChannels,
+                #                    data_cfg = data_cfg,
+                #                    hparams= hparams,
+                #                    num_workers = self.num_workers
+                #                    )
 
     def train(self):
         # self.decoder_data_dir = self.decoder_dir_picker.value
@@ -2197,6 +2312,13 @@ class PoserWidget(Container):
 
         except:
             self.dataset = None
+
+        try:
+            self.detection_backbone = self.config_data["train_cfg"][
+                "detection_backbone"
+            ]
+        except:
+            self.detection_backbone = None
 
         self.class_dict = self.config_data["data_cfg"]["classification_dict"]
         self.label_dict = {v: k for k, v in self.class_dict.items()}
