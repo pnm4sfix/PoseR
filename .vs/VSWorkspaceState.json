@@ -1,0 +1,16 @@
+{
+  "ExpandedNodes": [
+    "",
+    "\\.github",
+    "\\.github\\workflows",
+    "\\.napari-hub",
+    "\\.pytest_cache",
+    "\\docs",
+    "\\src",
+    "\\src\\poser",
+    "\\src\\poser\\models",
+    "\\src\\poser\\_tests"
+  ],
+  "SelectedNode": "\\src\\poser\\models\\hrnet.py",
+  "PreviewInSolutionExplorer": false
+}

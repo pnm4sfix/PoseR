@@ -8,7 +8,9 @@ Replace code below according to your needs.
 """
 
 from cProfile import label
+from re import L
 import sys
+from tkinter import W
 
 sys.path.insert(1, "./")
 import os
@@ -54,6 +56,8 @@ from torch.utils.data import DataLoader
 
 from ._loader import HyperParams, ZebData
 from .models import c3d, st_gcn_aaai18_pylightning_3block
+
+from mmpose.apis import init_pose_model, inference_top_down_pose_model
 
 try:
     from napari_video.napari_video import VideoReaderNP
@@ -221,6 +225,7 @@ class PoserWidget(Container):
         self.behaviour_no = 0
         self.clean = None  # old function may be useful in future
         self.im_subset = None
+        # self.points = None
         self.labeled = False
         self.behaviours = []
         self.choices = []
@@ -415,12 +420,8 @@ class PoserWidget(Container):
             # create behaviour from points
             # pass to mode
             # softmax logits and add to a ethogram in viewer1d
-
+            exists = False
             if self.model_dropdown.value == "Detection":
-                results = self.model(self.im_subset.data[self.frame])
-                result_df = results.pandas().xyxy[0]
-                print(result_df)
-
                 if self.detection_layer == None:
                     labels = ["0"]
                     properties = {
@@ -446,34 +447,125 @@ class PoserWidget(Container):
                         # text = text_params,
                     )
 
-                labels = self.detection_layer.properties["label"].tolist()
-                shape_data = self.detection_layer.data
+                # check frame data already exists
 
-                print(f"shape data shape is {len(shape_data)}")
-                print(f"labels are {labels}")
-                for row in range(result_df.shape[0]):
-                    labels.append(result_df.loc[row, "name"])
+                for shape in self.detection_layer.data:  # its a list
+                    if shape[0, 0] == self.frame:
+                        print("bbox already exists")
+                        exists = True
+                        break
 
-                    x_min = result_df.loc[row, "xmin"]
-                    x_max = result_df.loc[row, "xmax"]
-                    y_min = result_df.loc[row, "ymin"]
-                    y_max = result_df.loc[row, "ymax"]
+                if exists == False:
+                    results = self.model(self.im_subset.data[self.frame])
+                    result_df = results.pandas().xyxy[0]
+                    print(result_df)
 
-                    new_shape = np.array(
-                        [
-                            [self.frame, y_min, x_min],
-                            [self.frame, y_min, x_max],
-                            [self.frame, y_max, x_max],
-                            [self.frame, y_max, x_min],
-                        ]
+                    labels = self.detection_layer.properties["label"].tolist()
+                    shape_data = self.detection_layer.data
+
+                    print(f"shape data shape is {len(shape_data)}")
+                    print(f"labels are {labels}")
+                    for row in range(result_df.shape[0]):
+                        labels.append(result_df.loc[row, "name"])
+
+                        x_min = result_df.loc[row, "xmin"]
+                        x_max = result_df.loc[row, "xmax"]
+                        y_min = result_df.loc[row, "ymin"]
+                        y_max = result_df.loc[row, "ymax"]
+
+                        new_shape = np.array(
+                            [
+                                [self.frame, y_min, x_min],
+                                [self.frame, y_min, x_max],
+                                [self.frame, y_max, x_max],
+                                [self.frame, y_max, x_min],
+                            ]
+                        )
+
+                        shape_data.append(new_shape)
+                        # shape_data = np.array(shape_data)
+
+                    print(labels)
+                    self.detection_layer.data = shape_data
+                    self.detection_layer.properties = {"label": labels}
+
+            elif self.model_dropdown.value == "PoseEstimation":
+                # check frame data already exists
+                if self.points_layer is None:
+                    point_properties = {"confidence": [0], "ind": [0]}
+                    self.points_layer = self.viewer.add_points(
+                        np.zeros((1, 3)), properties=point_properties
                     )
 
-                    shape_data.append(new_shape)
-                    # shape_data = np.array(shape_data)
+                for point in self.points_layer.data.tolist():  # its a list
+                    if point[0] == self.frame:
+                        print("point exists")
+                        exists = True
+                        break
 
-                print(labels)
-                self.detection_layer.data = shape_data
-                self.detection_layer.properties = {"label": labels}
+                if exists == False:
+                    im = self.im_subset.data[self.frame]
+
+                    person_results = []
+
+                    if self.detection_layer is not None:
+                        for shape in self.detection_layer.data:  # its a list
+                            if shape[0, 0] == self.frame:
+                                print(shape)
+                                L = shape[0, 2]  # xmin
+                                T = shape[0, 1]  # ymin
+                                R = shape[2, 2]  # xmax
+                                B = shape[2, 1]  # ymax
+
+                                bbox_data = {
+                                    "bbox": (L, T, R, B),
+                                    "track_id": len(person_results) + 1,
+                                }
+
+                                person_results.append(bbox_data)
+
+                    if len(person_results) > 0:
+                        pose_results, _ = inference_top_down_pose_model(
+                            self.model,
+                            im,
+                            person_results=person_results,
+                            format="xyxy",
+                        )
+                        print(pose_results)
+
+                        points = []
+
+                        point_properties = self.points_layer.properties.copy()
+
+                        for ind in range(len(pose_results)):
+                            keypoints = pose_results[ind]["keypoints"]
+                            for ncoord in range(keypoints.shape[0]):
+                                x, y, ci = keypoints[ncoord]
+
+                                points.append((self.frame, y, x))
+                                point_properties["confidence"] = np.append(
+                                    point_properties["confidence"], ci
+                                )
+                                point_properties["ind"] = np.append(
+                                    point_properties["ind"], ind
+                                )
+
+                        print(point_properties)
+                        print(points)
+                        self.points_layer.data = np.concatenate(
+                            (self.points_layer.data, np.array(points))
+                        )
+
+                        self.points_layer.properties[
+                            "confidence"
+                        ] = point_properties["confidence"]
+                        self.points_layer.properties["ind"] = point_properties[
+                            "ind"
+                        ]
+                        print(self.points_layer.properties)
+
+                        # check for bounding boxes
+                        # call inference_top_down_mode(self.model, im)
 
             elif self.model_dropdown.value == "BehaviourDecode":
                 denominator = self.config_data["data_cfg"]["denominator"]
@@ -1741,6 +1833,17 @@ class PoserWidget(Container):
         elif self.model_dropdown.value == "Detection":
             self.predict_object_detection()
 
+        elif self.model_dropdpwn.value == "PoseEstimation":
+            self.predict_poses()
+
+    def predict_poses(self):
+        self.initialise_params()
+
+        if self.pose_config is not None:
+            self.model = init_pose_model(self.pose_config, self.pose_ckpt)
+
+            # get frame
+
     def predict_object_detection(self):
         self.initialise_params()
 
@@ -2085,6 +2188,12 @@ class PoserWidget(Container):
 
                     self.model.to(self.device)
 
+            elif self.model_dropdown.value == "PoseEstimation":
+                if self.pose_config is not None:
+                    self.model = init_pose_model(
+                        self.pose_config, self.pose_ckpt
+                    )
+
             elif self.model_dropdown.value == "BehaviourDecode":
                 log_folder = os.path.join(
                     self.decoder_data_dir, "lightning_logs"
@@ -2319,6 +2428,13 @@ class PoserWidget(Container):
             ]
         except:
             self.detection_backbone = None
+
+        try:
+            self.pose_config = self.config_data["train_cfg"]["pose_config"]
+            self.pose_ckpt = self.config_data["train_cfg"]["pose_ckpt"]
+        except:
+            self.pose_config = None
+            self.pose_ckpt = None
 
         self.class_dict = self.config_data["data_cfg"]["classification_dict"]
         self.label_dict = {v: k for k, v in self.class_dict.items()}
