@@ -458,37 +458,68 @@ class PoserWidget(Container):
                         break
 
                 if exists == False:
-                    results = self.model(self.im_subset.data[self.frame])
-                    result_df = results.pandas().xyxy[0]
-                    print(result_df)
-
-                    result_df = self.remove_overlapping_bboxes(result_df)
-                    print(result_df)
-
                     labels = self.detection_layer.properties["label"].tolist()
                     shape_data = self.detection_layer.data
 
                     print(f"shape data shape is {len(shape_data)}")
                     print(f"labels are {labels}")
-                    for row in result_df.index:
-                        labels.append(result_df.loc[row, "name"])
 
-                        x_min = result_df.loc[row, "xmin"]
-                        x_max = result_df.loc[row, "xmax"]
-                        y_min = result_df.loc[row, "ymin"]
-                        y_max = result_df.loc[row, "ymax"]
-
-                        new_shape = np.array(
-                            [
-                                [self.frame, y_min, x_min],
-                                [self.frame, y_min, x_max],
-                                [self.frame, y_max, x_max],
-                                [self.frame, y_max, x_min],
-                            ]
+                    if self.detection_backbone == "YOLOv8":
+                        h = self.im_subset.data[self.frame].shape[0]
+                        results = self.model(
+                            self.im_subset.data[self.frame], imgsz=h - (h % 32)
                         )
+                        for result in results:
+                            names = result.names
+                            boxes = result.boxes
+                            for box in boxes:
+                                if box.conf > 0.1:
+                                    label = names[int(box.cls.cpu().numpy())]
+                                    labels.append(label)
+                                    (
+                                        x_min,
+                                        y_min,
+                                        x_max,
+                                        y_max,
+                                    ) = box.xyxy.cpu().numpy()[0]
+                                    new_shape = np.array(
+                                        [
+                                            [self.frame, y_min, x_min],
+                                            [self.frame, y_min, x_max],
+                                            [self.frame, y_max, x_max],
+                                            [self.frame, y_max, x_min],
+                                        ]
+                                    )
 
-                        shape_data.append(new_shape)
-                        # shape_data = np.array(shape_data)
+                                    shape_data.append(new_shape)
+
+                    elif self.detection_backbone == "YOLOv5":
+                        results = self.model(self.im_subset.data[self.frame])
+                        result_df = results.pandas().xyxy[0]
+                        print(result_df)
+
+                        result_df = self.remove_overlapping_bboxes(result_df)
+                        print(result_df)
+
+                        for row in result_df.index:
+                            labels.append(result_df.loc[row, "name"])
+
+                            x_min = result_df.loc[row, "xmin"]
+                            x_max = result_df.loc[row, "xmax"]
+                            y_min = result_df.loc[row, "ymin"]
+                            y_max = result_df.loc[row, "ymax"]
+
+                            new_shape = np.array(
+                                [
+                                    [self.frame, y_min, x_min],
+                                    [self.frame, y_min, x_max],
+                                    [self.frame, y_max, x_max],
+                                    [self.frame, y_max, x_min],
+                                ]
+                            )
+
+                            shape_data.append(new_shape)
+                            # shape_data = np.array(shape_data)
 
                     print(labels)
                     self.detection_layer.data = shape_data
@@ -1980,56 +2011,70 @@ class PoserWidget(Container):
                 "ultralytics/yolov5", "yolov5s", pretrained=True
             )
 
-            if self.accelerator == "gpu":
-                self.device = torch.device("cuda")
-            elif self.accelerator == "cpu":
-                self.device = torch.device("cpu")
+        elif self.detection_backbone == "YOLOv8":
+            from ultralytics import YOLO
 
-            self.model.to(self.device)
+            # Load a model
+            self.model = YOLO("yolov8m.pt")  # load an official model
 
-            if self.detection_layer == None:
-                labels = ["0"]
-                properties = {
-                    "label": labels,
-                }
+        if self.accelerator == "gpu":
+            self.device = torch.device("cuda")
+        elif self.accelerator == "cpu":
+            self.device = torch.device("cpu")
 
-                # text_params = {
-                #    "text": "label: {label}",
-                #    "size": 12,
-                #    "color": "green",
-                #    "anchor": "upper_left",
-                #    "translation": [-3, 0],
-                #    }
+        self.model.to(self.device)
 
-                self.detection_layer = self.viewer.add_shapes(
-                    np.zeros((1, 4, 3)),
-                    shape_type="rectangle",
-                    edge_width=5,
-                    edge_color="#55ff00",
-                    face_color="transparent",
-                    visible=True,
-                    properties=properties,
-                    # text = text_params,
-                )
+        if self.detection_layer == None:
+            labels = ["0"]
+            properties = {
+                "label": labels,
+            }
 
-            labels = self.detection_layer.properties["label"].tolist()
-            shape_data = self.detection_layer.data
+            # text_params = {
+            #    "text": "label: {label}",
+            #    "size": 12,
+            #    "color": "green",
+            #    "anchor": "upper_left",
+            #    "translation": [-3, 0],
+            #    }
 
-            print(f"shape data shape is {len(shape_data)}")
-            print(f"labels are {labels}")
-            # loop throuh frames
-            for frame in range(self.im_subset.data.shape[0]):
-                exists = False
+            self.detection_layer = self.viewer.add_shapes(
+                np.zeros((1, 4, 3)),
+                shape_type="rectangle",
+                edge_width=5,
+                edge_color="#55ff00",
+                face_color="transparent",
+                visible=True,
+                properties=properties,
+                # text = text_params,
+            )
 
-                # check frame data already exists
+        labels = self.detection_layer.properties["label"].tolist()
+        shape_data = self.detection_layer.data
 
-                for shape in self.detection_layer.data:  # its a list
-                    if shape[0, 0] == frame:
-                        print("bbox already exists")
-                        exists = True
-                        break
+        print(f"shape data shape is {len(shape_data)}")
+        print(f"labels are {labels}")
+        # loop throuh frames
+        for frame in range(self.im_subset.data.shape[0]):
+            # assert frame is readable - some go pro ones seem corrupted for some reason
 
-                if exists == False:
+            exists = False
+
+            try:
+                self.im_subset.data[frame]
+            except:
+                exists = True
+
+            # check frame data already exists
+
+            for shape in self.detection_layer.data:  # its a list
+                if shape[0, 0] == frame:
+                    print("bbox already exists")
+                    exists = True
+                    break
+
+            if exists == False:
+                if self.detection_backbone == "YOLOv5":
                     results = self.model(self.im_subset.data[frame])
                     result_df = results.pandas().xyxy[0]
                     print(result_df)
@@ -2053,14 +2098,45 @@ class PoserWidget(Container):
                         )
 
                         shape_data.append(new_shape)
-                        # shape_data = np.array(shape_data)
 
-            print(labels)
-            self.detection_layer.data = shape_data
-            self.detection_layer.properties = {"label": labels}
+                elif self.detection_backbone == "YOLOv8":
+                    h = self.im_subset.data[frame].shape[0]
+                    results = self.model(
+                        self.im_subset.data[frame], imgsz=h - (h % 32)
+                    )
+                    for result in results:
+                        names = result.names
+                        boxes = result.boxes
+                        for box in boxes:
+                            # if box.conf > 0.1:
+                            label = names[int(box.cls.cpu().numpy())]
+                            labels.append(label)
+                            print(box.xyxy.cpu().numpy())
+                            (
+                                x_min,
+                                y_min,
+                                x_max,
+                                y_max,
+                            ) = box.xyxy.cpu().numpy()[0]
+                            new_shape = np.array(
+                                [
+                                    [frame, y_min, x_min],
+                                    [frame, y_min, x_max],
+                                    [frame, y_max, x_max],
+                                    [frame, y_max, x_min],
+                                ]
+                            )
 
-            # map ids to boxes
-            self.get_individual_ids()
+                            shape_data.append(new_shape)
+
+                    # shape_data = np.array(shape_data)
+
+        print(labels)
+        self.detection_layer.data = shape_data
+        self.detection_layer.properties = {"label": labels}
+
+        # map ids to boxes
+        self.get_individual_ids()
 
     def remove_overlapping_bboxes(self, result_df, thresh=0.999):
         # check no overlap
@@ -2681,12 +2757,18 @@ class PoserWidget(Container):
                         "ultralytics/yolov5", "yolov5s", pretrained=True
                     )
 
-                    if self.accelerator == "gpu":
-                        self.device = torch.device("cuda")
-                    elif self.accelerator == "cpu":
-                        self.device = torch.device("cpu")
+                elif self.detection_backbone == "YOLOv8":
+                    from ultralytics import YOLO
 
-                    self.model.to(self.device)
+                    # Load a model
+                    self.model = YOLO("yolov8m.pt")
+
+                if self.accelerator == "gpu":
+                    self.device = torch.device("cuda")
+                elif self.accelerator == "cpu":
+                    self.device = torch.device("cpu")
+
+                self.model.to(self.device)
 
             elif self.model_dropdown.value == "PoseEstimation":
                 if self.pose_config is not None:
