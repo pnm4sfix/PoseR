@@ -58,6 +58,8 @@ from ._loader import HyperParams, ZebData
 from .models import c3d, st_gcn_aaai18_pylightning_3block
 
 from mmpose.apis import init_pose_model, inference_top_down_pose_model
+import pygmtools as pygm
+import networkx as nx
 
 try:
     from napari_video.napari_video import VideoReaderNP
@@ -460,12 +462,15 @@ class PoserWidget(Container):
                     result_df = results.pandas().xyxy[0]
                     print(result_df)
 
+                    result_df = self.remove_overlapping_bboxes(result_df)
+                    print(result_df)
+
                     labels = self.detection_layer.properties["label"].tolist()
                     shape_data = self.detection_layer.data
 
                     print(f"shape data shape is {len(shape_data)}")
                     print(f"labels are {labels}")
-                    for row in range(result_df.shape[0]):
+                    for row in result_df.index:
                         labels.append(result_df.loc[row, "name"])
 
                         x_min = result_df.loc[row, "xmin"]
@@ -778,7 +783,13 @@ class PoserWidget(Container):
         # print("Getting Individuals Points")
         x_flat = self.x.to_numpy().flatten()
         y_flat = self.y.to_numpy().flatten()
-        z_flat = np.tile(self.x.columns, self.x.shape[0])
+
+        try:
+            z_flat = self.z.to_numpy().flatten()
+
+        except:
+            print("no z frame coord")
+            z_flat = np.tile(self.x.columns, self.x.shape[0])
 
         zipped = zip(z_flat, y_flat, x_flat)
         points = [[z, y, x] for z, y, x in zipped]
@@ -791,6 +802,7 @@ class PoserWidget(Container):
         # print("Getting Individuals Tracks")
         x_nose = self.x.to_numpy()[-1]
         y_nose = self.y.to_numpy()[-1]
+
         z_nose = np.arange(self.x.shape[1])
         nose_zipped = zip(z_nose, y_nose, x_nose)
         tracks = np.array([[0, z, y, x] for z, y, x in nose_zipped])
@@ -1237,7 +1249,7 @@ class PoserWidget(Container):
         # print(self.label_menu.choices)
 
     def classification_data_to_ethogram(self):
-        N = self.dlc_data.shape[0]
+        N = self.im.shape[0]  # self.dlc_data.shape[0]
         etho = np.zeros((len(self.label_dict), N))
 
         if len(self.classification_data.keys()) > 0:
@@ -1391,9 +1403,18 @@ class PoserWidget(Container):
                 self.x = self.coords_data[key]["x"]
                 self.y = self.coords_data[key]["y"]
                 self.ci = self.coords_data[key]["ci"]
-                self.get_points()
-                self.get_tracks()
 
+                try:
+                    self.z = self.coords_data[key]["z"]
+                except:
+                    print("no frame info")
+
+                self.get_points()
+
+                try:
+                    self.get_tracks()
+                except:
+                    print("no tracks")
                 # self.reset_layers()
 
                 # self.viewer.add_image(self.im)
@@ -1421,7 +1442,7 @@ class PoserWidget(Container):
                     (-1, *center.shape)
                 )  # subtract center nodes
 
-            etho = self.classification_data_to_ethogram()
+            etho = self.classification_data_to_ethogram()  # assumes dlc data
             self.populate_groundt_etho(etho)
 
     def extract_behaviours(self, value=None):
@@ -1833,7 +1854,7 @@ class PoserWidget(Container):
         elif self.model_dropdown.value == "Detection":
             self.predict_object_detection()
 
-        elif self.model_dropdpwn.value == "PoseEstimation":
+        elif self.model_dropdown.value == "PoseEstimation":
             self.predict_poses()
 
     def predict_poses(self):
@@ -1842,7 +1863,114 @@ class PoserWidget(Container):
         if self.pose_config is not None:
             self.model = init_pose_model(self.pose_config, self.pose_ckpt)
 
-            # get frame
+            # check frame data already exists
+            if self.points_layer is None:
+                point_properties = {"confidence": [0], "ind": [0], "node": [0]}
+                self.points_layer = self.viewer.add_points(
+                    np.zeros((1, 3)), properties=point_properties
+                )
+
+            points = []
+
+            point_properties = self.points_layer.properties.copy()
+
+            for frame in range(self.im_subset.data.shape[0]):
+                exists = False
+                for point in self.points_layer.data.tolist():  # its a list
+                    if point[0] == self.frame:
+                        print("point exists")
+                        exists = True
+                        break
+
+                if exists == False:
+                    person_results = []
+
+                    if self.detection_layer is not None:
+                        for nshape, shape in enumerate(
+                            self.detection_layer.data
+                        ):  # its a list
+                            if shape[0, 0] == frame:
+                                print(shape)
+                                L = shape[0, 2]  # xmin
+                                T = shape[0, 1]  # ymin
+                                R = shape[2, 2]  # xmax
+                                B = shape[2, 1]  # ymax
+
+                                bbox_data = {
+                                    "bbox": (L, T, R, B),
+                                    "track_id": self.detection_layer.properties[
+                                        "id"
+                                    ][
+                                        nshape
+                                    ],
+                                }
+
+                                person_results.append(bbox_data)
+                                im = self.im_subset.data[frame]
+
+                    if len(person_results) > 0:
+                        pose_results, _ = inference_top_down_pose_model(
+                            self.model,
+                            im,
+                            person_results=person_results,
+                            format="xyxy",
+                        )
+
+                    for ind in range(len(pose_results)):
+                        keypoints = pose_results[ind]["keypoints"]
+                        for ncoord in range(keypoints.shape[0]):
+                            x, y, ci = keypoints[ncoord]
+
+                            points.append((frame, y, x))
+                            point_properties["confidence"] = np.append(
+                                point_properties["confidence"], ci
+                            )
+                            point_properties["ind"] = np.append(
+                                point_properties["ind"],
+                                pose_results[ind]["track_id"],
+                            )
+                            point_properties["node"] = np.append(
+                                point_properties["node"], ncoord
+                            )
+
+                    ## add part for if no bounding boxes
+
+            # print(point_properties)
+            # print(points)
+            self.points_layer.data = np.concatenate(
+                (self.points_layer.data, np.array(points))
+            )
+
+            # self.points_layer.properties[
+            #    "confidence"
+            # ] = point_properties["confidence"]
+            # self.points_layer.properties["ind"] = point_properties[
+            #    "ind"
+            # ]
+            # self.points_layer.properties["node"] = point_properties[
+            #    "node"
+            # ]
+            self.points_layer.properties = point_properties
+
+            df = pd.DataFrame(self.points_layer.properties)
+            df2 = pd.DataFrame(self.points_layer.data)
+            point_data = pd.concat([df, df2], axis=1)
+            point_data.drop(0, axis=0, inplace=True)
+            point_data.columns = ["ci", "ind", "node", "frame", "y", "x"]
+
+            for ind in point_data.ind.unique():
+                subset = point_data[point_data.ind == ind]
+                self.coords_data[ind] = {
+                    "x": subset.x,
+                    "y": subset.y,
+                    "z": subset.frame,
+                    "ci": subset.ci,
+                }
+
+            # print(self.points_layer.properties)
+
+            # check for bounding boxes
+            # call inference_top_down_mode(self.model, im)
 
     def predict_object_detection(self):
         self.initialise_params()
@@ -1859,13 +1987,385 @@ class PoserWidget(Container):
 
             self.model.to(self.device)
 
-            visible_layer = [
-                layer for layer in self.viewer.layers if layer.visible
-            ][0]
+            if self.detection_layer == None:
+                labels = ["0"]
+                properties = {
+                    "label": labels,
+                }
 
-            for frame in range(visible_layer.data.shape[0]):
-                results = self.model(visible_layer.data[frame])
-                print(results.pandas().xyxy[0])
+                # text_params = {
+                #    "text": "label: {label}",
+                #    "size": 12,
+                #    "color": "green",
+                #    "anchor": "upper_left",
+                #    "translation": [-3, 0],
+                #    }
+
+                self.detection_layer = self.viewer.add_shapes(
+                    np.zeros((1, 4, 3)),
+                    shape_type="rectangle",
+                    edge_width=5,
+                    edge_color="#55ff00",
+                    face_color="transparent",
+                    visible=True,
+                    properties=properties,
+                    # text = text_params,
+                )
+
+            labels = self.detection_layer.properties["label"].tolist()
+            shape_data = self.detection_layer.data
+
+            print(f"shape data shape is {len(shape_data)}")
+            print(f"labels are {labels}")
+            # loop throuh frames
+            for frame in range(self.im_subset.data.shape[0]):
+                exists = False
+
+                # check frame data already exists
+
+                for shape in self.detection_layer.data:  # its a list
+                    if shape[0, 0] == frame:
+                        print("bbox already exists")
+                        exists = True
+                        break
+
+                if exists == False:
+                    results = self.model(self.im_subset.data[frame])
+                    result_df = results.pandas().xyxy[0]
+                    print(result_df)
+                    result_df = self.remove_overlapping_bboxes(result_df)
+                    print(result_df)
+                    for row in result_df.index:
+                        labels.append(result_df.loc[row, "name"])
+
+                        x_min = result_df.loc[row, "xmin"]
+                        x_max = result_df.loc[row, "xmax"]
+                        y_min = result_df.loc[row, "ymin"]
+                        y_max = result_df.loc[row, "ymax"]
+
+                        new_shape = np.array(
+                            [
+                                [frame, y_min, x_min],
+                                [frame, y_min, x_max],
+                                [frame, y_max, x_max],
+                                [frame, y_max, x_min],
+                            ]
+                        )
+
+                        shape_data.append(new_shape)
+                        # shape_data = np.array(shape_data)
+
+            print(labels)
+            self.detection_layer.data = shape_data
+            self.detection_layer.properties = {"label": labels}
+
+            # map ids to boxes
+            self.get_individual_ids()
+
+    def remove_overlapping_bboxes(self, result_df, thresh=0.999):
+        # check no overlap
+        corr_df = result_df[["xmin", "xmax", "ymin", "ymax"]].T.corr()
+        corr_df[corr_df == 1] = 0  # set diagonal to 0
+
+        # look for similar bboxes
+        mask = np.triu(np.ones_like(corr_df, dtype=bool))
+        corr_df = corr_df[pd.DataFrame(mask)]
+        rows, cols = np.where(corr_df.to_numpy() > thresh)
+
+        for nrow, ncol in zip(rows, cols):
+            # find and keep most confident
+
+            # check if nrow in index or already removed
+            # check if ncol in index or already removed
+            if nrow not in result_df.index:
+                pass  # don't need to drop anything
+
+            elif ncol not in result_df.index:
+                pass  # don't need to drop anything
+
+            else:
+                row_conf = result_df.loc[nrow, "confidence"]
+                col_conf = result_df.loc[ncol, "confidence"]
+                print(f"overlapping {row_conf} {col_conf} ")
+
+                max_idx = np.argmax((row_conf, col_conf))
+
+                if max_idx == 0:
+                    # drop ncow
+                    result_df.drop(ncol, inplace=True)
+                elif max_idx == 1:
+                    result_df.drop(nrow, inplace=True)
+
+        return result_df
+
+    def get_bbox_center(self, box):
+        xmin, xmax, ymin, ymax = box[0, -1], box[1, -1], box[0, 1], box[2, 1]
+        center = (np.median([xmin, xmax]), np.median([ymin, ymax]))
+        return center, xmin, xmax, ymin, ymax
+
+    def create_graph_from_bboxes(self, bboxes, euclidean=False):
+        pos = []
+        num_nodes = len(bboxes)
+        feats = []
+
+        # normalise coords to width and height
+        w = self.im.shape[2]
+        h = self.im.shape[1]
+
+        center_fov = (w / 2, h / 2)
+
+        for box in bboxes:
+            center, xmin, xmax, ymin, ymax = self.get_bbox_center(box)
+
+            center = (np.array(center) - center_fov) / np.array([w, h])
+
+            xmin, ymin = (np.array([xmin, ymin]) - center_fov) / np.array(
+                [w, h]
+            )
+
+            xmax, ymax = (np.array([xmax, ymax]) - center_fov) / np.array(
+                [w, h]
+            )
+
+            pos.append(center)
+            feats.append([center[0], center[1], xmin, xmax, ymin, ymax])
+
+        # reshape pos
+        pos1 = np.array(pos).reshape(num_nodes, 2, 1)
+        pos1 = np.tile(pos1, num_nodes)
+        posT = pos1.T
+        diff = posT - pos1
+
+        if euclidean:
+            # create euclidean adjacency matrix
+            A = np.sqrt((diff[:, 0] ** 2) + (diff[:, 0] ** 2))
+
+        else:
+            A = np.ones((num_nodes, num_nodes))
+
+        A = torch.from_numpy(A)
+        torch.diagonal(A)[:] = 0
+        G = nx.from_numpy_array(A.numpy())
+        for npos, position in enumerate(pos):
+            G.nodes[npos]["x"] = position[0]
+            G.nodes[npos]["y"] = position[1]
+        n = torch.tensor([num_nodes])
+        # F = torch.tensor(feats)
+        F = torch.from_numpy(np.array(feats))
+
+        # center_fov
+        # F = (F - F.mean(axis=0)) / F.std(axis=0)
+
+        return G, A, n, F
+
+    def get_bboxes_by_frame(self, frame, detection_layer):
+        box_idx = np.where(np.array(detection_layer.data)[:, 0, 0] == frame)[0]
+        boxes = np.array(detection_layer.data)[box_idx]
+        return box_idx, boxes
+
+    def graph_matching(self, frame1, frame2):
+        idx1, bboxes1 = self.get_bboxes_by_frame(frame1, self.detection_layer)
+        idx2, bboxes2 = self.get_bboxes_by_frame(frame2, self.detection_layer)
+
+        G1, A1, n1, F1 = self.create_graph_from_bboxes(bboxes1)
+        G2, A2, n2, F2 = self.create_graph_from_bboxes(bboxes2)
+
+        conn1, edge1 = pygm.utils.dense_to_sparse(A1)
+        conn2, edge2 = pygm.utils.dense_to_sparse(A2)
+
+        import functools
+
+        gaussian_aff = functools.partial(
+            pygm.utils.gaussian_aff_fn, sigma=0.001
+        )  # set affinity function
+        K = pygm.utils.build_aff_mat(
+            F1,
+            edge1,
+            conn1,
+            F2,
+            edge2,
+            conn2,
+            n1,
+            None,
+            n2,
+            None,
+            edge_aff_fn=gaussian_aff,
+        )
+
+        X = pygm.rrwm(K, n1, n2)  # pygm.sm(K, n1, n2)
+        match = pygm.hungarian(X)
+        return match
+
+        # To DO - modeify track id to represent new id
+        # To DO- import networkx and pym -add to package dependencies
+        # Create vector layer for connections using distance matrix and origin points
+
+    def get_individual_ids(self):
+        # get modal frame
+        from scipy.stats import mode
+
+        pygm.BACKEND = "pytorch"
+
+        nframes = self.im.shape[0]
+
+        max_ind_frame, max_inds = mode(
+            np.array(self.detection_layer.data)[:, 0, 0].flatten()
+        )
+        # create forwards and backwards frames from that
+        max_ind_frame = max_ind_frame[0]
+        max_inds = max_inds[0]
+        forwards_frames = np.arange(max_ind_frame, nframes - 1)
+        backwards_frames = np.flip(np.arange(1, max_ind_frame + 1))
+        # create frame id dataframe to track which object is associated with id
+        id_df = pd.DataFrame(
+            [], columns=np.arange(max_inds), index=np.arange(nframes)
+        )
+        id_df.loc[max_ind_frame] = pd.Series(np.arange(max_inds))
+
+        # loop through frames and match scene graphs
+        id_df = self.match_frames(forwards_frames, id_df, self.detection_layer)
+        id_df = self.match_frames(
+            backwards_frames, id_df, self.detection_layer
+        )
+
+        props = self.detection_layer.properties
+        ids = np.zeros(len(props["label"]))
+
+        # map to detection layer properties
+        for frame in np.arange(0, nframes):
+            idx, bboxes = self.get_bboxes_by_frame(frame, self.detection_layer)
+            rev_box_map = {
+                int(v): k
+                for k, v in id_df.loc[frame]
+                .dropna()
+                .sort_values()
+                .to_dict()
+                .items()
+            }
+            if len(rev_box_map) > 0:
+                accounted_idx = idx[list(rev_box_map.keys())]
+                ids[accounted_idx] = list(rev_box_map.values())
+
+        props["id"] = ids
+        self.detection_layer.properties = props
+        return id_df
+
+    def match_frames(self, frames, df, detection_layer):
+        for nframe, frame in enumerate(frames):
+            try:
+                match = self.graph_matching(frame, frames[nframe + 1])
+
+                # any unmatched column ids - new ind - try match against prev mean
+                unmatched = match.numpy().sum(axis=0) == 0
+                if unmatched.any():
+                    match2 = self.attempt_mean_match(
+                        frames[nframe + 1], match, df
+                    )
+                    if match2 is None:
+                        pass
+                    else:
+                        match = match2
+
+                previous, next_ = np.where(match == 1)
+                # get reverse dict of object label from previous frame
+                rev_dict = {v: k for k, v in df.loc[frame].to_dict().items()}
+                # map previous object label to true id
+                true_id = pd.Series(previous).map(rev_dict, na_action="ignore")
+                for n_id, id in enumerate(true_id):
+                    if np.isnan(id):
+                        print("null_true_id")
+
+                    else:
+                        df.loc[frames[nframe + 1], id] = next_[n_id]
+
+                unmatched = match.numpy().sum(axis=0) == 0
+                if unmatched.any():  # if col id still unmatched add new ind
+                    df.loc[frames[nframe + 1], df.columns[-1] + 1] = np.where(
+                        unmatched
+                    )[0][0]
+
+            except:
+                print(f"no individuals present frame {frame}")
+
+        return df
+
+    def attempt_mean_match(self, frame_to_match, match, id_df):
+        nearest = []
+        for frame in np.flip(np.arange(frame_to_match - 20, frame_to_match)):
+            if frame > 0:
+                idx, bboxes = self.get_bboxes_by_frame(
+                    frame, self.detection_layer
+                )
+                if len(idx) == match.shape[1]:
+                    nearest.append(frame)
+
+        adjacencies = []
+        features = []
+
+        for frame in nearest:
+            idx, bboxes = self.get_bboxes_by_frame(frame, self.detection_layer)
+            G, A, n, F = self.create_graph_from_bboxes(bboxes)
+            # correct F and A
+            new_order = id_df.loc[frame].dropna().to_numpy().astype("int64")
+            print(new_order)  # possible weirdness here with new_order
+
+            if new_order.shape[0] == match.shape[1]:
+                new_A = self.reorder_adjacency(A.numpy(), new_order)
+                new_F = F.numpy()[new_order]
+                adjacencies.append(new_A)
+                features.append(new_F)
+
+        mean_F = np.array(features).mean(axis=0)
+        mean_A = np.array(adjacencies).mean(axis=0)
+
+        try:
+            match = self.graph_match_against_mean(
+                frame_to_match, mean_A, mean_F
+            )
+        except:
+            print(f"mean match failed - frame to match is {frame_to_match}")
+            match = None
+        return match
+
+    def reorder_adjacency(self, A, new_order):
+        new_A = np.zeros(A.shape)
+        for nrow, row in enumerate(new_order):
+            for ncol, col in enumerate(new_order):
+                new_A[nrow, ncol] = A[row, col]
+        return new_A
+
+    def graph_match_against_mean(self, frame, mean_A, mean_F):
+        mean_A = torch.from_numpy(mean_A)
+        mean_F = torch.from_numpy(mean_F)
+        idx1, bboxes1 = self.get_bboxes_by_frame(frame, self.detection_layer)
+        G2, A2, n2, F2 = self.create_graph_from_bboxes(bboxes1)
+
+        n1 = n2
+        conn1, edge1 = pygm.utils.dense_to_sparse(mean_A)
+        conn2, edge2 = pygm.utils.dense_to_sparse(A2)
+
+        import functools
+
+        gaussian_aff = functools.partial(
+            pygm.utils.gaussian_aff_fn, sigma=0.001
+        )  # set affinity function
+        K = pygm.utils.build_aff_mat(
+            mean_F,
+            edge1,
+            conn1,
+            F2,
+            edge2,
+            conn2,
+            n1,
+            None,
+            n2,
+            None,
+            edge_aff_fn=gaussian_aff,
+        )
+
+        X = pygm.rrwm(K, n1, n2)  # pygm.sm(K, n1, n2)
+        match = pygm.hungarian(X)
+        return match
 
     def preprocess_bouts(self):
         # arrange in N, C, T, V format
