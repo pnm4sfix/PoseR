@@ -3025,8 +3025,14 @@ class PoserWidget(Container):
             self.detection_backbone = None
 
         try:
-            self.pose_config = self.config_data["train_cfg"]["pose_config"]
-            self.pose_ckpt = self.config_data["train_cfg"]["pose_ckpt"]
+            self.pose_config = os.path.join(
+                self.decoder_data_dir,
+                self.config_data["train_cfg"]["pose_config"],
+            )
+            self.pose_ckpt = os.path.join(
+                self.decoder_data_dir,
+                self.config_data["train_cfg"]["pose_ckpt"],
+            )
         except:
             self.pose_config = None
             self.pose_ckpt = None
