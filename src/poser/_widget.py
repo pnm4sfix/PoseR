@@ -1523,6 +1523,7 @@ class PoserWidget(Container):
             # choices = self.label_menu.choices
             self.viewer.layers.remove(self.shapes_layer)
             del self.shapes_layer
+            self.detection_layer.visible = False
             # reset_choices as they seem to be forgotten when layers added or deleted
             self.label_menu.choices = self.choices
 
@@ -1905,13 +1906,15 @@ class PoserWidget(Container):
 
             point_properties = self.points_layer.properties.copy()
 
+            analysed_frames = np.unique(self.points_layer.data[:, 0])
+
             for frame in range(self.im_subset.data.shape[0]):
                 exists = False
-                for point in self.points_layer.data.tolist():  # its a list
-                    if point[0] == self.frame:
-                        print("point exists")
-                        exists = True
-                        break
+                # for point in self.points_layer.data.tolist():  # its a list
+                #    if point[0] == self.frame:
+                #        print("point exists")
+                if np.isin(analysed_frames, frame):
+                    exists = True
 
                 if exists == False:
                     person_results = []
