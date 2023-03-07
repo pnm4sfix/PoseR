@@ -2051,30 +2051,31 @@ class PoserWidget(Container):
 
         labels = self.detection_layer.properties["label"].tolist()
         shape_data = self.detection_layer.data
+        ids = [0]
 
         print(f"shape data shape is {len(shape_data)}")
         print(f"labels are {labels}")
         # loop throuh frames
-        for frame in range(self.im_subset.data.shape[0]):
-            # assert frame is readable - some go pro ones seem corrupted for some reason
+        if self.detection_backbone == "YOLOv5":
+            for frame in range(self.im_subset.data.shape[0]):
+                # assert frame is readable - some go pro ones seem corrupted for some reason
 
-            exists = False
+                exists = False
 
-            try:
-                self.im_subset.data[frame]
-            except:
-                exists = True
-
-            # check frame data already exists
-
-            for shape in self.detection_layer.data:  # its a list
-                if shape[0, 0] == frame:
-                    print("bbox already exists")
+                try:
+                    self.im_subset.data[frame]
+                except:
                     exists = True
-                    break
 
-            if exists == False:
-                if self.detection_backbone == "YOLOv5":
+                # check frame data already exists
+
+                for shape in self.detection_layer.data:  # its a list
+                    if shape[0, 0] == frame:
+                        print("bbox already exists")
+                        exists = True
+                        break
+
+                if exists == False:
                     results = self.model(self.im_subset.data[frame])
                     result_df = results.pandas().xyxy[0]
                     print(result_df)
@@ -2098,45 +2099,57 @@ class PoserWidget(Container):
                         )
 
                         shape_data.append(new_shape)
+            print(labels)
+            self.detection_layer.data = shape_data
+            self.detection_layer.properties = {"label": labels, "id": ids}
+            # map ids to boxes
+            self.get_individual_ids()
 
-                elif self.detection_backbone == "YOLOv8":
-                    h = self.im_subset.data[frame].shape[0]
-                    results = self.model(
-                        self.im_subset.data[frame], imgsz=h - (h % 32)
-                    )
-                    for result in results:
-                        names = result.names
-                        boxes = result.boxes
-                        for box in boxes:
-                            # if box.conf > 0.1:
-                            label = names[int(box.cls.cpu().numpy())]
-                            labels.append(label)
-                            print(box.xyxy.cpu().numpy())
-                            (
-                                x_min,
-                                y_min,
-                                x_max,
-                                y_max,
-                            ) = box.xyxy.cpu().numpy()[0]
-                            new_shape = np.array(
-                                [
-                                    [frame, y_min, x_min],
-                                    [frame, y_min, x_max],
-                                    [frame, y_max, x_max],
-                                    [frame, y_max, x_min],
-                                ]
-                            )
+        elif self.detection_backbone == "YOLOv8":
+            h = self.im.shape[1]
+            print(h)
+            results = self.model.track(
+                source=self.video_file,
+                imgsz=h - (h % 32),
+                tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
+            )
+            for frame, result in enumerate(results):
+                names = result.names
+                boxes = result.boxes
+                for box in boxes:
+                    # if box.conf > 0.1:
+                    label = names[int(box.cls.cpu().numpy())]
 
-                            shape_data.append(new_shape)
+                    print(frame)
+                    if box.id is not None:
+                        id = int(box.id.cpu().numpy()[0])
+                        ids.append(id)
+                        labels.append(label)
+                        print(box.xyxy.cpu().numpy())
+                        (
+                            x_min,
+                            y_min,
+                            x_max,
+                            y_max,
+                        ) = box.xyxy.cpu().numpy()[0]
+                        new_shape = np.array(
+                            [
+                                [frame, y_min, x_min],
+                                [frame, y_min, x_max],
+                                [frame, y_max, x_max],
+                                [frame, y_max, x_min],
+                            ]
+                        )
+
+                        shape_data.append(new_shape)
 
                     # shape_data = np.array(shape_data)
 
-        print(labels)
-        self.detection_layer.data = shape_data
-        self.detection_layer.properties = {"label": labels}
+            print(labels)
+            self.detection_layer.data = shape_data
 
-        # map ids to boxes
-        self.get_individual_ids()
+            assert len(labels) == len(ids)
+            self.detection_layer.properties = {"label": labels, "id": ids}
 
     def remove_overlapping_bboxes(self, result_df, thresh=0.999):
         # check no overlap
