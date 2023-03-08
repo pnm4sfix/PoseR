@@ -240,6 +240,8 @@ class PoserWidget(Container):
         self.track_layer = None
         self.detection_layer = None
         self.regions = []
+        self.points = None
+        self.tracks = None
 
         self.add_1d_widget()
         self.viewer.dims.events.current_step.connect(self.update_slider)
@@ -405,7 +407,7 @@ class PoserWidget(Container):
         # try:
 
         if self.behaviour_no > 0:
-            add_frame = self.behaviours[self.behaviour_no][0]
+            add_frame = self.behaviours[self.behaviour_no - 1][0]
         else:
             add_frame = 0
         self.frame_line.data = np.c_[
@@ -674,7 +676,14 @@ class PoserWidget(Container):
 
         start, stop = self.viewer1d.camera.rect[:2]
         self.behaviours.append((int(start), int(stop)))
-        self.behaviour_changed(len(self.behaviours))
+        print(self.behaviours)
+
+        if self.ind not in list(self.classification_data.keys()):
+            self.classification_data[self.ind] = {}
+
+        self.spinbox.max = len(self.behaviours)
+        self.spinbox.value = len(self.behaviours)
+        # self.behaviour_changed(len(self.behaviours))
 
     def plot_movement_1d(self):
         # plot colors mapped to confidence interval - can't do this yet even for scatter
@@ -1523,12 +1532,18 @@ class PoserWidget(Container):
             # choices = self.label_menu.choices
             self.viewer.layers.remove(self.shapes_layer)
             del self.shapes_layer
-            self.detection_layer.visible = False
+
             # reset_choices as they seem to be forgotten when layers added or deleted
             self.label_menu.choices = self.choices
 
         except:
             print("no shape layer")
+
+        try:
+            self.detection_layer.visible = False
+        except:
+            print("no detection layer")
+
         try:
             self.behaviour_no = event.value
 
@@ -1638,6 +1653,10 @@ class PoserWidget(Container):
                     )[:, self.start : self.stop].reshape(
                         (int(self.n_nodes * dur), 3)
                     )
+                    # start_filter = self.points[:, 0] >= self.start
+                    # end_filter = self.points[:, 0] < self.start
+                    # self.point_subset = self.points[start_filter & end_filter]
+
                     self.point_subset = self.point_subset - np.array(
                         [self.start, 0, 0]
                     )  # zero z because add_image has zeroed
@@ -1656,12 +1675,17 @@ class PoserWidget(Container):
                             )
                             self.label_menu.choices = self.choices
 
-                    self.ci_subset = (
-                        self.ci.iloc[:, self.start : self.stop]
-                        .to_numpy()
-                        .flatten()
-                    )
-
+                    try:
+                        self.ci_subset = (
+                            self.ci.iloc[:, self.start : self.stop]
+                            .to_numpy()
+                            .flatten()
+                        )
+                    except:
+                        print("ci is 1d")
+                        self.ci_subset = self.ci.loc[
+                            self.start : self.stop
+                        ].to_numpy()
                     # self.im_subset = self.viewer.layers[0]
                     # self.im_subset.data = self.im[self.start:self.stop]
 
@@ -1701,8 +1725,12 @@ class PoserWidget(Container):
 
         elif self.behaviour_no == 0:
             # restore full length
+            print("restore full data")
             self.points_layer.data = self.points
-            self.track_layer.data = self.tracks
+            try:
+                self.track_layer.data = self.tracks
+            except:
+                print("no tracks")
             self.im_subset.data = self.im
 
     def save_to_h5(self, event):
@@ -1907,8 +1935,8 @@ class PoserWidget(Container):
             point_properties = self.points_layer.properties.copy()
 
             analysed_frames = np.unique(self.points_layer.data[:, 0])
-
-            for frame in range(self.im_subset.data.shape[0]):
+            nframes = self.im_subset.data.shape[0]
+            for frame in range(nframes):
                 exists = False
                 # for point in self.points_layer.data.tolist():  # its a list
                 #    if point[0] == self.frame:
@@ -1992,14 +2020,32 @@ class PoserWidget(Container):
             point_data.drop(0, axis=0, inplace=True)
             point_data.columns = ["ci", "ind", "node", "frame", "y", "x"]
 
+            print(point_data.head())
+
             for ind in point_data.ind.unique():
+                coord_data = {"x": None, "y": None, "ci": None}
+
                 subset = point_data[point_data.ind == ind]
-                self.coords_data[ind] = {
-                    "x": subset.x,
-                    "y": subset.y,
-                    "z": subset.frame,
-                    "ci": subset.ci,
-                }
+
+                for datum in ["x", "y", "ci"]:
+                    empty = np.empty((self.n_nodes, nframes))
+                    empty[:] = np.nan
+                    subset_pivot = subset.pivot(
+                        columns="frame", values=datum, index="node"
+                    )
+
+                    empty_df = pd.DataFrame(empty)
+                    empty_df.loc[:, subset_pivot.columns] = subset_pivot
+
+                    coord_data[datum] = empty_df
+
+                self.coords_data[ind] = coord_data  # {
+                # "x": subset.x,
+                # "y": subset.y,
+                # "z": subset.frame,
+                # "ci": subset.ci,
+                # }
+                print(self.coords_data[ind])
 
             # print(self.points_layer.properties)
 
@@ -2153,6 +2199,9 @@ class PoserWidget(Container):
 
             assert len(labels) == len(ids)
             self.detection_layer.properties = {"label": labels, "id": ids}
+
+        self.populate_chkpt_dropdown()
+        self.label_menu.choices = self.choices
 
     def remove_overlapping_bboxes(self, result_df, thresh=0.999):
         # check no overlap
