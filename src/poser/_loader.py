@@ -299,7 +299,7 @@ class ZebData(torch.utils.data.Dataset):
                 else:
                     ratio = self.ideal_sample_no / label_subset.shape[0]
 
-                    augmentation_types = 5
+                    augmentation_types = 6
                     remainder = int(ratio % augmentation_types)
                     numAug = int(ratio / augmentation_types)
 
@@ -313,8 +313,9 @@ class ZebData(torch.utils.data.Dataset):
                         scaled = self.scale_transform(bhv, numAug)
                         sheared = self.shear_transform(bhv, numAug)
                         rolled = self.roll_transform(bhv, numAug)
+                        fragment = self.fragment_transform(bhv, numAug)
 
-                        # concatenate 4 augmentations and original
+                        # concatenate 6 augmentations and original
                         augmented = np.concatenate(
                             [
                                 bhv.reshape(-1, *bhv.shape),
@@ -323,6 +324,7 @@ class ZebData(torch.utils.data.Dataset):
                                 scaled,
                                 sheared,
                                 rolled,
+                                fragment,
                             ]
                         )
                         augmented_data.append(augmented)
@@ -425,6 +427,29 @@ class ZebData(torch.utils.data.Dataset):
             rolled[roll_no] = np.roll(behaviour, roll_x, axis=1)
 
         return rolled
+
+    def fragment_transform(self, behaviour, numFragments):
+        T = behaviour.shape[1]
+        fragments = np.zeros((numFragments, *behaviour.shape))
+        for fragment_no in range(numFragments):
+            # create random scales between 0 and 3
+
+            # define random start point around middle and length
+
+            random_start = np.random.randint(0, T - 1, 1)[0]
+            random_length = np.random.randint(10, 60, 1)[
+                0
+            ]  # random length between 10 and 40 frames
+
+            fragment = behaviour[
+                :, random_start : random_start + random_length, :, :
+            ]
+
+            # use pad function in this class to pad fragment bout to new T of self.T
+            fragment = self.pad(fragment, T)
+
+            fragments[fragment_no] = fragment
+        return fragments
 
     # @staticmethod
     # @jit
