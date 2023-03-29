@@ -334,9 +334,11 @@ class Graph:
             self.center = 10
 
         elif type(layout) == list:
+            print(layout)
             self.num_node = np.unique(np.array(layout)).shape[0]
             self_link = [(i, i) for i in range(self.num_node)]
             neighbor_1base = layout
+            neighbor_link = [(i - 1, j - 1) for (i, j) in neighbor_1base]
             self.edge = self_link + neighbor_link
 
         else:
