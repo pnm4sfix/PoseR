@@ -91,6 +91,8 @@ class ZebData(torch.utils.data.Dataset):
 
             elif label_dict is not None:
                 mapping = label_dict
+                for k, v in mapping.items():
+                    self.labels[self.labels == k] = v
                 print("Labels already mapped during saving")
                 # mapping = label_dict
                 # semantic: value
