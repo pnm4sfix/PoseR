@@ -2910,6 +2910,8 @@ class PoserWidget(Container):
 
         data_cfg, graph_cfg, hparams = self.initialise_params()
 
+        print(data_cfg, graph_cfg, hparams)
+
         # create trainer object,
         ## optimise trainer to just predict as currently its preparing data thinking its training
         # predict
@@ -3457,23 +3459,24 @@ class PoserWidget(Container):
 
         return all_ind_bouts, all_labels
 
-    def view_data(self):
-        try:
-            train_data = np.load(
-                os.path.join(self.decoder_data_dir, "Zebtrain.npy")
-            )
-            train_labels = np.load(
-                os.path.join(self.decoder_data_dir, "Zebtrain_labels.npy")
-            )
-            self.transform = self.config_data["train_cfg"]["transform"]
-            self.batch_size = self.batch_size_spinbox.value
-            self.zebdata = ZebData(transform=self.transform)
-            self.zebdata.data = train_data
-            self.zebdata.labels = train_labels
+    def view_data(self, view=False):
+        if view:
+            try:
+                train_data = np.load(
+                    os.path.join(self.decoder_data_dir, "Zebtrain.npy")
+                )
+                train_labels = np.load(
+                    os.path.join(self.decoder_data_dir, "Zebtrain_labels.npy")
+                )
+                self.transform = self.config_data["train_cfg"]["transform"]
+                self.batch_size = self.batch_size_spinbox.value
+                self.zebdata = ZebData(transform=self.transform)
+                self.zebdata.data = train_data
+                self.zebdata.labels = train_labels
 
-            self.spinbox.max = self.zebdata.labels.shape[0]
-        except:
-            print("No training data")
+                self.spinbox.max = self.zebdata.labels.shape[0]
+            except:
+                print("No training data")
 
     def show_data(self, idx):
         print(self.zebdata[idx][0].shape)
