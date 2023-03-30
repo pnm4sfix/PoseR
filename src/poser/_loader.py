@@ -293,10 +293,15 @@ class ZebData(torch.utils.data.Dataset):
                     pass
 
                 elif label_count > self.ideal_sample_no:
-                    # augmented = label_subset[:ideal_sample_no]
+                    augmented = label_subset[: self.ideal_sample_no]
+                    augmented_data.append(augmented)
+                    augmented_labels.append(
+                        np.array([label] * augmented.shape[0]).flatten()
+                    )
+                    bhv_idx.append(np.arange(augmented.shape[0]))
                     print("sample greater than ideal sample no")
                     print(augmented.shape)
-                    break
+                    # break
 
                 else:
                     ratio = self.ideal_sample_no / label_subset.shape[0]
