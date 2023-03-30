@@ -176,7 +176,7 @@ class ST_GCN_18(LightningModule):
         # Make sure dataloaders are on cuda
         x, y = batch
         output = self(x)
-        loss = F.cross_entropy(output, y, weights=self.class_weights)
+        loss = F.cross_entropy(output, y, weight=self.class_weights)
         preds = torch.argmax(output, dim=1)
         acc = accuracy(
             preds, y, task="multiclass", num_classes=self.num_classes
