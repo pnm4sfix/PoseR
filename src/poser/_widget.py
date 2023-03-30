@@ -3091,6 +3091,14 @@ class PoserWidget(Container):
             self.pose_config = None
             self.pose_ckpt = None
 
+        try:
+            self.calc_class_weights = self.config_data["data_cfg"][
+                "calc_class_weights"
+            ]
+
+        except:
+            self.calc_class_weights = False
+
         self.class_dict = self.config_data["data_cfg"]["classification_dict"]
         self.label_dict = {v: k for k, v in self.class_dict.items()}
         # label_dict = {k:v for v, k in enumerate(np.unique(self.train_labels))}
@@ -3109,6 +3117,7 @@ class PoserWidget(Container):
             "transform": self.transform,
             "labels_to_ignore": self.labels_to_ignore,
             "label_dict": self.label_dict,
+            "calc_class_weights": self.calc_class_weights,
         }
 
         graph_cfg = {"layout": self.graph_layout, "center": self.center_node}

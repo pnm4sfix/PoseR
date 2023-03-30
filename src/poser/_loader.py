@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.utils import class_weight
 
 try:
     import cupy as cp
@@ -490,6 +491,16 @@ class ZebData(torch.utils.data.Dataset):
         zz = cp.swapaxes(cp.swapaxes(zz.reshape((W, H, T, V)), 0, -1), 1, 2)
 
         return zz
+
+    def get_class_weights(self):
+        # get class weights
+        class_weights = class_weight.compute_class_weight(
+            class_weight="balanced",
+            classes=np.unique(np.sort(self.labels)),
+            y=self.labels,
+        )
+        class_weights = torch.tensor(class_weights)
+        return class_weights
 
 
 class HyperParams:
