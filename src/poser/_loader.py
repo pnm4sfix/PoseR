@@ -499,7 +499,7 @@ class ZebData(torch.utils.data.Dataset):
             classes=np.unique(np.sort(self.labels)),
             y=self.labels,
         )
-        class_weights = torch.tensor(class_weights)
+        class_weights = torch.tensor(class_weights, dtype=torch.float32)
         return class_weights
 
 

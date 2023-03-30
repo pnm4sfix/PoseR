@@ -346,6 +346,10 @@ class ST_GCN_18(LightningModule):
                 if self.calc_class_weights:
                     self.class_weights = self.train_data.get_class_weights()
                     print(f"Class weights are {self.class_weights}")
+
+                    # put self.class_weights on cuda
+                    self.class_weights = self.class_weights.cuda()
+
                 else:
                     self.class_weights = None
 
