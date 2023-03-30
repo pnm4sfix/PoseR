@@ -306,7 +306,7 @@ class ZebData(torch.utils.data.Dataset):
                 else:
                     ratio = self.ideal_sample_no / label_subset.shape[0]
 
-                    augmentation_types = 6
+                    augmentation_types = 5  # 6 if fragment working
                     remainder = int(ratio % augmentation_types)
                     numAug = int(ratio / augmentation_types)
 
@@ -320,9 +320,9 @@ class ZebData(torch.utils.data.Dataset):
                         scaled = self.scale_transform(bhv, numAug)
                         sheared = self.shear_transform(bhv, numAug)
                         rolled = self.roll_transform(bhv, numAug)
-                        fragment = self.fragment_transform(bhv, numAug)
+                        # fragment = self.fragment_transform(bhv, numAug)
 
-                        # concatenate 6 augmentations and original
+                        # concatenate 5 augmentations and original
                         augmented = np.concatenate(
                             [
                                 bhv.reshape(-1, *bhv.shape),
@@ -331,7 +331,7 @@ class ZebData(torch.utils.data.Dataset):
                                 scaled,
                                 sheared,
                                 rolled,
-                                fragment,
+                                # fragment,
                             ]
                         )
                         augmented_data.append(augmented)
