@@ -3140,9 +3140,9 @@ class PoserWidget(Container):
         # train
         data_cfg, graph_cfg, hparams = self.initialise_params()
 
-        orig_num_labels = (
-            len(data_cfg["labels_to_ignore"]) + self.numlabels
-        )  # this is for specific example
+        # orig_num_labels = (
+        #    len(data_cfg["labels_to_ignore"]) + self.numlabels
+        # )  # this is for specific example
 
         log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
         self.chkpt = os.path.join(
