@@ -1072,9 +1072,9 @@ class PoserWidget(Container):
         boxes = centre_rs + add_array.reshape(-1, *add_array.shape)
 
         # specify label params
-        nframes = moving_frames_idx.shape[
-            0
-        ]  # at the moment more than 300 is really slow
+        nframes = 300  # moving_frames_idx.shape[
+        # 0
+        # ]   at the moment more than 300 is really slow
         labels = ["movement"] * nframes
         properties = {
             "label": labels,
