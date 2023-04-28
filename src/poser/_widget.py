@@ -131,20 +131,27 @@ class PoserWidget(Container):
             value="./",
             tooltip="Select labeled txt file",
         )
-        label_h5_picker = FileEdit(
+        self.label_h5_picker = FileEdit(
             label="Select a labeled h5 file",
             value="./",
             tooltip="Select labeled h5 file",
         )
-        h5_picker = FileEdit(
+        self.h5_picker = FileEdit(
             label="Select a DLC h5 file", value="./", tooltip="Select h5 file"
         )
-        vid_picker = FileEdit(
+        self.vid_picker = FileEdit(
             label="Select the corresponding raw video",
             value="./",
             tooltip="Select corresponding raw video",
         )
-        self.extend([h5_picker, vid_picker, label_h5_picker, label_txt_picker])
+        self.extend(
+            [
+                self.h5_picker,
+                self.vid_picker,
+                self.label_h5_picker,
+                label_txt_picker,
+            ]
+        )
 
         # Behavioural extraction method
         self.behavioural_extract_method = ComboBox(
@@ -211,19 +218,20 @@ class PoserWidget(Container):
         )
 
         self.labeled_txt = label_txt_picker.value
-        self.labeled_h5 = label_h5_picker.value
-        self.h5_file = h5_picker.value
-        self.video_file = vid_picker.value
+        self.labeled_h5 = self.label_h5_picker.value
+        self.h5_file = self.h5_picker.value
+        self.video_file = self.vid_picker.value
 
-        h5_picker.changed.connect(self.h5_picker_changed)
-        vid_picker.changed.connect(self.vid_picker_changed)
-        label_h5_picker.changed.connect(self.convert_h5_todict)
+        self.h5_picker.changed.connect(self.h5_picker_changed)
+        self.vid_picker.changed.connect(self.vid_picker_changed)
+        self.label_h5_picker.changed.connect(self.convert_h5_todict)
         label_txt_picker.changed.connect(self.convert_txt_todict)
         self.ind_spinbox.changed.connect(self.individual_changed)
         self.spinbox.changed.connect(self.behaviour_changed)
         push_button.changed.connect(self.save_to_h5)
 
         self.ind = 0
+        self.dlc_data = None
         self.behaviour_no = 0
         self.clean = None  # old function may be useful in future
         self.im_subset = None
@@ -309,24 +317,44 @@ class PoserWidget(Container):
         self.spinbox.value = 0
         self.spinbox.max = 0
 
-        self.clean = None  # old function may be useful in future
-        self.im_subset = None
-        self.labeled = False
-        self.behaviours = []
-        # self.choices = []
-        self.b_labels = None
-        self.regions = []
-
         self.classification_data = {}
         self.point_subset = np.array([])
 
         self.coords_data = {}
 
-        ## reset layers
+        self.ind = 0
+        self.ind_spinbox.max = 0
+        self.dlc_data = None
 
+        self.behaviour_no = 0
+        self.clean = None  # old function may be useful in future
+        self.im_subset = None
+        self.im = None
+        self.video_file = None
+        self.vid_picker.value = None
+        self.labeled = False
+        self.behaviours = []
+
+        self.b_labels = None
+        self.decoder_data_dir = None
+        self.ground_truth_ethogram = None
+        self.ethogram = None
+        self.regions_layer = None
+        self.points_layer = None
+        self.track_layer = None
+        self.detection_layer = None
+        self.regions = []
+        self.points = None
+        self.tracks = None
+        self.zebdata = None
+
+        ## reset layers
         self.reset_layers()
 
         self.reset_viewer1d_layers()
+
+        self.label_menu.choices = self.choices
+        self.populate_chkpt_dropdown()
 
     def decoder_dir_changed(self, value):
         # Look for and load yaml configuration file
@@ -731,12 +759,13 @@ class PoserWidget(Container):
         self.label_menu.choices = choices
 
     def reset_viewer1d_layers(self):
-        print(f"Layers remaining are {self.viewer1d.layers}")
         try:
             # self.viewer1d.clear_canvas()
             for layer in self.viewer1d.layers:
                 # print(layer)
-                self.viewer.layers.remove(layer)
+                self.viewer1d.layers.remove(layer)
+
+            print(f"Layers remaining are {self.viewer1d.layers}")
         except:
             pass
 
