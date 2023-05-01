@@ -1,0 +1,9 @@
+hparams: !!python/object:test_tube.argparse_hopt.TTNamespace
+  batch_size: 46
+  dropout: 0.0
+  hpc_exp_number: 106
+  learning_rate: 4.527470355005743e-05
+  model_name: 3block
+  nodes: 1
+  slurm_log_path: /gpfs1/scratch/other/pnm1/PoseRecognition/pore
+  test_tube_slurm_cmd_path: /gpfs1/scratch/other/pnm1/PoseRecognition/pore/zebLR/slurm_scripts/trial_106_2022-08-01__16-20-23_slurm_cmd.sh

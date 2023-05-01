@@ -1,0 +1,4 @@
+hparams: !!python/object:poser._loader.HyperParams
+  batch_size: 16
+  dropout: 0
+  learning_rate: 0.01

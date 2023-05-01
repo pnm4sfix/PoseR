@@ -57,8 +57,11 @@ from torch.utils.data import DataLoader
 from ._loader import HyperParams, ZebData
 from .models import c3d, st_gcn_aaai18_pylightning_3block
 
-from mmpose.apis import init_pose_model, inference_top_down_pose_model
-import pygmtools as pygm
+
+try:
+    import pygmtools as pygm
+except:
+    print("pygmtools not installed")
 import networkx as nx
 
 try:
@@ -331,12 +334,12 @@ class PoserWidget(Container):
         self.im_subset = None
         self.im = None
         self.video_file = None
-        self.vid_picker.value = None
+        self.vid_picker.value = ""
         self.labeled = False
         self.behaviours = []
 
         self.b_labels = None
-        self.decoder_data_dir = None
+
         self.ground_truth_ethogram = None
         self.ethogram = None
         self.regions_layer = None
@@ -1138,6 +1141,7 @@ class PoserWidget(Container):
         Parameters:
 
         event: widget event"""
+        print(f"DLC File Changed to {event}")
         try:
             self.h5_file = event.value.value
         except:
@@ -1157,6 +1161,8 @@ class PoserWidget(Container):
         Parameters:
 
         event: widget event"""
+        print(f"Video File Changed to {event}")
+
         try:
             self.video_file = event.value.value
         except:
@@ -1165,21 +1171,29 @@ class PoserWidget(Container):
             except:
                 self.video_file = str(event)
 
-        # vid = pims.open(str(self.video_file))
-        self.fps = self.config_data["data_cfg"]["fps"]
+        # check avi, mp4
+        if (".avi" in self.video_file.lower()) | (
+            ".mp4" in self.video_file.lower()
+        ):
+            # vid = pims.open(str(self.video_file))
+            self.fps = self.config_data["data_cfg"]["fps"]
+            try:
+                self.im = VideoReaderNP(str(self.video_file))
+            except:
+                print("Couldn't read video file")
+                self.im = None
 
-        self.im = VideoReaderNP(str(self.video_file))
+            if self.im is not None:
+                # add a video layer if none
+                if self.im_subset is None:
+                    self.im_subset = self.viewer.add_image(
+                        self.im, name="Video Recording"
+                    )
+                    self.label_menu.choices = self.choices
+                else:
+                    self.im_subset.data = self.im
 
-        # add a video layer if none
-        if self.im_subset is None:
-            self.im_subset = self.viewer.add_image(
-                self.im, name="Video Recording"
-            )
-            self.label_menu.choices = self.choices
-        else:
-            self.im_subset.data = self.im
-
-        self.populate_chkpt_dropdown()  # because adding layers keeps erasing it
+                self.populate_chkpt_dropdown()  # because adding layers keeps erasing it
 
     def convert_h5_todict(self, event):
         """reads pytables and converts to dict. If new dict saved overwrites existing pytables"""
@@ -1947,6 +1961,13 @@ class PoserWidget(Container):
             self.predict_poses()
 
     def predict_poses(self):
+        try:
+            from mmpose.apis import (
+                init_pose_model,
+                inference_top_down_pose_model,
+            )
+        except:
+            print("mmpose not installed")
         self.initialise_params()
 
         if self.pose_config is not None:
@@ -2190,6 +2211,7 @@ class PoserWidget(Container):
                 source=self.video_file,
                 imgsz=h - (h % 32),
                 tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
+                stream=True,
             )
             for frame, result in enumerate(results):
                 names = result.names
