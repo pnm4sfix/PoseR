@@ -31,7 +31,7 @@
 ![alt text](https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/Workflow1-LabelBehaviours7.png?raw=true)
 
 9) B) OR use pretrained behaviour decoder to predict labels for extracted behaviours
-![alt text](https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/Workflow1-AnalyseExtractedBouts.png?raw=true)
+![alt text](https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/Workflow2-AnalyseExtractedBouts.png?raw=true)
 
 10) Save the manually or decoder labelled behaviour bouts
 ![alt text](https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/Workflow1-SaveLabels8.png?raw=true)
