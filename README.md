@@ -44,7 +44,7 @@ For GPU:
 For CPU only version:
 
     conda install pytorch torchvision torchaudio cpuonly -c pytorch
-    
+
 Install napari:
 
     pip install napari["all"]
@@ -59,6 +59,10 @@ To install latest development version :
 
     pip install git+https://github.com/pnm4sfix/PoseR.git
 
+
+## Quick start
+
+https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/QuickStart.md
 
 ## Contributing
 

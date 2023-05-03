@@ -83,6 +83,11 @@ class ST_GCN_18(LightningModule):
         except:
             self.label_dict = None
 
+        try:
+            self.calc_class_weights = data_cfg["calc_class_weights"]
+        except:
+            self.calc_class_weights = False
+
         self.learning_rate = hparams.learning_rate
         self.batch_size = hparams.batch_size
         self.dropout = hparams.dropout
@@ -154,7 +159,7 @@ class ST_GCN_18(LightningModule):
         # prediction
         x = self.fcn(x)
         x = x.view(x.size(0), -1)
-        x = self.softmax(x)
+        # x = self.softmax(x) # don't need as we use cross entropy loss
         return x
 
     def configure_optimizers(self):
@@ -171,7 +176,7 @@ class ST_GCN_18(LightningModule):
         # Make sure dataloaders are on cuda
         x, y = batch
         output = self(x)
-        loss = F.cross_entropy(output, y)
+        loss = F.cross_entropy(output, y, weight=self.class_weights)
         preds = torch.argmax(output, dim=1)
         acc = accuracy(
             preds, y, task="multiclass", num_classes=self.num_classes
@@ -337,6 +342,16 @@ class ST_GCN_18(LightningModule):
                     # reassign variables
                     self.pose_train = self.pose_train_data
                     self.pose_val = self.pose_val_data
+
+                if self.calc_class_weights:
+                    self.class_weights = self.train_data.get_class_weights()
+                    print(f"Class weights are {self.class_weights}")
+
+                    # put self.class_weights on cuda
+                    self.class_weights = self.class_weights.cuda()
+
+                else:
+                    self.class_weights = None
 
             if stage == "test" or stage is None:
                 self.pose_test = self.test_data

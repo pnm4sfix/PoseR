@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.utils import class_weight
 
 try:
     import cupy as cp
@@ -91,6 +92,8 @@ class ZebData(torch.utils.data.Dataset):
 
             elif label_dict is not None:
                 mapping = label_dict
+                for k, v in mapping.items():
+                    self.labels[self.labels == k] = v
                 print("Labels already mapped during saving")
                 # mapping = label_dict
                 # semantic: value
@@ -291,15 +294,20 @@ class ZebData(torch.utils.data.Dataset):
                     pass
 
                 elif label_count > self.ideal_sample_no:
-                    # augmented = label_subset[:ideal_sample_no]
+                    augmented = label_subset[: self.ideal_sample_no]
+                    augmented_data.append(augmented)
+                    augmented_labels.append(
+                        np.array([label] * augmented.shape[0]).flatten()
+                    )
+                    bhv_idx.append(np.arange(augmented.shape[0]))
                     print("sample greater than ideal sample no")
                     print(augmented.shape)
-                    break
+                    # break
 
                 else:
                     ratio = self.ideal_sample_no / label_subset.shape[0]
 
-                    augmentation_types = 5
+                    augmentation_types = 5  # 6 if fragment working
                     remainder = int(ratio % augmentation_types)
                     numAug = int(ratio / augmentation_types)
 
@@ -313,8 +321,9 @@ class ZebData(torch.utils.data.Dataset):
                         scaled = self.scale_transform(bhv, numAug)
                         sheared = self.shear_transform(bhv, numAug)
                         rolled = self.roll_transform(bhv, numAug)
+                        # fragment = self.fragment_transform(bhv, numAug)
 
-                        # concatenate 4 augmentations and original
+                        # concatenate 5 augmentations and original
                         augmented = np.concatenate(
                             [
                                 bhv.reshape(-1, *bhv.shape),
@@ -323,6 +332,7 @@ class ZebData(torch.utils.data.Dataset):
                                 scaled,
                                 sheared,
                                 rolled,
+                                # fragment,
                             ]
                         )
                         augmented_data.append(augmented)
@@ -426,6 +436,29 @@ class ZebData(torch.utils.data.Dataset):
 
         return rolled
 
+    def fragment_transform(self, behaviour, numFragments):
+        T = behaviour.shape[1]
+        fragments = np.zeros((numFragments, *behaviour.shape))
+        for fragment_no in range(numFragments):
+            # create random scales between 0 and 3
+
+            # define random start point around middle and length
+
+            random_start = np.random.randint(0, T - 1, 1)[0]
+            random_length = np.random.randint(10, 60, 1)[
+                0
+            ]  # random length between 10 and 40 frames
+
+            fragment = behaviour[
+                :, random_start : random_start + random_length, :, :
+            ]
+
+            # use pad function in this class to pad fragment bout to new T of self.T
+            fragment = self.pad(fragment, T)
+
+            fragments[fragment_no] = fragment
+        return fragments
+
     # @staticmethod
     # @jit
     def convert_bout_to_heatmap(self, bout, W, H, xv, yv):
@@ -458,6 +491,16 @@ class ZebData(torch.utils.data.Dataset):
         zz = cp.swapaxes(cp.swapaxes(zz.reshape((W, H, T, V)), 0, -1), 1, 2)
 
         return zz
+
+    def get_class_weights(self):
+        # get class weights
+        class_weights = class_weight.compute_class_weight(
+            class_weight="balanced",
+            classes=np.unique(np.sort(self.labels)),
+            y=self.labels,
+        )
+        class_weights = torch.tensor(class_weights, dtype=torch.float32)
+        return class_weights
 
 
 class HyperParams:
