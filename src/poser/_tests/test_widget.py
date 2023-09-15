@@ -122,6 +122,7 @@ def test_workflow1(make_napari_viewer, capsys):
 
     assert os.path.exists(str(my_widget.video_file) + "_classification.h5")
 
+    # load classification_data and check its the same
     my_widget.convert_h5_todict(
         str(my_widget.video_file) + "_classification.h5"
     )
@@ -132,4 +133,5 @@ def test_workflow1(make_napari_viewer, capsys):
 
     assert before_save_data.keys() == after_save_data.keys()
     # break down assertions for all parts of data
-    # load classification_data and check its the same
+
+    # test load different file - assert all changes that need to be made

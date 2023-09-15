@@ -7,7 +7,6 @@
     "\\.pytest_cache",
     "\\src",
     "\\src\\poser",
-    "\\src\\poser\\models",
     "\\src\\poser\\_tests"
   ],
   "SelectedNode": "\\src\\poser\\_widget.py",

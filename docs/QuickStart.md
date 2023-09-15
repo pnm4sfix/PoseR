@@ -1,6 +1,6 @@
 # Quick Start
 
-1) Install via pip
+1) Install via pip (see Installation at https://github.com/pnm4sfix/PoseR/blob/main)
 
 2) Create a decoder_config.yaml and place in folder that you want to work out of.
    See example decoder_config.yaml file here.
@@ -35,3 +35,5 @@
 
 10) Save the manually or decoder labelled behaviour bouts
 ![alt text](https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/Workflow1-SaveLabels8.png?raw=true)
+
+11) To train a model, ensure that the type of model selected is "BehaviourDecode" and press train. This should create a training dataset from the saved annotations in classification.h5 files in the project folder.

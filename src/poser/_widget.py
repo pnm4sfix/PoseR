@@ -24,6 +24,7 @@ import time
 from typing import TYPE_CHECKING
 
 import napari_plot
+import seaborn as sns
 import numpy as np
 import pandas as pd
 import scipy.stats as st
@@ -231,7 +232,7 @@ class PoserWidget(Container):
         label_txt_picker.changed.connect(self.convert_txt_todict)
         self.ind_spinbox.changed.connect(self.individual_changed)
         self.spinbox.changed.connect(self.behaviour_changed)
-        push_button.changed.connect(self.save_to_h5)
+        push_button.changed.connect(self.save_classification_data)
 
         self.ind = 0
         self.dlc_data = None
@@ -390,6 +391,16 @@ class PoserWidget(Container):
         except:
             print("No configuration yaml located in decoder data folder")
 
+        # check lightning_logs folder exists - if not create it
+        if (
+            os.path.exists(
+                os.path.join(self.decoder_data_dir, "lightning_logs")
+            )
+            == False
+        ):
+            # make this directory
+            os.mkdir(os.path.join(self.decoder_data_dir, "lightning_logs"))
+
         self.populate_chkpt_dropdown()  # load ckpt files if any
         self.initialise_params()
 
@@ -474,7 +485,7 @@ class PoserWidget(Container):
                     self.detection_layer = self.viewer.add_shapes(
                         np.zeros((1, 4, 3)),
                         shape_type="rectangle",
-                        edge_width=5,
+                        edge_width=self.im_subset.data.shape[2] / 200,
                         edge_color="#55ff00",
                         face_color="transparent",
                         visible=True,
@@ -563,7 +574,9 @@ class PoserWidget(Container):
                 if self.points_layer is None:
                     point_properties = {"confidence": [0], "ind": [0]}
                     self.points_layer = self.viewer.add_points(
-                        np.zeros((1, 3)), properties=point_properties
+                        np.zeros((1, 3)),
+                        properties=point_properties,
+                        size=self.im_subset.data.shape[2] / 100,
                     )
 
                 for point in self.points_layer.data.tolist():  # its a list
@@ -1125,7 +1138,7 @@ class PoserWidget(Container):
         self.shapes_layer = self.viewer.add_shapes(
             boxes[:nframes],
             shape_type="rectangle",
-            edge_width=5,
+            edge_width=self.im_subset.data.shape[2] / 200,
             edge_color="#55ff00",
             face_color="transparent",
             visible=True,
@@ -1505,8 +1518,11 @@ class PoserWidget(Container):
 
                 # create points layer
                 if self.points_layer is None:
+                    # make point size a set ratio of window size
+                    point_size = self.im_subset.data.shape[2] / 100
+
                     self.points_layer = self.viewer.add_points(
-                        self.points, size=3, visible=True
+                        self.points, size=point_size, visible=True
                     )
                 else:
                     self.points_layer.data = self.points
@@ -1639,7 +1655,8 @@ class PoserWidget(Container):
                         self.points_layer.data = self.point_subset
                     except:
                         self.points_layer = self.viewer.add_points(
-                            self.point_subset, size=5
+                            self.point_subset,
+                            size=self.im_subset.data.shape[2] / 100,
                         )
                         self.label_menu.choices = self.choices
                     try:
@@ -1737,7 +1754,8 @@ class PoserWidget(Container):
                         self.points_layer.data = self.point_subset
                     except:
                         self.points_layer = self.viewer.add_points(
-                            self.point_subset, size=5
+                            self.point_subset,
+                            size=self.im_subset.data.shape[2] / 100,
                         )
                         self.label_menu.choices = self.choices
 
@@ -1775,6 +1793,17 @@ class PoserWidget(Container):
             except:
                 print("no tracks")
             self.im_subset.data = self.im
+
+    def save_classification_data(self, event):
+        try:
+            self.save_to_h5(event)
+        except:
+            print("failed to save to h5")
+
+        try:
+            self.save_ethogram()
+        except:
+            print("failed to save to csv")
 
     def save_to_h5(self, event):
         """converts classification data to pytables format for efficient storage.
@@ -1953,6 +1982,7 @@ class PoserWidget(Container):
             etho = self.classification_data_to_ethogram()
             self.populate_predicted_etho(etho)
             self.populate_chkpt_dropdown()
+            self.save_predictions()
 
         elif self.model_dropdown.value == "Detection":
             self.predict_object_detection()
@@ -1977,7 +2007,9 @@ class PoserWidget(Container):
             if self.points_layer is None:
                 point_properties = {"confidence": [0], "ind": [0], "node": [0]}
                 self.points_layer = self.viewer.add_points(
-                    np.zeros((1, 3)), properties=point_properties
+                    np.zeros((1, 3)),
+                    properties=point_properties,
+                    size=self.im_subset.data.shape[2] / 100,
                 )
 
             points = []
@@ -2140,7 +2172,7 @@ class PoserWidget(Container):
             self.detection_layer = self.viewer.add_shapes(
                 np.zeros((1, 4, 3)),
                 shape_type="rectangle",
-                edge_width=5,
+                edge_width=self.im_subset.data.shape[2] / 200,
                 edge_color="#55ff00",
                 face_color="transparent",
                 visible=True,
@@ -2151,6 +2183,8 @@ class PoserWidget(Container):
         labels = self.detection_layer.properties["label"].tolist()
         shape_data = self.detection_layer.data
         ids = [0]
+        colors = sns.color_palette("tab20", as_cmap=True)
+        edge_colors = ["#55ff00"]
 
         print(f"shape data shape is {len(shape_data)}")
         print(f"labels are {labels}")
@@ -2250,6 +2284,8 @@ class PoserWidget(Container):
 
             assert len(labels) == len(ids)
             self.detection_layer.properties = {"label": labels, "id": ids}
+            new_edge_colors = [colors.colors[idx] for idx in ids]
+            self.detection_layer.edge_color = new_edge_colors
 
         self.populate_chkpt_dropdown()
         self.label_menu.choices = self.choices
@@ -3417,6 +3453,7 @@ class PoserWidget(Container):
                 behaviour_dict[behaviour + 1] = class_dict
 
             classification_data[int(group)] = behaviour_dict
+        file.close()
         return classification_data
 
     def classification_data_to_bouts(
@@ -3630,6 +3667,35 @@ class PoserWidget(Container):
             ),
             durations,
         )
+
+    def save_ethogram(self):
+        # instead of saving the bout info in classification data - save the ethogram instead
+
+        df = pd.DataFrame()
+        filename = str(self.video_file) + "_classification.csv"
+        for ind in self.classification_data.keys():
+            for behaviour in self.classification_data[ind].keys():
+                label = self.classification_data[ind][behaviour][
+                    "classification"
+                ]
+                start = self.classification_data[ind][behaviour]["start"]
+                stop = self.classification_data[ind][behaviour]["stop"]
+                df = pd.concat(
+                    [df, pd.Series([ind, behaviour, start, stop, label])],
+                    axis=1,
+                )
+        df = df.T
+        df.columns = ["individual", "nbehaviour", "start", "stop", "behaviour"]
+        # df["duration"] =
+
+        df.to_csv(filename)
+
+        # summarise data
+        count_filename = filename = (
+            str(self.video_file) + "_behaviour_counts.csv"
+        )
+        count_df = df.behaviour.value_counts()
+        count_df.to_csv(count_filename)
 
 
 class Behaviour(tb.IsDescription):
