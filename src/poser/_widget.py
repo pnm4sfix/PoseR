@@ -3112,6 +3112,11 @@ class PoserWidget(Container):
         # self.num_workers = self.num_workers_spinbox.value # spinbox
         self.lr = self.lr_spinbox.value  # spinbox
         # self.dropout = self.dropout_spinbox.value # spinbox
+        try:
+            self.regress = self.config_data["train_cfg"]["regress"]
+        except:
+            print("not regression")
+            self.regress = False
 
         try:
             self.backbone = self.config_data["train_cfg"]["backbone"]
@@ -3185,11 +3190,16 @@ class PoserWidget(Container):
 
         except:
             self.calc_class_weights = False
-
-        self.class_dict = self.config_data["data_cfg"]["classification_dict"]
-        self.label_dict = {v: k for k, v in self.class_dict.items()}
-        # label_dict = {k:v for v, k in enumerate(np.unique(self.train_labels))}
-        print(f"Label dict is {self.label_dict}")
+        try:
+            self.class_dict = self.config_data["data_cfg"][
+                "classification_dict"
+            ]
+            self.label_dict = {v: k for k, v in self.class_dict.items()}
+            # label_dict = {k:v for v, k in enumerate(np.unique(self.train_labels))}
+            print(f"Label dict is {self.label_dict}")
+        except:
+            self.class_dict = None
+            self.label_dict = None
 
         # assign model parameters
         PATH_DATASETS = self.decoder_data_dir
@@ -3205,6 +3215,7 @@ class PoserWidget(Container):
             "labels_to_ignore": self.labels_to_ignore,
             "label_dict": self.label_dict,
             "calc_class_weights": self.calc_class_weights,
+            "regress": self.regress,
         }
 
         graph_cfg = {"layout": self.graph_layout, "center": self.center_node}

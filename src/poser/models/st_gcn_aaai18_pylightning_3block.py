@@ -9,6 +9,8 @@ from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset
 from torchmetrics.functional.classification.accuracy import accuracy
 
+# from torchmetrics.regression import R2Score
+from torcheval.metrics.functional import r2_score
 
 # import sys
 # sys.path.insert(1, "../")
@@ -62,11 +64,20 @@ class ST_GCN_18(LightningModule):
         super().__init__()
         # self.hparams.update(hparams)
         self.num_workers = num_workers
-
         self.data_dir = data_cfg["data_dir"]
         self.augment = data_cfg["augment"]
         self.ideal_sample_no = data_cfg["ideal_sample_no"]
         self.shift = data_cfg["shift"]
+
+        try:
+            self.regress = data_cfg["regress"]
+        except:
+            self.regress = False
+
+        try:
+            self.soft = data_cfg["softmax"]
+        except:
+            self.soft = False
 
         try:
             self.transform = data_cfg["transform"]
@@ -136,7 +147,8 @@ class ST_GCN_18(LightningModule):
 
         # fcn for prediction
         self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
-        self.softmax = nn.Softmax(dim=1)
+        if self.soft:
+            self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
         # data normalization
@@ -176,11 +188,19 @@ class ST_GCN_18(LightningModule):
         # Make sure dataloaders are on cuda
         x, y = batch
         output = self(x)
-        loss = F.cross_entropy(output, y, weight=self.class_weights)
-        preds = torch.argmax(output, dim=1)
-        acc = accuracy(
-            preds, y, task="multiclass", num_classes=self.num_classes
-        )
+        if self.regress:
+            loss = F.l1_loss(
+                output, y
+            )  # mse loss is double where it expects a float
+            preds = output
+            # r2score = R2Score() #R2Score(num_outputs=self.num_classes, multioutput='raw_values').to(self.device)
+            acc = r2_score(preds, y)
+        else:
+            loss = F.cross_entropy(output, y, weight=self.class_weights)
+            preds = torch.argmax(output, dim=1)
+            acc = accuracy(
+                preds, y, task="multiclass", num_classes=self.num_classes
+            )
         self.log(
             "train_loss",
             loss,
@@ -195,11 +215,17 @@ class ST_GCN_18(LightningModule):
     def validation_step(self, batch, batch_idx):
         x, y = batch
         output = self(x)
-        loss = F.cross_entropy(output, y)
-        preds = torch.argmax(output, dim=1)
-        acc = accuracy(
-            preds, y, task="multiclass", num_classes=self.num_classes
-        )
+        if self.regress:
+            loss = F.l1_loss(output, y)  # l1
+            preds = output
+            # r2score = R2Score().to(self.device)
+            acc = r2_score(preds, y)
+        else:
+            loss = F.cross_entropy(output, y)
+            preds = torch.argmax(output, dim=1)
+            acc = accuracy(
+                preds, y, task="multiclass", num_classes=self.num_classes
+            )
 
         self.log(
             "val_loss",
@@ -214,12 +240,18 @@ class ST_GCN_18(LightningModule):
     def test_step(self, batch, batch_idx):
         x, y = batch
         output = self(x)
-        loss = F.cross_entropy(output, y)
-        preds = torch.argmax(output, dim=1)
-        acc = accuracy(
-            preds, y, task="multiclass", num_classes=self.num_classes
-        )
-        # acc3 = accuracy(preds, y, task="multiclass", num_classes=self.num_classes, top_k = 3)
+        if self.regress:
+            loss = F.l1_loss(output, y)
+            preds = output
+            # r2score = R2Score().to(self.device)
+            acc = r2_score(preds, y)
+        else:
+            loss = F.cross_entropy(output, y)
+            preds = torch.argmax(output, dim=1)
+            acc = accuracy(
+                preds, y, task="multiclass", num_classes=self.num_classes
+            )
+            # acc3 = accuracy(preds, y, task="multiclass", num_classes=self.num_classes, top_k = 3)
 
         self.log(
             "val_loss",
@@ -284,6 +316,7 @@ class ST_GCN_18(LightningModule):
                 transform=self.transform,
                 labels_to_ignore=self.labels_to_ignore,
                 label_dict=self.label_dict,
+                regress=self.regress,
             )
 
             self.test_data = ZebData(
@@ -293,17 +326,26 @@ class ST_GCN_18(LightningModule):
                 transform=self.transform,
                 labels_to_ignore=self.labels_to_ignore,
                 label_dict=self.label_dict,
+                regress=self.regress,
             )
 
             if stage == "fit" or stage is None:
                 targets = self.train_data.labels
-                train_idx, val_idx = train_test_split(
-                    np.arange(len(targets)),
-                    test_size=0.1765,
-                    shuffle=True,
-                    stratify=targets,
-                    random_state=42,
-                )
+                if self.regress:
+                    train_idx, val_idx = train_test_split(
+                        np.arange(len(targets)),
+                        test_size=0.1765,
+                        shuffle=True,
+                        random_state=42,
+                    )
+                else:
+                    train_idx, val_idx = train_test_split(
+                        np.arange(len(targets)),
+                        test_size=0.1765,
+                        shuffle=True,
+                        stratify=targets,
+                        random_state=42,
+                    )
 
                 # train_length = int(len(self.train_data.labels) *0.8) # add augmentation step here
                 # val_length = len(self.train_data.labels)-train_length #int(len(self.train_data.labels) * 0.2)

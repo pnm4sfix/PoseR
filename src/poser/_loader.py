@@ -51,6 +51,7 @@ class ZebData(torch.utils.data.Dataset):
         shift=False,
         labels_to_ignore=None,
         label_dict=None,
+        regress=False,
     ):
         self.ideal_sample_no = ideal_sample_no
         self.transform = transform
@@ -63,43 +64,48 @@ class ZebData(torch.utils.data.Dataset):
             if self.data.shape[0] == 1:
                 self.data = self.data.reshape(*self.data.shape[1:])
 
-            # catch incorrectly loaded shape
-            self.labels = np.load(label_file).astype("int64")
-            if self.labels.shape[0] == 1:
-                self.labels = self.labels.reshape(*self.labels.shape[1:])
+            if regress:
+                self.labels = np.load(label_file).astype("float64")
+            else:
+                # catch incorrectly loaded shape
+                self.labels = np.load(label_file).astype("int64")
+                if self.labels.shape[0] == 1:
+                    self.labels = self.labels.reshape(*self.labels.shape[1:])
 
-            # drop junk 0 cluster
-            # self.data = self.data[self.labels>0]
-            # self.labels = self.labels[self.labels>0]
-            print(
-                f"Dataset breakdown is {pd.Series(self.labels).value_counts()}"
-            )
-
-            if labels_to_ignore is not None:
-                label_filter = np.isin(self.labels, labels_to_ignore)
-                self.labels = self.labels[~label_filter]
-                self.data = self.data[~label_filter]
-                print(f"Ignoring Labels {labels_to_ignore}")
+                # drop junk 0 cluster
+                # self.data = self.data[self.labels>0]
+                # self.labels = self.labels[self.labels>0]
                 print(
-                    f"Filtered data contains labels {np.unique(self.labels)}"
+                    f"Dataset breakdown is {pd.Series(self.labels).value_counts()}"
                 )
 
-            if label_dict is None:
-                print("No label dict")
-                mapping = {k: v for v, k in enumerate(np.unique(self.labels))}
-                for k, v in mapping.items():
-                    self.labels[self.labels == k] = v
+                if labels_to_ignore is not None:
+                    label_filter = np.isin(self.labels, labels_to_ignore)
+                    self.labels = self.labels[~label_filter]
+                    self.data = self.data[~label_filter]
+                    print(f"Ignoring Labels {labels_to_ignore}")
+                    print(
+                        f"Filtered data contains labels {np.unique(self.labels)}"
+                    )
 
-            elif label_dict is not None:
-                mapping = label_dict
-                for k, v in mapping.items():
-                    self.labels[self.labels == k] = v
-                print("Labels already mapped during saving")
-                # mapping = label_dict
-                # semantic: value
+                if label_dict is None:
+                    print("No label dict")
+                    mapping = {
+                        k: v for v, k in enumerate(np.unique(self.labels))
+                    }
+                    for k, v in mapping.items():
+                        self.labels[self.labels == k] = v
 
-            print(f"label mapping is {mapping}")
-            print(f"Unique labels are {np.unique(self.labels)}")
+                elif label_dict is not None:
+                    mapping = label_dict
+                    for k, v in mapping.items():
+                        self.labels[self.labels == k] = v
+                    print("Labels already mapped during saving")
+                    # mapping = label_dict
+                    # semantic: value
+
+                print(f"label mapping is {mapping}")
+                print(f"Unique labels are {np.unique(self.labels)}")
 
             # if augment:
 
@@ -165,7 +171,10 @@ class ZebData(torch.utils.data.Dataset):
 
         # if self.target_transform is not None:
         # label = self.target_transform(label)
-        label = torch.tensor(label).long()
+        if label.dtype != "float64":
+            label = torch.tensor(label).long()
+        else:
+            label = torch.tensor(label)
         return behaviour, label
 
     def align(self, bhv_rs):
