@@ -1,5 +1,6 @@
 name: PoseR-napari
 display_name: PoseR
+visibility: hidden
 contributions:
   commands:
     - id: PoseR-napari.make_qwidget
