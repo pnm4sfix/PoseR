@@ -297,6 +297,9 @@ class PoserWidget(Container):
         self.test_button = PushButton(label="Test")
         self.test_button.clicked.connect(self.test)
 
+        self.clear_button = PushButton(label="Clear")
+        self.clear_button.clicked.connect(self.full_reset)
+
         self.extend(
             [
                 self.batch_size_spinbox,
@@ -308,6 +311,7 @@ class PoserWidget(Container):
                 self.analyse_button,
                 self.finetune_button,
                 self.test_button,
+                self.clear_button,
             ]
         )  # self.num_workers_spinbox,  self.dropout_spinbox,
         # self.num_labels_spinbox, self.num_channels_spinbox, self.model_dropdown,,
@@ -780,7 +784,7 @@ class PoserWidget(Container):
             for layer in self.viewer1d.layers:
                 # print(layer)
                 self.viewer1d.layers.remove(layer)
-
+            self.viewer1d.clear_canvas()
             print(f"Layers remaining are {self.viewer1d.layers}")
         except:
             pass
