@@ -7,8 +7,8 @@
     "\\.pytest_cache",
     "\\src",
     "\\src\\poser",
-    "\\src\\poser\\_tests"
+    "\\src\\poser\\models"
   ],
-  "SelectedNode": "\\src\\poser\\napari.yaml",
+  "SelectedNode": "\\src\\poser\\models\\st_gcn_aaai18_pylightning_3block.py",
   "PreviewInSolutionExplorer": false
 }

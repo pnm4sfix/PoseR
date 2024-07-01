@@ -47,7 +47,8 @@ For CPU only version:
 
 Install napari:
 
-    pip install napari["all"]
+    pip install napari[all]==0.4.14 npe2==0.6.2 pydantic==1.10.4
+
 
 You can install `PoseR` via [pip]:
 
