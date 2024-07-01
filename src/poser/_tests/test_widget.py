@@ -133,5 +133,9 @@ def test_workflow1(make_napari_viewer, capsys):
 
     assert before_save_data.keys() == after_save_data.keys()
     # break down assertions for all parts of data
+    for key in before_save_data.keys():
+        assert (
+            before_save_data[key][1].keys() == after_save_data[key][1].keys()
+        )
 
     # test load different file - assert all changes that need to be made
