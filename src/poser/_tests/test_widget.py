@@ -49,7 +49,7 @@ def test_workflow1(make_napari_viewer, capsys):
     my_widget.h5_picker_changed(test_dlc_file)
 
     assert len(viewer.layers) == 0  ## this
-    assert len(my_widget.viewer1d.layers) == 0
+    assert len(my_widget.viewer1d.layers) == 1  ## just line layer
     assert my_widget.classification_data == {}
     assert list(my_widget.label_menu.choices) == my_widget.choices
     assert type(my_widget.dlc_data) == pd.DataFrame
