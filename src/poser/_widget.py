@@ -360,13 +360,17 @@ class PoserWidget(Container):
         self.reset_layers()
 
         self.reset_viewer1d_layers()
-
+        self.add_frame_line()
         self.label_menu.choices = self.choices
-        self.populate_chkpt_dropdown()
+        try:
+            self.populate_chkpt_dropdown()
+        except:
+            pass
 
     def decoder_dir_changed(self, value):
         # Look for and load yaml configuration file
         # load config
+        self.full_reset()
         self.decoder_data_dir = value
         print(f"Decoder Data Folder is {self.decoder_data_dir}")
         self.config_file = os.path.join(
@@ -453,7 +457,16 @@ class PoserWidget(Container):
         # try:
 
         if self.behaviour_no > 0:
-            add_frame = self.behaviours[self.behaviour_no - 1][0]
+            try:
+                add_frame = self.behaviours[self.behaviour_no - 1][0]
+            except:
+                print("updating slider from classification data")
+                add_frame = self.classification_data[self.ind][
+                    self.behaviour_no
+                ][
+                    "start"
+                ]  # self.behaviours[self.behaviour_no - 1][0]
+
         else:
             add_frame = 0
         self.frame_line.data = np.c_[
@@ -706,7 +719,9 @@ class PoserWidget(Container):
         self.viewer1d.axis.y_label = "Movement"
         self.viewer1d.reset_view()
         self.frame = 0
+        self.add_frame_line()
 
+    def add_frame_line(self):
         self.frame_line = self.viewer1d.add_line(
             np.c_[[self.frame, self.frame], [0, 10]],
             color="gray",
@@ -889,8 +904,9 @@ class PoserWidget(Container):
     def get_tracks(self):
         """Converts coordinates into tracks format for napari tracks layer"""
         # print("Getting Individuals Tracks")
-        x_nose = self.x.to_numpy()[-1]
-        y_nose = self.y.to_numpy()[-1]
+
+        x_nose = self.x.to_numpy()[self.center_node]  # -1
+        y_nose = self.y.to_numpy()[self.center_node]  # -1
 
         z_nose = np.arange(self.x.shape[1])
         nose_zipped = zip(z_nose, y_nose, x_nose)
@@ -1273,6 +1289,8 @@ class PoserWidget(Container):
         self.spinbox.value = 0
 
         self.tracks = None  # set this to none as it's not saved
+        # add self behaviours
+
         # self.ind = 0
 
         # self.choices = pd.Series([label["classification"] for k,label in self.classification_data[1].items()]).unique().tolist()
@@ -1550,6 +1568,11 @@ class PoserWidget(Container):
 
     def extract_behaviours(self, value=None):
         print(f"Extracting behaviours using {self.extract_method} method")
+        # reset classification data
+        # reset viewer1d
+
+        self.reset_viewer1d_layers()
+
         if self.extract_method == "orth":
             # if (self.points.shape[0] > 1e6) & (cp.cuda.runtime.getDeviceCount() >0):
             #    print("Large video - sing GPU accelerated movement extraction")
@@ -1569,6 +1592,10 @@ class PoserWidget(Container):
             # self.plot_movement()
         else:
             pass
+
+        # check self behaviours doesnt have any where start is greater than end
+        # if so remove them
+        self.behaviours = [b for b in self.behaviours if b[0] < b[1]]
 
         # check if ind exists in classification data
 
