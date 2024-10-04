@@ -23,3 +23,9 @@ train_cfg:
   num_workers: 0 # leave at 0 for now
   transform: None # default to None
   backbone: "ST-GCN" # default to ST-GCN - other models available in future
+  detection_backbone: "YOLOv8"
+  detection_ckpt: "yolo_zeb_l3.pt"
+  detection_config: "yolo_zeb_config"
+  pose_backbone: "YOLOv8"
+  pose_ckpt: "yolo_zeb_l3.pt"
+
