@@ -7,6 +7,7 @@ see: https://napari.org/stable/plugins/guides.html?#widgets
 Replace code below according to your needs.
 """
 
+from ast import Try
 from cProfile import label
 from re import L
 import sys
@@ -259,7 +260,7 @@ class PoserWidget(Container):
         self.viewer.dims.events.current_step.connect(self.update_slider)
 
         ### infererence
-        self.batch_size_spinbox = SpinBox(label="Batch Size", value=16)
+        self.batch_size_spinbox = SpinBox(label="Batch Size", value=16, max = 1024)
         self.num_workers_spinbox = SpinBox(label="Num Workers", value=8)
         self.lr_spinbox = FloatSpinBox(
             label="Learning Rate", value=0.01, step=0.0000
@@ -482,7 +483,7 @@ class PoserWidget(Container):
         if self.live_checkbox.value:
             # create behaviour from points
             # pass to mode
-            # softmax logits and add to a ethogram in viewer1d
+            # logits and add to a ethogram in viewer1d
             exists = False
             if self.model_dropdown.value == "Detection":
                 if self.detection_layer == None:
@@ -3033,7 +3034,7 @@ class PoserWidget(Container):
         # create trainer object,
         ## optimise trainer to just predict as currently its preparing data thinking its training
         # predict
-        for n in range(4):  # does ths reuse model in current state?
+        for n in range(self.numRuns):  # does ths reuse model in current state?
             if self.backbone == "ST-GCN":
                 model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
                     in_channels=self.numChannels,
@@ -3052,15 +3053,17 @@ class PoserWidget(Container):
                     num_workers=self.num_workers,
                 )
 
-            for param in model.parameters():
-                if param.requires_grad:
-                    print(f"param {param} requires grad")
+            #for param in model.parameters():
+            #    if param.requires_grad:
+                    #print(f"param {param} requires grad")
 
             print(f"trial is {n}")
 
             TTLogger = TensorBoardLogger(save_dir=self.decoder_data_dir)
+            
+            print("Early stop metric is {} and mode is {} and patience is {}".format(self.early_stop_metric, self.early_stop_mode, self.patience))
             early_stop = EarlyStopping(
-                monitor="val_loss", mode="min", patience=5
+                monitor=self.early_stop_metric, mode=self.early_stop_mode, patience=self.patience
             )
             swa = StochasticWeightAveraging(swa_lrs=1e-2)
 
@@ -3094,29 +3097,43 @@ class PoserWidget(Container):
             print(f"new version folder is {new_version_folder}")
 
             checkpoint_callback = ModelCheckpoint(
-                monitor="val_loss",
+                monitor=self.early_stop_metric,
                 dirpath=new_version_folder,
-                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}",
+                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}--{auprc:.2f}",
                 save_top_k=1,  # save the best model
-                mode="min",
+                mode=self.early_stop_mode,
                 every_n_epochs=1,
             )
 
             ## Run this 4 times and select best model - fine tune that
+            try:
+                 # old pytorch lightning
+                trainer = Trainer(
+                    logger=TTLogger,
+                    devices=1,
+                    accelerator=self.accelerator,
+                    max_epochs=100,
+                    callbacks=[early_stop, checkpoint_callback],
+                    auto_lr_find=True,
+                )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
 
-            trainer = Trainer(
-                logger=TTLogger,
-                devices=1,
-                accelerator=self.accelerator,
-                max_epochs=100,
-                callbacks=[early_stop, checkpoint_callback],
-                auto_lr_find=True,
-            )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
+                trainer.tune(model)
 
-            trainer.tune(model)
-
-            ### DEBUG - overfit
-            # trainer = Trainer(devices =1, accelerator = "gpu", overfit_batches=0.01)
+                ### DEBUG - overfit
+                # trainer = Trainer(devices =1, accelerator = "gpu", overfit_batches=0.01)
+            except:
+                # new pytorch lightning
+                from pytorch_lightning.tuner import Tuner
+                trainer = Trainer(
+                    logger=TTLogger,
+                    devices=1,
+                    accelerator=self.accelerator,
+                    max_epochs=100,
+                    callbacks=[early_stop, checkpoint_callback],
+                )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
+                tuner = Tuner(trainer)
+                tuner = Tuner(trainer)
+                tuner.lr_find(model)
 
             trainer.fit(model)
 
@@ -3137,7 +3154,7 @@ class PoserWidget(Container):
         self.dropout = self.config_data["train_cfg"]["dropout"]
         self.numChannels = self.config_data["train_cfg"]["num_channels"]
         self.num_workers = self.config_data["train_cfg"]["num_workers"]
-
+        
         # create dataloader from preprocess swims
         self.batch_size = self.batch_size_spinbox.value  # spinbox
         # self.num_workers = self.num_workers_spinbox.value # spinbox
@@ -3148,7 +3165,10 @@ class PoserWidget(Container):
         except:
             print("not regression")
             self.regress = False
-
+        try:
+            self.head_node = self.config_data["train_cfg"]["head_node"]
+        except:
+            self.head_node = 0
         try:
             self.backbone = self.config_data["train_cfg"]["backbone"]
 
@@ -3159,7 +3179,7 @@ class PoserWidget(Container):
         try:
             self.transform = self.config_data["train_cfg"]["transform"]
             print(f"transform is {self.transform}")
-            if self.transfrom == "None":
+            if self.transform == "None":
                 self.transform = None
         except:
             self.transform = None
@@ -3178,14 +3198,18 @@ class PoserWidget(Container):
             if self.augmentation == "None":
                 print("No augmentation")
                 self.augment = False
-                self.ideal_sample_no = None
+                #self.ideal_sample_no = None
 
             else:
                 print(f"Augmenting data {self.augmentation}")
                 self.augment = True
-                self.ideal_sample_no = self.augmentation
+                #self.ideal_sample_no = self.augmentation
         except:
             self.augment = False
+            #self.ideal_sample_no = None
+        try:
+            self.ideal_sample_no = self.config_data["data_cfg"]["ideal_sample_no"]
+        except:
             self.ideal_sample_no = None
 
         try:
@@ -3232,6 +3256,40 @@ class PoserWidget(Container):
             self.class_dict = None
             self.label_dict = None
 
+        try:
+            self.T2 = self.config_data["data_cfg"]["T2"]
+        except:
+            self.T2 = None
+
+        try: 
+            self.softmax = self.config_data["train_cfg"]["softmax"]
+        except:
+            self.softmax = False
+
+        try: 
+            self.weighted_random_sampler = self.config_data["data_cfg"]["weighted_random_sampler"]
+        except:
+            self.weighted_random_sampler = None
+
+        try:
+            self.early_stop_metric = self.config_data["train_cfg"]["early_stop_metric"]
+            self.early_stop_mode = self.config_data["train_cfg"]["early_stop_mode"]
+            self.patience = self.config_data["train_cfg"]["patience"]
+        except:
+            self.early_stop_metric = "val_loss"
+            self.early_stop_mode = "min"
+            self.patience = 5
+        try:
+            self.numRuns = self.config_data["train_cfg"]["numRuns"]
+        except:
+            self.numRuns = 4
+
+        try:
+            self.freeze = self.config_data["train_cfg"]["freeze"]
+        except:
+            self.freeze = False
+
+
         # assign model parameters
         PATH_DATASETS = self.decoder_data_dir
         # self.numlabels = self.num_labels_spinbox.value # spinbox
@@ -3247,6 +3305,10 @@ class PoserWidget(Container):
             "label_dict": self.label_dict,
             "calc_class_weights": self.calc_class_weights,
             "regress": self.regress,
+            "T2": self.T2,
+            "head" : self.head_node,
+            "softmax": self.softmax,
+            "weighted_random_sampler": self.weighted_random_sampler
         }
 
         graph_cfg = {"layout": self.graph_layout, "center": self.center_node}
@@ -3280,41 +3342,54 @@ class PoserWidget(Container):
         )  # spinbox
 
         for n in range(4):  # does ths reuse model in current state?
-            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
+            try: 
+                model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
                 in_channels=self.numChannels,
                 num_workers=self.num_workers,
                 num_class=orig_num_labels,  # self.numlabels,
                 graph_cfg=graph_cfg,
                 data_cfg=data_cfg,
                 hparams=hparams,
-            ).load_from_checkpoint(
-                self.chkpt,
-                in_channels=self.numChannels,
-                num_workers=self.num_workers,
-                num_class=orig_num_labels,  # self.numlabels,
-                graph_cfg=graph_cfg,
-                data_cfg=data_cfg,
-                hparams=hparams,
-            )
+                ).load_from_checkpoint(
+                    self.chkpt,
+                    in_channels=self.numChannels,
+                    num_workers=self.num_workers,
+                    num_class=orig_num_labels,  # self.numlabels,
+                    graph_cfg=graph_cfg,
+                    data_cfg=data_cfg,
+                    hparams=hparams,
+                )
+            except:
+                try:
+                    model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, data_cfg=data_cfg)
+                except:
+                    model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, num_class = self.numlabels-1) # use specifc case -delete
 
-            # freeze model layers
-            for param in model.parameters():
-                param.requires_grad = False
+                if model.num_classes != orig_num_labels:
+                    print("num classes don't match - assume transfer learning")
+                    model.num_classes = orig_num_labels
+                    
+                #    #model.setup("fit")
+            if self.freeze:
+                # freeze model layers
+                for param in model.parameters():
+                    param.requires_grad = False
 
-            print(model.parameters)
+            #print(model.parameters)
 
             # add new model.fcn
             model.fcn = nn.Conv2d(256, self.numlabels, kernel_size=1)
 
-            for param in model.parameters():
-                if param.requires_grad:
-                    print(f"param {param} requires grad")
+            #for param in model.parameters():
+            #    if param.requires_grad:
+            #        print(f"param {param} requires grad")
 
             print(f"trial is {n}")
 
             TTLogger = TensorBoardLogger(save_dir=self.decoder_data_dir)
+            print("Early stop metric is {} and mode is {}".format(self.early_stop_metric, self.early_stop_mode))
             early_stop = EarlyStopping(
-                monitor="val_loss", mode="min", patience=5
+                monitor=self.early_stop_metric, mode=self.early_stop_mode, patience=self.patience
             )
             swa = StochasticWeightAveraging(swa_lrs=1e-2)
 
@@ -3347,26 +3422,41 @@ class PoserWidget(Container):
             print(f"new version folder is {new_version_folder}")
 
             checkpoint_callback = ModelCheckpoint(
-                monitor="val_loss",
+                monitor=self.early_stop_metric,
                 dirpath=new_version_folder,
-                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}",
+                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}--{auprc:.2f}",
                 save_top_k=1,  # save the best model
-                mode="min",
+                mode=self.early_stop_mode,
                 every_n_epochs=1,
             )
+            try:
+                 # old pytorch lightning
+                trainer = Trainer(
+                    logger=TTLogger,
+                    devices=1,
+                    accelerator=self.accelerator,
+                    max_epochs=100,
+                    callbacks=[early_stop, checkpoint_callback],
+                    auto_lr_find=True,
+                )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
 
-            ## Run this 4 times and select best model - fine tune that
+                trainer.tune(model)
 
-            trainer = Trainer(
-                logger=TTLogger,
-                devices=1,
-                accelerator="gpu",
-                max_epochs=100,
-                callbacks=[early_stop, checkpoint_callback],
-                auto_lr_find=True,
-            )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
-
-            trainer.tune(model)
+                ### DEBUG - overfit
+                # trainer = Trainer(devices =1, accelerator = "gpu", overfit_batches=0.01)
+            except:
+                # new pytorch lightning
+                from pytorch_lightning.tuner import Tuner
+                trainer = Trainer(
+                    logger=TTLogger,
+                    devices=1,
+                    accelerator=self.accelerator,
+                    max_epochs=100,
+                    callbacks=[early_stop, checkpoint_callback],
+                )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
+                tuner = Tuner(trainer)
+                tuner = Tuner(trainer)
+                tuner.lr_find(model)
 
             trainer.fit(model)
 
@@ -3381,29 +3471,38 @@ class PoserWidget(Container):
         self.chkpt = os.path.join(
             log_folder, self.chkpt_dropdown.value
         )  # spinbox
-
-        model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
-            in_channels=self.numChannels,
-            num_class=self.numlabels,
-            num_workers=self.num_workers,
-            graph_cfg=graph_cfg,
-            data_cfg=data_cfg,
-            hparams=hparams,
-        ).load_from_checkpoint(
-            self.chkpt,
-            in_channels=self.numChannels,
-            num_workers=self.num_workers,
-            num_class=self.numlabels,
-            graph_cfg=graph_cfg,
-            data_cfg=data_cfg,
-            hparams=hparams,
-        )
-
+        try:
+            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
+                in_channels=self.numChannels,
+                num_class=self.numlabels,
+                num_workers=self.num_workers,
+                graph_cfg=graph_cfg,
+                data_cfg=data_cfg,
+                hparams=hparams,
+            ).load_from_checkpoint(
+                self.chkpt,
+                in_channels=self.numChannels,
+                num_workers=self.num_workers,
+                num_class=self.numlabels,
+                graph_cfg=graph_cfg,
+                data_cfg=data_cfg,
+                hparams=hparams,
+            )
+        except:
+            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, 
+                                                                                    in_channels=self.numChannels,
+                                                                                    num_workers=self.num_workers,
+                                                                                    num_class=self.numlabels,
+                                                                                    graph_cfg=graph_cfg,
+                                                                                    data_cfg=data_cfg,
+                                                                                    hparams=hparams,)
+            
+            
         model.freeze()
 
-        TTLogger = TensorBoardLogger(save_dir=self.decoder_data_dir)
-        early_stop = EarlyStopping(monitor="val_loss", mode="min", patience=5)
-        swa = StochasticWeightAveraging(swa_lrs=1e-2)
+        #TTLogger = TensorBoardLogger(save_dir=self.decoder_data_dir)
+        #early_stop = EarlyStopping(monitor="val_loss", mode="min", patience=5)
+        #swa = StochasticWeightAveraging(swa_lrs=1e-2)
 
         if os.path.exists(log_folder):
             if len(os.listdir(log_folder)) > 0:
@@ -3434,12 +3533,12 @@ class PoserWidget(Container):
         print(f"new version folder is {new_version_folder}")
 
         trainer = Trainer(
-            logger=TTLogger,
+            #logger=TTLogger,
             devices=self.devices,
             accelerator=self.accelerator,
             max_epochs=100,
-            callbacks=[early_stop],
-            auto_lr_find=True,
+            #callbacks=[early_stop],
+            #auto_lr_find=True,
         )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
 
         trainer.test(model)

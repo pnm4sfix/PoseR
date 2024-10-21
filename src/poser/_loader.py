@@ -1,7 +1,10 @@
+from cProfile import label
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.utils import class_weight
+import psutil
+import os
 
 try:
     import cupy as cp
@@ -52,13 +55,35 @@ class ZebData(torch.utils.data.Dataset):
         labels_to_ignore=None,
         label_dict=None,
         regress=False,
+        center_node=0,
+        head_node = 0, 
+        T = None,
+        lazy = True
     ):
         self.ideal_sample_no = ideal_sample_no
+   
         self.transform = transform
         self.target_transform = target_transform
+        self.center_node = center_node
+        self.head_node = head_node
+        self.T= T
+        self.augment = augment
+        print(f"Augment is {self.augment}")
 
         if data_file is not None:
-            self.data = np.load(data_file)
+            # check size of file
+            filesize = os.path.getsize(data_file)/1e9
+            # Get virtual memory details
+            memory_info = psutil.virtual_memory()
+
+            # Available memory in bytes
+            available_memory = memory_info.available / 1e9
+
+            if filesize > available_memory:
+                print("File too large for memory, using mmap mode")
+                self.data = np.load(data_file, mmap_mode = "r")
+            else:
+                self.data = np.load(data_file)
 
             # catch incorrectly loaded shape
             if self.data.shape[0] == 1:
@@ -95,18 +120,23 @@ class ZebData(torch.utils.data.Dataset):
                     }
                     for k, v in mapping.items():
                         self.labels[self.labels == k] = v
-
+                
                 elif label_dict is not None:
+                    new_labels = np.zeros_like(self.labels)
                     mapping = label_dict
                     for k, v in mapping.items():
-                        self.labels[self.labels == k] = v
+                        print("original label is {} and new label is {}".format(k, v))
+                        new_labels[self.labels == k] = v
+                    self.labels = new_labels
                     print("Labels already mapped during saving")
                     # mapping = label_dict
                     # semantic: value
 
                 print(f"label mapping is {mapping}")
                 print(f"Unique labels are {np.unique(self.labels)}")
-
+            
+            
+                        
             # if augment:
 
             #    self.dynamic_augmentation()
@@ -142,13 +172,23 @@ class ZebData(torch.utils.data.Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        behaviour = self.data[idx]
+        behaviour = self.data[idx].copy()
         label = self.labels[idx]
 
         if self.transform is not None:
-            if self.transform == "align":
+
+            if "center" in self.transform:
+                behaviour = self.center_all(behaviour, self.center_node)
+
+            if (self.transform == "align") | ("align" in self.transform):
                 behaviour = self.align(behaviour)
-                behaviour = torch.from_numpy(behaviour).to(torch.float32)
+
+            if self.transform == "pad":
+                behaviour = self.pad(behaviour, self.T)
+
+            if self.augment == True:
+                behaviour = self.random_augmentation(behaviour)
+                
 
             if self.transform == "heatmap":
                 # print("transforming")
@@ -168,7 +208,8 @@ class ZebData(torch.utils.data.Dataset):
 
         if self.transform is None:
             behaviour = torch.from_numpy(behaviour).to(torch.float32)
-
+        if type(behaviour) != torch.Tensor:
+            behaviour = torch.from_numpy(behaviour).to(torch.float32)
         # if self.target_transform is not None:
         # label = self.target_transform(label)
         if label.dtype != "float64":
@@ -180,7 +221,7 @@ class ZebData(torch.utils.data.Dataset):
     def align(self, bhv_rs):
         # assumes bout already centered - add check if nose node is <
         # first node coords is vector from center
-        nose_node_vector = bhv_rs[0:2, 0, 0]
+        nose_node_vector = bhv_rs[0:2, 0, self.head_node]
         nose_node_mag = np.linalg.norm(nose_node_vector)
         center_vector = np.array([0, 1]).reshape(
             -1, 1
@@ -278,6 +319,15 @@ class ZebData(torch.utils.data.Dataset):
         last_nose = nose[:, -1]
         angle = self.angle_from_norm(last_nose)
         return angle
+
+    def random_augmentation(self, bhv, numAug = 1):
+        rotated = self.rotate_transform(bhv, numAug)[0]
+        jittered = self.jitter_transform(rotated, numAug)[0]
+        scaled = self.scale_transform(jittered, numAug)[0]
+        sheared = self.shear_transform(scaled, numAug)[0]
+        #rolled = self.roll_transform(sheared, numAug)[0]
+
+        return sheared
 
     def dynamic_augmentation(self):
         drop_labels = []
@@ -510,6 +560,15 @@ class ZebData(torch.utils.data.Dataset):
         )
         class_weights = torch.tensor(class_weights, dtype=torch.float32)
         return class_weights
+
+    def get_sample_weights(self):
+        # get class weights
+        class_weights = self.get_class_weights()
+        class_weight_map = {k:v for k,v in enumerate(class_weights)}
+        print("Class weight map is", class_weight_map)
+        sample_weights = torch.tensor(pd.Series(self.labels).map(class_weight_map).to_numpy(dtype= "float32"), dtype=torch.float32)
+        
+        return sample_weights
 
 
 class HyperParams:
