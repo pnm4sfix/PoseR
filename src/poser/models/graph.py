@@ -1,6 +1,26 @@
+r"""Copyright [2018] [@misc{mmskeleton2019,
+  author =       {Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin},
+  title =        {MMSkeleton},
+  howpublished = {\url{https://github.com/open-mmlab/mmskeleton}},
+  year =         {2019}
+}]
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Modifications made by [Pierce Mullen] on [11-11-24]"""
+
 import numpy as np
 
-
+### Original code from Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin (2019)
 class Graph:
     """The Graph to model the skeletons extracted by the openpose
 
@@ -162,6 +182,7 @@ class Graph:
             self.edge = self_link + neighbor_link
             self.center = 0
 
+        # Code modified by Pierce Mullen
         elif layout == "zebrafish":
             # print(layout)
             self.num_node = 9
@@ -345,6 +366,8 @@ class Graph:
             # print(layout)
             raise ValueError("Do Not Exist This Layout.")
 
+
+    ### Original code from Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin (2019)
     def get_adjacency(self, strategy):
         valid_hop = range(0, self.max_hop + 1, self.dilation)
         adjacency = np.zeros((self.num_node, self.num_node))
@@ -394,7 +417,7 @@ class Graph:
         else:
             raise ValueError("Do Not Exist This Strategy")
 
-
+### Original code from Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin (2019)
 def get_hop_distance(num_node, edge, max_hop=1):
     A = np.zeros((num_node, num_node))
     for i, j in edge:

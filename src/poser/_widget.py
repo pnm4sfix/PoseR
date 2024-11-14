@@ -9,7 +9,7 @@ Replace code below according to your needs.
 
 from ast import Try
 from cProfile import label
-from re import L
+from re import I, L
 import sys
 from tkinter import W
 
@@ -906,7 +906,7 @@ class PoserWidget(Container):
         """Converts coordinates into tracks format for napari tracks layer"""
         # print("Getting Individuals Tracks")
 
-        x_nose = self.x.to_numpy()[self.center_node]  # -1
+        x_nose = self.x.to_numpy()[self.center_node]  # -1 # change this to tail node
         y_nose = self.y.to_numpy()[self.center_node]  # -1
 
         z_nose = np.arange(self.x.shape[1])
@@ -1374,7 +1374,11 @@ class PoserWidget(Container):
         if len(self.classification_data.keys()) > 0:
             for bout, data in self.classification_data[self.ind].items():
                 idx = np.arange(data["start"], data["stop"])
-                label = self.label_dict[data["classification"]]
+                try:
+                    label = self.label_dict[data["classification"]]
+                except:
+                    # if label dict stores ints not strings
+                    label = self.label_dict[int(data["classification"])]
                 etho[label, idx] = 1
 
         return etho
@@ -1614,6 +1618,23 @@ class PoserWidget(Container):
         self.plot_movement_1d()
 
         self.populate_chkpt_dropdown()
+
+    def behaviours_to_classification_data(self):
+        """Converts extracted behaviours to classification data format."""
+        for n, (start, stop) in enumerate(self.behaviours):
+            point_subset = self.points.reshape(
+                    (self.n_nodes, -1, 3)
+                )[:, start:stop].reshape(-1, 3)
+            point_subset = point_subset - np.array(
+                        [start, 0, 0]
+                    )  # zero z because add_image has zeroed
+            self.classification_data[self.ind][n + 1] = {
+                "classification": "unclassified",
+                "coords": point_subset,
+                "start": start,
+                "stop": stop,
+                "ci": self.ci.iloc[:, start:stop].to_numpy().flatten(),
+            }
 
     def behaviour_changed(self, event):
         """Called when behaviour number is changed."""
@@ -2008,13 +2029,16 @@ class PoserWidget(Container):
 
     def analyse(self, value):
         if self.model_dropdown.value == "BehaviourDecode":
+            
             self.preprocess_bouts()  ## assumes behaviours extracted
+            # create a classification data that has the same number as the number of behaviours
+            self.behaviours_to_classification_data()
             self.predict_behaviours()
             self.update_classification_data_with_predictions()
             etho = self.classification_data_to_ethogram()
             self.populate_predicted_etho(etho)
             self.populate_chkpt_dropdown()
-            self.save_predictions()
+            self.save_classification_data(None)
 
         elif self.model_dropdown.value == "Detection":
             self.predict_object_detection()
@@ -2670,7 +2694,9 @@ class PoserWidget(Container):
                 T - (new_end - new_start)
             ) + new_end  # this adds any difference if not exactly T in length
 
-            # self.behaviours[n] = (new_start, new_end)
+            if T_method == "window":
+                # if window method then refine the behaviours to the new start and end so that when analyse is called points and video align correctly
+                self.behaviours[n] = (new_start, new_end)
 
             bhv = points[:, new_start:new_end]
             ci = cis[:, new_start:new_end]
@@ -2716,22 +2742,25 @@ class PoserWidget(Container):
             log_folder, self.chkpt_dropdown.value
         )  # spinbox
 
-        model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
-            in_channels=self.numChannels,
-            num_workers=self.num_workers,
-            num_class=self.numlabels,
-            graph_cfg=graph_cfg,
-            data_cfg=data_cfg,
-            hparams=hparams,
-        ).load_from_checkpoint(
-            self.chkpt,
-            in_channels=self.numChannels,
-            num_workers=self.num_workers,
-            num_class=self.numlabels,
-            graph_cfg=graph_cfg,
-            data_cfg=data_cfg,
-            hparams=hparams,
-        )
+        try: # old pytorch lightning
+            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
+                in_channels=self.numChannels,
+                num_workers=self.num_workers,
+                num_class=self.numlabels,
+                graph_cfg=graph_cfg,
+                data_cfg=data_cfg,
+                hparams=hparams,
+            ).load_from_checkpoint(
+                self.chkpt,
+                in_channels=self.numChannels,
+                num_workers=self.num_workers,
+                num_class=self.numlabels,
+                graph_cfg=graph_cfg,
+                data_cfg=data_cfg,
+                hparams=hparams,
+            )
+        except:
+            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, data_cfg=data_cfg)
 
         # create trainer object,
         ## optimise trainer to just predict as currently its preparing data thinking its training
@@ -2771,9 +2800,9 @@ class PoserWidget(Container):
             for nb, (b, b_data) in enumerate(
                 self.classification_data[self.ind].items()
             ):
-                b["classification"] = self.b_labels[nb]
+                b_data["classification"] = self.b_labels[nb]
         else:
-            # invoke behaviour changed loop
+            # invoke behaviour changed loop - very slow
             for b in range(len(self.behaviours)):
                 self.behaviour_changed(b + 1)
             self.behaviour_changed(0)
@@ -3099,7 +3128,7 @@ class PoserWidget(Container):
             checkpoint_callback = ModelCheckpoint(
                 monitor=self.early_stop_metric,
                 dirpath=new_version_folder,
-                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}--{auprc:.2f}",
+                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}--{auprc:.2f}--{elapsed_time:.2f}",
                 save_top_k=1,  # save the best model
                 mode=self.early_stop_mode,
                 every_n_epochs=1,
@@ -3195,7 +3224,7 @@ class PoserWidget(Container):
 
         try:
             self.augmentation = self.config_data["data_cfg"]["augmentation"]
-            if self.augmentation == "None":
+            if (self.augmentation == "None") | (self.augmentation == False):
                 print("No augmentation")
                 self.augment = False
                 #self.ideal_sample_no = None
@@ -3289,6 +3318,20 @@ class PoserWidget(Container):
         except:
             self.freeze = False
 
+        try:
+            self.binary = self.config_data["train_cfg"]["binary"]
+            self.binary_class = self.config_data["train_cfg"]["binary_class"]
+        except:
+            self.binary = False
+            self.binary_class = None
+
+        try:
+            self.preprocess_frame = self.config_data["train_cfg"]["preprocess_frame"]
+            self.window_size = self.config_data["train_cfg"]["window_size"]
+        except:
+            self.preprocess_frame = False
+            self.window_size = None
+
 
         # assign model parameters
         PATH_DATASETS = self.decoder_data_dir
@@ -3308,7 +3351,9 @@ class PoserWidget(Container):
             "T2": self.T2,
             "head" : self.head_node,
             "softmax": self.softmax,
-            "weighted_random_sampler": self.weighted_random_sampler
+            "weighted_random_sampler": self.weighted_random_sampler,
+            "binary": self.binary,
+            "binary_class": self.binary_class,
         }
 
         graph_cfg = {"layout": self.graph_layout, "center": self.center_node}
@@ -3424,7 +3469,7 @@ class PoserWidget(Container):
             checkpoint_callback = ModelCheckpoint(
                 monitor=self.early_stop_metric,
                 dirpath=new_version_folder,
-                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}--{auprc:.2f}",
+                filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}--{auprc:.2f}--{elapsed_time:.2f}",
                 save_top_k=1,  # save the best model
                 mode=self.early_stop_mode,
                 every_n_epochs=1,
@@ -3537,6 +3582,7 @@ class PoserWidget(Container):
             devices=self.devices,
             accelerator=self.accelerator,
             max_epochs=100,
+            #profiler="advanced"
             #callbacks=[early_stop],
             #auto_lr_find=True,
         )  # , stochastic_weight_avg=True) - this is a callback in latest lightning-, swa -swa messes up auto lr
@@ -3555,6 +3601,7 @@ class PoserWidget(Container):
 
         print("Benchmarking model performance")
         self.benchmark_model_performance(model)
+        #self.benchmark_model_flops(model)
 
     def read_classification_h5(self, file):
         classification_data = {}
@@ -3808,6 +3855,21 @@ class PoserWidget(Container):
             ),
             durations,
         )
+
+    def benchmark_model_flops(self, model):
+        from lightning.fabric.utilities.throughput import measure_flops
+        model.batch_size = 16
+        model.to(torch.device("meta"))
+        x = next(iter(model.dataloader))[0].to(torch.device("meta"))
+
+        model_fwd = lambda: model(x)
+        fwd_flops = measure_flops(model, model_fwd)
+
+       
+        print(f"FLOPS for forward pass: {fwd_flops}")
+        
+
+
 
     def save_ethogram(self):
         # instead of saving the bout info in classification data - save the ethogram instead

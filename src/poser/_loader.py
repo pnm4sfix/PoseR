@@ -58,7 +58,11 @@ class ZebData(torch.utils.data.Dataset):
         center_node=0,
         head_node = 0, 
         T = None,
-        lazy = True
+        lazy = True,
+        binary = False,
+        binary_class = None,
+        preprocess_frame = False,
+        window_size = None
     ):
         self.ideal_sample_no = ideal_sample_no
    
@@ -66,8 +70,10 @@ class ZebData(torch.utils.data.Dataset):
         self.target_transform = target_transform
         self.center_node = center_node
         self.head_node = head_node
-        self.T= T
+        self.T= T # final padded T
         self.augment = augment
+        self.preprocess_frame = preprocess_frame
+        self.window_size = window_size
         print(f"Augment is {self.augment}")
 
         if data_file is not None:
@@ -89,8 +95,35 @@ class ZebData(torch.utils.data.Dataset):
             if self.data.shape[0] == 1:
                 self.data = self.data.reshape(*self.data.shape[1:])
 
+            # if data is 4D array C, T, V, M
+            if self.data.ndim == 4:
+                self.C, self.T0, self.V, self.M = self.data.shape
+                # print statement about number of channels, frames , nodes and individuals
+                print(f"Data shape is {self.data.shape} C is {self.C}, T is {self.T0}, V is {self.V}, M is {self.M}")
+
+                
+            # elif data is 5D array N, C, T, V, M
+            elif self.data.ndim == 5:
+                self.N, self.C, self.T0, self.V, self.M = self.data.shape
+                print(f"Data shape is {self.data.shape} N is {self.N} C is {self.C}, T is {self.T0}, V is {self.V}, M is {self.M}")
+
+
+
             if regress:
                 self.labels = np.load(label_file).astype("float64")
+
+            elif binary:
+                self.labels = np.load(label_file).astype("float64")
+                if self.labels.shape[0] == 1:
+                    self.labels = self.labels.reshape(*self.labels.shape[1:])
+
+                if binary_class is not None:
+                    label_filter = np.isin(self.labels, binary_class)
+                    self.labels[~label_filter] = 0
+                    self.labels[label_filter] = 1
+                    print(f"Binary class is {binary_class}")
+                    print(f"Binary labels are {np.unique(self.labels)}")
+
             else:
                 # catch incorrectly loaded shape
                 self.labels = np.load(label_file).astype("int64")
@@ -172,10 +205,18 @@ class ZebData(torch.utils.data.Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        behaviour = self.data[idx].copy()
-        label = self.labels[idx]
+        # if data is from raw CTVM it needs to be windowed appropriately first
+        if self.preprocess_frame:
+            behaviour = self.preprocess_frames(idx, self.window_size) # assume data is CTVM shape
+            label = self.labels[idx]
+        else:
+            behaviour = self.data[idx].copy()
+            label = self.labels[idx]
+        
 
         if self.transform is not None:
+            if "flipy" in self.transform:
+                behaviour = self.flipy(behaviour)
 
             if "center" in self.transform:
                 behaviour = self.center_all(behaviour, self.center_node)
@@ -183,8 +224,11 @@ class ZebData(torch.utils.data.Dataset):
             if (self.transform == "align") | ("align" in self.transform):
                 behaviour = self.align(behaviour)
 
-            if self.transform == "pad":
+            if "pad" in self.transform:
                 behaviour = self.pad(behaviour, self.T)
+
+            if "pad_flip" in self.transform:
+                behaviour = self.pad_flip(behaviour, self.T)
 
             if self.augment == True:
                 behaviour = self.random_augmentation(behaviour)
@@ -217,6 +261,46 @@ class ZebData(torch.utils.data.Dataset):
         else:
             label = torch.tensor(label)
         return behaviour, label
+
+    
+
+    def preprocess_frames(self, frame, window_size):
+        # assume data is CTVM if 4D
+        window_half_width = int(window_size // 2)
+        
+        t0 = frame-window_half_width
+        t1 = frame+window_half_width
+
+        # define boundary conditions
+        if t0 < 0:
+            left_pad = np.zeros((self.C, np.abs(t0), self.V, self.M))
+            t0 = 0
+        else:
+            left_pad = None
+        if t1 > self.T0:
+            right_pad = np.zeros((self.C, t1-self.T0, self.V, self.M))
+            
+            t1 = self.T0
+        else:
+            right_pad = None
+
+        bhv = self.data[:, t0:t1].copy() # C, T, V, M
+           
+
+        if left_pad is not None:
+            bhv = np.concatenate([left_pad, bhv], axis=1)
+                
+        if right_pad is not None:
+            bhv = np.concatenate([bhv, right_pad], axis=1)
+
+        return bhv
+                
+
+    def flipy(self, bhv):
+        # Negate only the y-coordinates (assuming y is at index 1)
+        bhv[1, :, :, :] *= -1
+        return bhv
+
 
     def align(self, bhv_rs):
         # assumes bout already centered - add check if nose node is <
@@ -306,6 +390,34 @@ class ZebData(torch.utils.data.Dataset):
             bhv_pad = pose[:, :new_T]
 
         return bhv_pad
+
+    def pad_flip(self, bout, new_T):
+        pose = bout
+        padding = (
+            new_T - pose.shape[1]
+        )  # difference between standard T =50 and the length of actual sequence
+        ratio = padding / pose.shape[1]
+        if ratio > 1:
+            bhv_pad = np.concatenate((pose, np.flip(pose, axis=1)), axis=1) # reverse on time dimension
+
+            for r in range(int(ratio) - 1):
+                # if even no flip, if not reverse - creates a sort of back and forth motion that will be periodic
+                if r % 2 == 0:
+                    bhv_pad = np.concatenate((bhv_pad, pose), axis=1)
+                else:
+                    bhv_pad = np.concatenate((bhv_pad, np.flip(pose, axis=1)), axis=1)
+
+            diff = new_T - bhv_pad.shape[1]
+            bhv_pad = np.concatenate((bhv_pad, pose[:, :diff]), axis=1)
+
+        elif (ratio <= 1) & (ratio > 0):
+            diff = new_T - pose.shape[1]
+            bhv_pad = np.concatenate((pose, pose[:, :diff]), axis=1)
+        elif ratio <= 0:
+            bhv_pad = pose[:, :new_T]
+
+        return bhv_pad
+
 
     # find angle from [0, 1]
     def angle_from_norm(self, coord):
