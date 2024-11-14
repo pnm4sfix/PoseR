@@ -449,16 +449,56 @@ def classification_data_to_bouts(
     return all_ind_bouts, all_labels
 
 
+def convert_dlc_to_ctvm(dlc_file):
+    if dlc_file.endswith(".h5"):
+        dlc_data = pd.read_hdf(dlc_file)
+    elif dlc_file.endswith(".csv"):
+        dlc_data = pd.read_csv(dlc_file, header=[0, 1, 2], index_col=0)
+    data_t = dlc_data.transpose()
+    data_t["individuals"] = ["individual1"] * data_t.shape[0]
+    data_t = (
+        data_t.reset_index()
+        .set_index(["scorer", "individuals", "bodyparts", "coords"])
+        .reset_index()
+    )
+    ctvms = []
+    for individual in data_t.individuals.unique():
+        indv = data_t[data_t.individuals == individual].copy()
+    
+        bodyparts = data_t.bodyparts.unique()
+
+        x= data_t[data_t.coords == "x"].loc[:, 0:].to_numpy()
+        x = x.reshape(1, len(bodyparts), -1, 1)    
+
+        y= data_t[data_t.coords == "y"].loc[:, 0:].to_numpy()
+        y = y.reshape(1, len(bodyparts), -1, 1)  
+
+        ci = data_t[data_t.coords == "likelihood"].loc[:, 0:].to_numpy()
+        ci = ci.reshape(1, len(bodyparts), -1, 1)
+
+        CVTM = np.concatenate([x, y, ci], axis=0) # CVTM
+        CTVM = np.swapaxes(CVTM, 1, 2) # CTVM
+        ctvms.append(CTVM)
+
+    # concatenate along M axis
+    CTVM = np.concatenate(ctvms, axis = -1)
+
+    return CTVM
+
+# function for converting napari points layer to CTVM
+# function for converting yolo data to CTVM
+
+
 # Define animation class for viewing poses
 
 
 class Animation:
     def __init__(
-        self, dataset, skeleton, label_dict=None, shuffle=True, normalise=False
+        self, dataset, skeleton, label_dict=None, shuffle=True, normalise=False, batch_size = 8
     ):
         super().__init__()
         self.dataloader = torch.utils.data.DataLoader(
-            dataset, batch_size=8, shuffle=shuffle
+            dataset, batch_size=batch_size, shuffle=shuffle
         )
         self.dataset = dataset
         self.skeleton = skeleton

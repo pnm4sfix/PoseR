@@ -1,3 +1,22 @@
+r"""Copyright [@misc{mmskeleton2019,
+  author =       {Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin},
+  title =        {MMSkeleton},
+  howpublished = {\url{https://github.com/open-mmlab/mmskeleton}},
+  year =         {2019}
+}]
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ *
+ * Modifications made by [Pierce Mullen] on [11-11-24]"""
 import os
 
 import numpy as np
@@ -6,8 +25,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 from pytorch_lightning import LightningModule
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from torchmetrics.functional.classification.accuracy import accuracy
+from torcheval.metrics.functional import multiclass_auprc
+from torcheval.metrics import MulticlassAUPRC   
+from torcheval.metrics.functional import binary_accuracy
+from torcheval.metrics import BinaryAUPRC
+from torcheval.metrics import MulticlassAccuracy, BinaryAccuracy
+import time
 
 # from torchmetrics.regression import R2Score
 from torcheval.metrics.functional import r2_score
@@ -27,7 +52,7 @@ def zero(x):
 def iden(x):
     return x
 
-
+# New code from Pierce Mullen
 class ST_GCN_18(LightningModule):
     r"""Spatial temporal graph convolutional networks.
 
@@ -63,6 +88,10 @@ class ST_GCN_18(LightningModule):
     ):
         super().__init__()
         # self.hparams.update(hparams)
+        try:
+            self.save_hyperparameters()
+        except:
+            pass
         self.num_workers = num_workers
         self.data_dir = data_cfg["data_dir"]
         self.augment = data_cfg["augment"]
@@ -99,11 +128,50 @@ class ST_GCN_18(LightningModule):
         except:
             self.calc_class_weights = False
 
+        try:
+            self.center_node = graph_cfg["center_node"]
+        except:
+            self.center_node = 0
+
+        try:
+            self.T = data_cfg["T2"]
+        except:
+            self.T = None
+
+        try:
+            self.head_node = data_cfg["head"]
+        except:
+            self.head_node = 0
+
+        try:
+            self.weighted_random_sampler = data_cfg["weighted_random_sampler"]
+        except:
+            self.weighted_random_sampler = None
+
+        try:
+            self.binary = data_cfg["binary"]
+            self.binary_class = data_cfg["binary_class"]
+            print(f"Binary is {self.binary}")
+        except:
+            self.binary = False
+            self.binary_class = None
+        try:
+           self.preprocess_frame = data_cfg["preprocess_frame"]
+           self.window_size = data_cfg["window_size"]
+        except:
+            self.preprocess_frame = False
+            self.window_size = None
+
+
         self.learning_rate = hparams.learning_rate
         self.batch_size = hparams.batch_size
         self.dropout = hparams.dropout
-
-        self.num_classes = num_class
+        
+        if self.binary:
+            self.num_classes = 1
+        else:
+            self.num_classes = num_class
+        
         self.save_hyperparameters("hparams")
 
         # load graph
@@ -146,7 +214,7 @@ class ST_GCN_18(LightningModule):
             self.edge_importance = [1] * len(self.st_gcn_networks)
 
         # fcn for prediction
-        self.fcn = nn.Conv2d(256, num_class, kernel_size=1)
+        self.fcn = nn.Conv2d(256, self.num_classes, kernel_size=1)
         if self.soft:
             self.softmax = nn.Softmax(dim=1)
 
@@ -171,6 +239,8 @@ class ST_GCN_18(LightningModule):
         # prediction
         x = self.fcn(x)
         x = x.view(x.size(0), -1)
+        #if self.soft:
+        #    x = self.softmax(x)
         # x = self.softmax(x) # don't need as we use cross entropy loss
         return x
 
@@ -195,6 +265,17 @@ class ST_GCN_18(LightningModule):
             preds = output
             # r2score = R2Score() #R2Score(num_outputs=self.num_classes, multioutput='raw_values').to(self.device)
             acc = r2_score(preds, y)
+
+        elif self.binary:
+            if self.calc_class_weights:
+                no_label_weight = self.class_weights[0]
+                label_weight = self.class_weights[1]
+                weights = torch.tensor([no_label_weight if t == 0 else label_weight for t in y], dtype=torch.float32).to(self.device)
+            else:
+                weights = None
+            loss = F.binary_cross_entropy_with_logits(output.flatten(), y, weight = weights)
+            preds = torch.sigmoid(output.flatten())
+            acc = binary_accuracy(preds, y)
         else:
             loss = F.cross_entropy(output, y, weight=self.class_weights)
             preds = torch.argmax(output, dim=1)
@@ -209,6 +290,9 @@ class ST_GCN_18(LightningModule):
             logger=True,
             on_epoch=True,
         )
+        # Calculate elapsed time
+        elapsed_time = time.time() - self.start_time
+        self.log("elapsed_time", elapsed_time, prog_bar=True, logger=True, on_epoch=True)
         self.log("train_acc", acc, prog_bar=True, logger=True, on_epoch=True)
         return loss
 
@@ -220,12 +304,22 @@ class ST_GCN_18(LightningModule):
             preds = output
             # r2score = R2Score().to(self.device)
             acc = r2_score(preds, y)
+
+        elif self.binary:
+            loss = F.binary_cross_entropy_with_logits(output.flatten(), y)
+            preds = torch.sigmoid(output.flatten())
+            #acc = binary_accuracy(preds, y)
+            self.auprc.update(output.flatten(), y)
+            self.acc.update(preds, y)
         else:
             loss = F.cross_entropy(output, y)
             preds = torch.argmax(output, dim=1)
-            acc = accuracy(
-                preds, y, task="multiclass", num_classes=self.num_classes
-            )
+            #acc = accuracy(
+            #    preds, y, task="multiclass", num_classes=self.num_classes
+            #)
+            self.auprc.update(output, y)
+            self.acc.update(preds, y)
+            #auprc = multiclass_auprc(output, y, num_classes=self.num_classes)
 
         self.log(
             "val_loss",
@@ -235,7 +329,17 @@ class ST_GCN_18(LightningModule):
             logger=True,
             on_epoch=True,
         )
-        self.log("val_acc", acc, prog_bar=True, logger=True, on_epoch=True)
+
+        #self.log(
+        #    "auprc",
+        #    auprc,
+        #    prog_bar=True,
+        #    sync_dist=True,
+        #    logger=True,
+        #    on_epoch=True,
+        #)
+
+        #self.log("val_acc", acc, prog_bar=True, logger=True, on_epoch=True)
 
     def test_step(self, batch, batch_idx):
         x, y = batch
@@ -245,12 +349,22 @@ class ST_GCN_18(LightningModule):
             preds = output
             # r2score = R2Score().to(self.device)
             acc = r2_score(preds, y)
+
+        elif self.binary:
+            
+            loss = F.binary_cross_entropy_with_logits(output.flatten(), y)
+            preds = torch.sigmoid(output.flatten())
+            #acc = binary_accuracy(preds, y)
+            self.auprc.update(output.flatten(), y)
+            self.acc.update(preds, y)
         else:
             loss = F.cross_entropy(output, y)
             preds = torch.argmax(output, dim=1)
-            acc = accuracy(
-                preds, y, task="multiclass", num_classes=self.num_classes
-            )
+            self.auprc.update(output, y)
+            self.acc.update(preds, y)
+            #acc = accuracy(
+            #    preds, y, task="multiclass", num_classes=self.num_classes
+            #)
             # acc3 = accuracy(preds, y, task="multiclass", num_classes=self.num_classes, top_k = 3)
 
         self.log(
@@ -261,7 +375,7 @@ class ST_GCN_18(LightningModule):
             logger=True,
             on_epoch=True,
         )
-        self.log("val_acc", acc, prog_bar=True, logger=True, on_epoch=True)
+        #self.log("val_acc", acc, prog_bar=True, logger=True, on_epoch=True)
         # self.log("val_acc_top3", acc3, prog_bar = True)
 
     def on_train_start(self):
@@ -274,6 +388,76 @@ class ST_GCN_18(LightningModule):
                 "hp/batch_size": self.batch_size,
             },
         )
+        self.start_time = time.time()
+
+    def on_train_end(self):
+        self.end_time = time.time()
+        self.logger.log_metrics(
+            {"training_time": self.end_time - self.start_time})
+        print(f"Total training time: {self.end_time - self.start_time:.4f} seconds")
+        #self.log("time_elapsed", self.end_time - self.start_time, logger = True, on_epoch = False, sync_dist = True)
+
+    def on_validation_start(self):
+        self.val_start_time = time.time()
+
+    def on_validation_end(self):
+        self.val_end_time = time.time()
+        self.logger.log_metrics(
+            {"validation_time": self.val_end_time - self.val_start_time})
+        #self.log("time_elapsed", self.end_time - self.start_time, logger = True, on_epoch = False, sync_dist = True)
+
+    def on_test_start(self):
+        self.start_time = time.time()
+
+    def on_test_end(self):
+        self.end_time = time.time()
+        self.logger.log_metrics(
+            {"test_time": self.end_time - self.start_time})
+        #self.log("time_elapsed", self.end_time - self.start_time, logger = True, on_epoch = False, sync_dist = True)
+
+    def on_predict_start(self):
+        self.start_time = time.time()
+
+    def on_predict_end(self):
+        self.end_time = time.time()
+        self.logger.log_metrics(
+            {"prediction_time": self.end_time - self.start_time})
+        print(f"Total prediction time: {self.end_time - self.start_time:.4f} seconds")
+        #self.log("time_elapsed", self.end_time - self.start_time, logger = True, on_epoch = False, sync_dist = True)
+        
+
+    def on_validation_epoch_start(self):
+        # Create the metric at the start of each validation epoch
+        if self.binary:
+            self.auprc = BinaryAUPRC()  # For binary
+            self.acc = BinaryAccuracy()
+        else:
+            self.auprc = MulticlassAUPRC(num_classes = self.num_classes)  # For multiclass
+            self.acc = MulticlassAccuracy(num_classes = self.num_classes)
+
+    def on_validation_epoch_end(self):
+        # Log the metric value at the end of the validation epoch
+        self.log("auprc", self.auprc.compute(), prog_bar=True, logger=True, on_epoch=True, sync_dist = True)
+        self.log("val_acc", self.acc.compute(), prog_bar=True, logger=True, on_epoch=True, sync_dist = True)
+
+    def on_test_epoch_start(self):
+        # Create the metric at the start of each test epoch
+        if self.binary:
+            self.auprc = BinaryAUPRC()
+            self.acc = BinaryAccuracy()
+        else:
+            self.auprc = MulticlassAUPRC(num_classes = self.num_classes)
+            self.acc = MulticlassAccuracy(num_classes = self.num_classes)
+
+    def on_test_epoch_end(self):
+        # Log the metric value at the end of the test epoch
+        self.log("auprc", self.auprc.compute(), prog_bar=True, logger=True, on_epoch=True, sync_dist = True)
+        self.log("test_acc", self.acc.compute(), prog_bar=True, logger=True, on_epoch=True, sync_dist = True)
+
+    
+
+
+
 
     # def prepare_data(self):
     #    # add check if data exists
@@ -299,6 +483,31 @@ class ST_GCN_18(LightningModule):
         print(f"STAGE IS {stage}")
         if stage == "predict":
             pass
+        elif stage == "validate":
+            try: 
+                self.val_data = ZebData(
+                os.path.join(self.data_dir, "Zebval.npy"),
+                os.path.join(self.data_dir, "Zebval_labels.npy"),
+                target_transform=target_transform,
+                #augment=self.augment,
+                ideal_sample_no=self.ideal_sample_no,
+                shift=self.shift,
+                transform=self.transform,
+                labels_to_ignore=self.labels_to_ignore,
+                label_dict=self.label_dict,
+                regress=self.regress,
+                T = self.T,
+                center_node=self.center_node,
+                head_node = self.head_node,
+                binary = self.binary,
+                binary_class = self.binary_class,
+                preprocess_frame=self.preprocess_frame,
+                window_size=self.window_size
+                )
+                self.pose_val = self.val_data
+                print("validating")
+            except:
+                self.val_data = None
         else:
             target_transform = None
             # target_transform = Lambda(
@@ -317,7 +526,37 @@ class ST_GCN_18(LightningModule):
                 labels_to_ignore=self.labels_to_ignore,
                 label_dict=self.label_dict,
                 regress=self.regress,
+                T = self.T,
+                center_node=self.center_node,
+                head_node=self.head_node,
+                binary = self.binary,
+                binary_class = self.binary_class,
+                preprocess_frame=self.preprocess_frame,
+                window_size=self.window_size
             )
+
+            try: 
+                self.val_data = ZebData(
+                os.path.join(self.data_dir, "Zebval.npy"),
+                os.path.join(self.data_dir, "Zebval_labels.npy"),
+                target_transform=target_transform,
+                #augment=self.augment,
+                ideal_sample_no=self.ideal_sample_no,
+                shift=self.shift,
+                transform=self.transform,
+                labels_to_ignore=self.labels_to_ignore,
+                label_dict=self.label_dict,
+                regress=self.regress,
+                T = self.T,
+                center_node=self.center_node,
+                head_node = self.head_node,
+                binary = self.binary,
+                binary_class = self.binary_class,
+                preprocess_frame=self.preprocess_frame,
+                window_size=self.window_size
+                )
+            except:
+                self.val_data = None
 
             self.test_data = ZebData(
                 os.path.join(self.data_dir, "Zebtest.npy"),
@@ -327,85 +566,213 @@ class ST_GCN_18(LightningModule):
                 labels_to_ignore=self.labels_to_ignore,
                 label_dict=self.label_dict,
                 regress=self.regress,
+                T = self.T,
+                center_node=self.center_node,
+                head_node=self.head_node,
+                binary = self.binary,
+                binary_class = self.binary_class,
+                preprocess_frame=self.preprocess_frame,
+                window_size=self.window_size
             )
+
+
 
             if stage == "fit" or stage is None:
                 targets = self.train_data.labels
-                if self.regress:
-                    train_idx, val_idx = train_test_split(
-                        np.arange(len(targets)),
-                        test_size=0.1765,
-                        shuffle=True,
-                        random_state=42,
-                    )
+
+                if self.val_data is None:
+                    if self.regress:
+                        train_idx, val_idx = train_test_split(
+                            np.arange(len(targets)),
+                            test_size=0.1765,
+                            shuffle=True,
+                            random_state=42,
+                        )
+                    else:
+                        train_idx, val_idx = train_test_split(
+                            np.arange(len(targets)),
+                            test_size=0.1765,
+                            shuffle=True,
+                            stratify=targets,
+                            random_state=42,
+                        )
+                        
+                    # train_length = int(len(self.train_data.labels) *0.8) # add augmentation step here
+                    # val_length = len(self.train_data.labels)-train_length #int(len(self.train_data.labels) * 0.2)
+
+                    # Split data into train and test
+                    self.pose_train, self.pose_val = Subset(
+                        self.train_data, train_idx
+                    ), Subset(self.train_data, val_idx)
+
+                    """if self.ideal_sample_no is not None:
+                        print("Dynamically Augmenting DataSet")
+                        # create two new blank ZebData
+                        self.pose_train_data = ZebData(
+                            ideal_sample_no=self.ideal_sample_no
+                        )  # this will be augmented
+                        self.pose_val_data = ZebData()
+
+                        # assign data and labels to these new ones using train and val indices
+                        self.pose_train_data.data = self.pose_train.dataset.data[
+                            self.pose_train.indices
+                        ]
+                        self.pose_train_data.labels = (
+                            self.pose_train.dataset.labels[self.pose_train.indices]
+                        )
+
+                        self.pose_val_data.data = self.pose_val.dataset.data[
+                            self.pose_val.indices
+                        ]
+                        self.pose_val_data.labels = self.pose_val.dataset.labels[
+                            self.pose_val.indices
+                        ]
+
+                        # dynamically augment
+                        self.pose_train_data.dynamic_augmentation()
+
+                        # reassign variables
+                        self.pose_train = self.pose_train_data
+                        self.pose_val = self.pose_val_data"""
+
+                    if self.calc_class_weights:
+                        self.class_weights = self.train_data.get_class_weights()
+                        print(f"Class weights are {self.class_weights}")
+
+                        # put self.class_weights on cuda
+                        self.class_weights = self.class_weights.cuda()
+
+                    else:
+                        self.class_weights = None
                 else:
-                    train_idx, val_idx = train_test_split(
-                        np.arange(len(targets)),
-                        test_size=0.1765,
-                        shuffle=True,
-                        stratify=targets,
-                        random_state=42,
-                    )
+                    """if self.ideal_sample_no is not None:
+                        self.pose_train_data = ZebData(
+                            ideal_sample_no=self.ideal_sample_no
+                        ) 
 
-                # train_length = int(len(self.train_data.labels) *0.8) # add augmentation step here
-                # val_length = len(self.train_data.labels)-train_length #int(len(self.train_data.labels) * 0.2)
+                        # assign data and labels to these new ones using train and val indices
+                        self.pose_train_data.data = self.train_data.data
+                        self.pose_train_data.labels = self.train_data.labels
 
-                # Split data into train and test
-                self.pose_train, self.pose_val = Subset(
-                    self.train_data, train_idx
-                ), Subset(self.train_data, val_idx)
+                        # dynamically augment
+                        self.pose_train_data.dynamic_augmentation()
 
-                if self.ideal_sample_no is not None:
-                    print("Dynamically Augmenting DataSet")
-                    # create two new blank ZebData
-                    self.pose_train_data = ZebData(
-                        ideal_sample_no=self.ideal_sample_no
-                    )  # this will be augmented
-                    self.pose_val_data = ZebData()
+                        # reassign variables
+                        self.pose_train = self.pose_train_data"""
 
-                    # assign data and labels to these new ones using train and val indices
-                    self.pose_train_data.data = self.pose_train.dataset.data[
-                        self.pose_train.indices
-                    ]
-                    self.pose_train_data.labels = (
-                        self.pose_train.dataset.labels[self.pose_train.indices]
-                    )
 
-                    self.pose_val_data.data = self.pose_val.dataset.data[
-                        self.pose_val.indices
-                    ]
-                    self.pose_val_data.labels = self.pose_val.dataset.labels[
-                        self.pose_val.indices
-                    ]
+                    if self.calc_class_weights:
+                        self.class_weights = self.train_data.get_class_weights()
+                        print(f"Class weights are {self.class_weights}")
 
-                    # dynamically augment
-                    self.pose_train_data.dynamic_augmentation()
+                        # put self.class_weights on cuda
+                        self.class_weights = self.class_weights.cuda()
 
-                    # reassign variables
-                    self.pose_train = self.pose_train_data
-                    self.pose_val = self.pose_val_data
+                    else:
+                        self.class_weights = None
 
-                if self.calc_class_weights:
-                    self.class_weights = self.train_data.get_class_weights()
-                    print(f"Class weights are {self.class_weights}")
+                    # limit class sizes
+                    """if self.ideal_sample_no is not None:
+                        # get label indexes for each label and subset those indices to get ideal sample no
+                        # get unique labels
+                        if self.ideal_sample_no == -1:
+                            ideal_sample_no = np.int(np.median(
+                                np.unique(self.train_data.labels, return_counts=True)[1]
+                            ))
+                        print("Limiting train class size to {}".format(ideal_sample_no))
+                        unique_labels = np.unique(self.train_data.labels)
+                        # size limited indexes
+                        label_idxs = []
+                        # loop through labels
+                        for v in unique_labels:
+                            label_idx = np.where(self.train_data.labels == v)[0]
+                            label_count = label_idx.shape[0]
+                            if label_count > ideal_sample_no:
+                                # subset to ideal sample no
+                                subset = np.random.choice(
+                                    label_idx, ideal_sample_no, replace=False
+                                )
+                                label_idxs.append(subset)
+                            else:
+                                label_idxs.append(label_idx)
 
-                    # put self.class_weights on cuda
-                    self.class_weights = self.class_weights.cuda()
+                        label_idxs = np.concatenate(label_idxs)
+                
+                        self.train_data = Subset(self.train_data, label_idxs)
 
-                else:
-                    self.class_weights = None
+                        if self.ideal_sample_no == -1:
+                            ideal_sample_no = np.int(np.median(
+                                np.unique(self.val_data.labels, return_counts=True)[1]
+                            ))
+                        print("Limiting val class size to {}".format(ideal_sample_no))
+                        unique_labels = np.unique(self.val_data.labels)
+                        # size limited indexes
+                        label_idxs = []
+                        # loop through labels
+                        for v in unique_labels:
+                            label_idx = np.where(self.val_data.labels == v)[0]
+                            label_count = label_idx.shape[0]
+                            if label_count > ideal_sample_no:
+                                # subset to ideal sample no
+                                subset = np.random.choice(
+                                    label_idx, ideal_sample_no, replace=False
+                                )
+                                label_idxs.append(subset)
+                            else:
+                                label_idxs.append(label_idx)
+
+                        label_idxs = np.concatenate(label_idxs)
+                
+                        self.val_data = Subset(self.val_data, label_idxs)"""
+
+
+
+
+                    self.pose_train = self.train_data
+                    self.pose_val = self.val_data
+
+
+
+                    
 
             if stage == "test" or stage is None:
                 self.pose_test = self.test_data
 
     def train_dataloader(self):
+        if self.weighted_random_sampler:
+            if isinstance(self.pose_train, Subset):
+                class_weights = self.pose_train.dataset.get_class_weights()
+                class_weight_map = {k:v for k,v in enumerate(class_weights)}
+                sample_weights = [class_weights[self.pose_train.dataset.labels[idx].item()] for idx in self.pose_train.indices]
+
+            else:
+                sample_weights = self.pose_train.get_sample_weights()
+            if self.ideal_sample_no is not None:
+                num_samples = self.ideal_sample_no
+            else:
+                num_samples = len(self.pose_train)
+            print("Weighted Random Sampler of size {}".format(num_samples))
+            sampler = WeightedRandomSampler(
+                weights=sample_weights,
+                num_samples=num_samples,
+                replacement=True,
+            )
+            print("Using Weighted Random Sampler")
+            shuffle = False
+            
+        else:
+            sampler = None
+            shuffle = True
+            print("Not using Weighted Random Sampler")
+
         return DataLoader(
             self.pose_train,
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             pin_memory=True,
-            shuffle=True,
-        )
+            shuffle=shuffle,
+            sampler=sampler)
+    
 
     def val_dataloader(self):
         return DataLoader(
@@ -451,7 +818,7 @@ class ST_GCN_18(LightningModule):
         # print(batch[0].shape)
         return self(batch[0])
 
-
+### Original code from Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin (2019)
 class st_gcn_block(nn.Module):
     r"""Applies a spatial temporal graph convolution over an input graph sequence.
 
