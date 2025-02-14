@@ -443,10 +443,10 @@ class PoserWidget(Container):
                 self.ckpt_files = []
 
         elif event == "Detection":
-            self.ckpt_files = []
+            self.ckpt_files = ["yolo11n.pt", "yolo11s.pt", "yolo11m.pt", "yolo11l.pt", "yolo11x.pt",  "fly3.pt", "mouse7.pt", "mouse13.pt", "zeb.pt"]
 
         elif event == "PoseEstimation":
-            self.ckpt_files = []
+            self.ckpt_files = ["yolo11n-pose.pt", "yolo11s-pose.pt", "yolo11m-pose.pt", "yolo11l-pose.pt", "yolo11x-pose.pt", "fly3.pt", "mouse7.pt", "mouse13.pt", "zeb.pt"]
 
         self.chkpt_dropdown.choices = self.ckpt_files
 
@@ -2193,16 +2193,26 @@ class PoserWidget(Container):
     def predict_object_detection(self):
         self.initialise_params()
 
-        if self.detection_backbone == "YOLOv5":
-            self.model = torch.hub.load(
-                "ultralytics/yolov5", "yolov5s", pretrained=True
-            )
+        #if self.detection_backbone == "YOLOv5":
+        #    self.model = torch.hub.load(
+        #        "ultralytics/yolov5", "yolov5s", pretrained=True
+        #    )
 
-        elif self.detection_backbone == "YOLOv8":
-            from ultralytics import YOLO
+        #elif self.detection_backbone == "YOLOv8":
+        from ultralytics import YOLO
 
             # Load a model
-            self.model = YOLO("yolov8m.pt")  # load an official model
+        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        self.chkpt = self.chkpt_dropdown.value
+         # spinbox
+
+        # check its not a yolo pretrainied
+        if "yolo" in self.chkpt:
+            self.model = YOLO(self.chkpt)
+        # it is one of our trained yolo models that need to be downloaded first
+        else:
+            url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/" + self.chkpt
+            self.model = YOLO(url)
 
         if self.accelerator == "gpu":
             self.device = torch.device("cuda")
@@ -2245,7 +2255,7 @@ class PoserWidget(Container):
         print(f"shape data shape is {len(shape_data)}")
         print(f"labels are {labels}")
         # loop throuh frames
-        if self.detection_backbone == "YOLOv5":
+        """if self.detection_backbone == "YOLOv5":
             for frame in range(self.im_subset.data.shape[0]):
                 # assert frame is readable - some go pro ones seem corrupted for some reason
 
@@ -2292,56 +2302,56 @@ class PoserWidget(Container):
             self.detection_layer.data = shape_data
             self.detection_layer.properties = {"label": labels, "id": ids}
             # map ids to boxes
-            self.get_individual_ids()
+            self.get_individual_ids()"""
 
-        elif self.detection_backbone == "YOLOv8":
-            h = self.im.shape[1]
-            print(h)
-            results = self.model.track(
-                source=self.video_file,
-                imgsz=h - (h % 32),
-                tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
-                stream=True,
-            )
-            for frame, result in enumerate(results):
-                names = result.names
-                boxes = result.boxes
-                for box in boxes:
-                    # if box.conf > 0.1:
-                    label = names[int(box.cls.cpu().numpy())]
+        #elif self.detection_backbone == "YOLOv8":
+        h = self.im.shape[1]
+        print(h)
+        results = self.model.track(
+            source=self.video_file,
+            imgsz=h - (h % 32),
+            #tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
+            stream=True,
+        )
+        for frame, result in enumerate(results):
+            names = result.names
+            boxes = result.boxes
+            for box in boxes:
+                # if box.conf > 0.1:
+                label = names[int(box.cls.cpu().numpy())]
 
-                    print(frame)
-                    if box.id is not None:
-                        id = int(box.id.cpu().numpy()[0])
-                        ids.append(id)
-                        labels.append(label)
-                        print(box.xyxy.cpu().numpy())
-                        (
-                            x_min,
-                            y_min,
-                            x_max,
-                            y_max,
-                        ) = box.xyxy.cpu().numpy()[0]
-                        new_shape = np.array(
-                            [
-                                [frame, y_min, x_min],
-                                [frame, y_min, x_max],
-                                [frame, y_max, x_max],
-                                [frame, y_max, x_min],
-                            ]
-                        )
+                print(frame)
+                if box.id is not None:
+                    id = int(box.id.cpu().numpy()[0])
+                    ids.append(id)
+                    labels.append(label)
+                    print(box.xyxy.cpu().numpy())
+                    (
+                        x_min,
+                        y_min,
+                        x_max,
+                        y_max,
+                    ) = box.xyxy.cpu().numpy()[0]
+                    new_shape = np.array(
+                        [
+                            [frame, y_min, x_min],
+                            [frame, y_min, x_max],
+                            [frame, y_max, x_max],
+                            [frame, y_max, x_min],
+                        ]
+                    )
 
-                        shape_data.append(new_shape)
+                    shape_data.append(new_shape)
 
-                    # shape_data = np.array(shape_data)
+                # shape_data = np.array(shape_data)
 
-            print(labels)
-            self.detection_layer.data = shape_data
+        print(labels)
+        self.detection_layer.data = shape_data
 
-            assert len(labels) == len(ids)
-            self.detection_layer.properties = {"label": labels, "id": ids}
-            new_edge_colors = [colors.colors[idx] for idx in ids]
-            self.detection_layer.edge_color = new_edge_colors
+        assert len(labels) == len(ids)
+        self.detection_layer.properties = {"label": labels, "id": ids}
+        new_edge_colors = [colors.colors[idx] for idx in ids]
+        self.detection_layer.edge_color = new_edge_colors
 
         self.populate_chkpt_dropdown()
         self.label_menu.choices = self.choices
