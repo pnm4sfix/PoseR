@@ -4,13 +4,14 @@ from napari.layers import Image
 from poser import PoserWidget
 import pandas as pd
 import numpy as np
+import requests
 
 
 def check_test_data_exists(make_napari_viewer, capsys):
     data_dir = Path(os.path.join(os.getcwd(), "data/TestData")) 
     assert data_dir.exists(), "Test data not found. Please run `make download_test_data` to download the test data."
 
-    import requests
+    
 
     url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/TestData.zip"
     output_path = "data/TestData.zip"
@@ -66,7 +67,7 @@ def test_workflow1(make_napari_viewer, capsys):
 
     # load
     my_widget.decoder_dir_changed(
-        Path(os.path.join(os.getcwd(), "data/test_data"))
+        Path(os.path.join(os.getcwd(), "data/TestData"))
     )
 
     assert len(my_widget.classification_dict) > 0
