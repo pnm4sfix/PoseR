@@ -54,9 +54,9 @@ jobs:
 
       - name: Download test data
         run: |
-          mkdir -p data
-          curl -L -o data/test_data.zip https://github.com/your-username/your-repo/releases/download/test-data-v1.0/test_data.zip
-          unzip data/test_data.zip -d data/
+            mkdir -p data  # Ensure the folder exists
+            curl -L -o data/TestData.zip https://github.com/pnm4sfix/PoseR/releases/download/v0.01b4/TestData.zip
+            unzip data/TestData.zip -d data/
 
       # this runs the platform-specific tests declared in tox.ini
       - name: Test with tox
