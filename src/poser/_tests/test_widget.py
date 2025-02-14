@@ -6,8 +6,35 @@ import pandas as pd
 import numpy as np
 
 
-def check_test_data_exists():
+def check_test_data_exists(make_napari_viewer, capsys):
     data_dir = Path(os.path.join(os.getcwd(), "data/TestData")) 
+    assert data_dir.exists(), "Test data not found. Please run `make download_test_data` to download the test data."
+
+    import requests
+
+    url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/TestData.zip"
+    output_path = "data/TestData.zip"
+
+    # Download the file
+    response = requests.get(url, stream=True)
+    response.raise_for_status()  # Raise an error for failed requests
+
+    # Save to file
+    with open(output_path, "wb") as f:
+        for chunk in response.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    print("Download complete!")
+
+    # If it's a zip file, extract it
+    import zipfile
+    import os
+
+    if output_path.endswith(".zip"):
+        with zipfile.ZipFile(output_path, "r") as zip_ref:
+            zip_ref.extractall("data/")
+        print("Extraction complete!")
+
     assert data_dir.exists(), "Test data not found. Please run `make download_test_data` to download the test data."
 
 # make_napari_viewer is a pytest fixture that returns a napari viewer object
