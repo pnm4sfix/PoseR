@@ -3362,6 +3362,40 @@ class PoserWidget(Container):
 
         return (data_cfg, graph_cfg, hparams)
 
+    def identify_edge_cases(self):
+        # initialise params
+        data_cfg, graph_cfg, hparams = self.initialise_params()
+
+        # load best checkpoint
+        log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
+        self.chkpt = os.path.join(
+            log_folder, self.chkpt_dropdown.value
+        )  
+
+        model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, data_cfg=data_cfg)
+        # create train data
+        model.setup("fit")
+        model.eval()
+        low_confidence = []
+        incorrect = []
+        data_loader = DataLoader(model.pose_train, batch_size=1, shuffle=False)
+        with torch.no_grad():
+            for n, batch in enumerate(data_loader):
+                data, target = batch
+                output = model(data)
+                pred = output.argmax(dim=1, keepdim=True)
+                #correct = pred.eq(target.view_as(pred))
+                correct = pred == target
+                for n, c in enumerate(correct):
+                    if not c:
+                        if output[n].max() < 0.5:
+                            low_confidence.append(n)
+                        else:
+                            incorrect.append(n)
+
+
+
+
     def finetune(self):
         ### Fine tune strategies - 1) Freeze and modify last layer, 2) Train on worse perfoming classes
 
@@ -3899,6 +3933,8 @@ class PoserWidget(Container):
         )
         count_df = df.behaviour.value_counts()
         count_df.to_csv(count_filename)
+
+    
 
 
 class Behaviour(tb.IsDescription):
