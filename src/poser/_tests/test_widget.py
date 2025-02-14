@@ -6,6 +6,10 @@ import pandas as pd
 import numpy as np
 
 
+def check_test_data_exists():
+    data_dir = Path(os.path.join(os.getcwd(), "data/TestData")) 
+    assert data_dir.exists(), "Test data not found. Please run `make download_test_data` to download the test data."
+
 # make_napari_viewer is a pytest fixture that returns a napari viewer object
 # capsys is a pytest fixture that captures stdout and stderr output streams
 def test_example_q_widget(make_napari_viewer, capsys):
@@ -35,7 +39,7 @@ def test_workflow1(make_napari_viewer, capsys):
 
     # load
     my_widget.decoder_dir_changed(
-        Path(os.path.join(os.getcwd(), "src/poser/_tests"))
+        Path(os.path.join(os.getcwd(), "data/test_data"))
     )
 
     assert len(my_widget.classification_dict) > 0
