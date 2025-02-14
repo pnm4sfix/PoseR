@@ -5,16 +5,20 @@ from poser import PoserWidget
 import pandas as pd
 import numpy as np
 import requests
+import zipfile
+import os
+from tqdm import tqdm
 
-
-def check_test_data_exists(make_napari_viewer, capsys):
-    data_dir = Path(os.path.join(os.getcwd(), "data/TestData")) 
-    assert data_dir.exists(), "Test data not found. Please run `make download_test_data` to download the test data."
+def check_test_data_exists():
+    #data_dir = Path(os.path.join(os.getcwd(), "data/TestData")) 
+    #assert data_dir.exists(), "Test data not found. Please run `make download_test_data` to download the test data."
 
     
 
     url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/TestData.zip"
-    output_path = "data/TestData.zip"
+    output_dir = "./data/"
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = "./data/TestData.zip"
 
     # Download the file
     response = requests.get(url, stream=True)
@@ -22,21 +26,21 @@ def check_test_data_exists(make_napari_viewer, capsys):
 
     # Save to file
     with open(output_path, "wb") as f:
-        for chunk in response.iter_content(chunk_size=8192):
+        print("Downloading test data...")
+        for chunk in tqdm(response.iter_content(chunk_size=8192)):
             f.write(chunk)
 
     print("Download complete!")
 
     # If it's a zip file, extract it
-    import zipfile
-    import os
+    
 
     if output_path.endswith(".zip"):
         with zipfile.ZipFile(output_path, "r") as zip_ref:
             zip_ref.extractall("data/")
         print("Extraction complete!")
 
-    assert data_dir.exists(), "Test data not found. Please run `make download_test_data` to download the test data."
+    assert os.path.exists(output_path), "Test data not found. Please run `make download_test_data` to download the test data."
 
 # make_napari_viewer is a pytest fixture that returns a napari viewer object
 # capsys is a pytest fixture that captures stdout and stderr output streams
@@ -47,9 +51,11 @@ def test_example_q_widget(make_napari_viewer, capsys):
     # create our widget, passing in the viewer
     my_widget = PoserWidget(viewer)
 
+    check_test_data_exists()
+
     # call our widget method
     my_widget.decoder_dir_changed(
-        Path(os.path.join(os.getcwd(), "src/poser/_tests"))
+        Path(os.path.join(os.getcwd(), "data/PoseRTestData"))
     )
 
     assert len(my_widget.classification_dict) > 0
@@ -67,7 +73,7 @@ def test_workflow1(make_napari_viewer, capsys):
 
     # load
     my_widget.decoder_dir_changed(
-        Path(os.path.join(os.getcwd(), "data/TestData"))
+        Path(os.path.join(os.getcwd(), "data/PoseRTestData"))
     )
 
     assert len(my_widget.classification_dict) > 0
@@ -75,9 +81,9 @@ def test_workflow1(make_napari_viewer, capsys):
     assert len(my_widget.ckpt_files) > 0
 
     # load dlc file
-    test_dlc_file = Path(
-        os.path.join(os.getcwd(), "src/poser/_tests/test_DLC_file.h5")
-    )
+    test_dlc_file = os.path.join(my_widget.decoder_data_dir, "test_DLC_file.h5" ) #Path(
+        #os.path.join(os.getcwd(), "/data/PoseRTestData/test_DLC_file.h5")
+    #)
     my_widget.h5_picker_changed(test_dlc_file)
 
     assert len(viewer.layers) == 0  ## this
@@ -87,9 +93,9 @@ def test_workflow1(make_napari_viewer, capsys):
     assert type(my_widget.dlc_data) == pd.DataFrame
 
     # load video
-    test_video_file = Path(
-        os.path.join(os.getcwd(), "src/poser/_tests/test_video.avi")
-    )
+    test_video_file = os.path.join(my_widget.decoder_data_dir, "test_video.avi") #Path(
+        #os.path.join(os.getcwd(), "/data/PoseRTestData/test_video.avi")
+    #)
     my_widget.vid_picker_changed(test_video_file)
 
     assert my_widget.fps == 330.0

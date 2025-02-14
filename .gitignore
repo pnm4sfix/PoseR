@@ -87,3 +87,4 @@ venv/
 *.db-shm
 *.db-wal
 .vs/PoseR/copilot-chat/a495a436/sessions/a566180f-110b-458f-929f-f65b5bf5071e
+/data
