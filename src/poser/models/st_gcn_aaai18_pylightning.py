@@ -1,5 +1,6 @@
-import os
 
+# importing plugins
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -68,14 +69,12 @@ class ST_GCN_18(LightningModule):
         self.num_classes = num_class
         self.save_hyperparameters("hparams")
 
-        # load graph
+        # load graph structure
         self.graph = Graph(**graph_cfg)
-        A = torch.tensor(
-            self.graph.A, dtype=torch.float32, requires_grad=False
-        )
+        A = torch.tensor(self.graph.A, dtype=torch.float32, requires_grad=False)
         self.register_buffer("A", A)
 
-        # build networks
+        # Building Network Code below 
         spatial_kernel_size = A.size(0)
         temporal_kernel_size = 9
         kernel_size = (temporal_kernel_size, spatial_kernel_size)

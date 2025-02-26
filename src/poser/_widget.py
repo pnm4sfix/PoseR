@@ -7,6 +7,126 @@ see: https://napari.org/stable/plugins/guides.html?#widgets
 Replace code below according to your needs.
 """
 
+
+""""
+This module defines custom napari widget for: (angus modification)
+1. drag-and-drop media loading (videos/images) into napari
+2. an interactive behavioural timeline with hover effects and confidence score
+3. jumping to specific behaviour events in a video/image sequence
+"""
+
+from qtpy.QtWidget import QWidget, QVBoxLayout, QLabel
+import napari
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Cursor
+from magicgui import magicgui
+import _loader
+
+# DRAG & DROP LOADER WIDGET 
+class DragDropWidget(QWidget):
+    def __init__(self, viewer) # refenrece to the napari viewer
+        super().__init__()
+        self.viewer = viewer
+        self.setAcceptDrops(true) # enable drag-and-drop functionality
+
+        # creating a simple UI label
+        self.layout = QVBoxLayout 
+        self.label = QLabel("Drag and Drop video/image here")
+        self.layout.addWidget(self.label)
+        self.setLayout(self.layout)
+    
+    def dragEnterEvent(self, event):
+        'accept drag events if they contain file URLs.'
+        if event.mimeData().hasUrls():
+            event.accept()
+        else:
+            event.ignore()
+        
+    def dropEvent(self, event)
+        'handle file drop and attempt to load media'
+        for url in event.mimeData().urls:
+                file_path = url.toLocalFile()
+                _loader.load_media(file_path, self.viewer)
+    
+    def load_media(self, file_path)
+        'load image or video files into napari...'
+        if file_path.endswith(('.png', '.jpg', '.jpeg', '.tiff', '.bmp', '.gif')):
+            image = imageio.imread(file_path)
+            self.viewer.add_image(image, name="Loaded Image")
+        elif file_path.endswith(('.mp4', '.avi', '.mov', '.mkv')):
+            self.label.setText(f"Video loaded: {file_path}") # placeholder for future video handling, will be revisited
+        else:
+            self.label.setText("Unsupported file type. Please reference QuickStart document.")
+
+
+
+
+def get_model_output()
+    'fetch predictions from the model (repalce wit)'
+
+
+
+# interactive behavioural timeline
+@magicgui(auto_call=True)
+def timeline_widget()
+    """"
+    this widget creates an interactive behavioural timeline... allowing 
+    users to hover over events to see details and click on events to jump 
+    to the corresponding frame
+    """
+    fig, ax = plt.subplots(figsize=(8,2)) #create a figure
+    
+    #sample behavioural data (replace real data input - will amend later of output of model?).
+    behaviours = ["Run", "Walk", "Jump"]
+    times = np.array([0, 5, 10, 15, 20]) # start times of behaviour (example)
+    durations = np.array([4, 3, 5, 2, 6]) # duration of each behaviour (example)
+    confidence = np.array([0.9, 0.7, 0.8, 0.5, 0.95]) # confidence scores (example)
+    
+    for i, (start, dur, conf) in enumerate(zip(times, durations, confidence)):
+        ax.barh(0, width=dur, left=start, height=0.3, color=plt.cm.viridis(conf), alpha=0.7)
+        ax.text(start + dur / 2, 0, behaviours[i % len(behaviours)], ha='center', va='bottom')
+    
+    # enable hovering to show event details
+    cursor = Cursor(ax, useblit=True, color='red', linewidth=1)
+    
+    def on_hover(event)
+        'display behaviour details on hover'
+        if event.inaxes == ax:
+            closest_idx = np.argmin(np.abs(times - event.xdata)) # find closest event on hover
+            start, dur = times[closest_idx], durations[closest_idx]
+            ax.set_title(f"Behaviour: {behaviours[closest_idx % len(behaviours)]} | Start: {start}s | Duration: {dur}s")
+            fig.canvas.draw_idle()
+    
+    fig.canvas.mpl_connect("motion_notify_event", on_hover) # connect hover event
+    plt.show()
+
+# jump to behavioural events 
+def jump_to_event(event, viewer): 
+    """
+    When a user clicks on the timeline, this function moves the viewer to the corresponding frame
+    """
+    if event.inaxes:
+        closest_idx = np.argmin(np.abs(times - event.xdata)) # find closest event
+        frame = int(times[closest_idx] * 30) # convert to frame index (assume 30fps?)
+        viewer.dims.set_point(0, frame) # move viewer (MAIN VIEWING)
+        print(f"Jumped to frame: {frame}")
+
+#connect clicking event to the jump function
+fig.canvas.mpl_connect("button_press_event", lambda event: jump_to_event(event, viewer))         
+
+
+
+
+
+
+
+
+""""
+Pierce Mullen's _widget.py base code below:
+"""
+
+
 from ast import Try
 from cProfile import label
 from re import I, L

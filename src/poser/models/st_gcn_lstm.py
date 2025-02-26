@@ -1,5 +1,5 @@
 r"""Copyright [@misc{mmskeleton2019,
-  author =       {Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin},
+  author =       {Sijie Yan, Yuanjun Xiong, Jingbo Wang, Dahua Lin}
   title =        {MMSkeleton},
   howpublished = {\url{https://github.com/open-mmlab/mmskeleton}},
   year =         {2019}
@@ -16,9 +16,18 @@ r"""Copyright [@misc{mmskeleton2019,
  * See the License for the specific language governing permissions and
  * limitations under the License.
  *
- * Modifications made by [Pierce Mullen] on [11-11-24]"""
-import os
+ * Modifications made by [Angus Gray] on [20-02-25]"""
 
+
+
+
+
+
+
+
+
+# loading modules 
+import os
 import numpy as np
 import torch
 import torch.nn as nn
@@ -26,6 +35,8 @@ import torch.nn.functional as F
 from pytorch_lightning import LightningModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
+
+# importing torcheval - model evaluation 
 from torchmetrics.functional.classification.accuracy import accuracy
 from torcheval.metrics.functional import multiclass_auprc
 from torcheval.metrics import MulticlassAUPRC   
@@ -33,14 +44,13 @@ from torcheval.metrics.functional import binary_accuracy
 from torcheval.metrics import BinaryAUPRC
 from torcheval.metrics import MulticlassAccuracy, BinaryAccuracy
 import time
-
-# from torchmetrics.regression import R2Score
 from torcheval.metrics.functional import r2_score
 
-# import sys
-# sys.path.insert(1, "../")
-from .._loader import ZebData
-from . import ConvTemporalGraphical, Graph
+# importing from other scripts 
+from _loader import ZebData
+
+# not sure where this is importing in from? ... replace dot with actual script. 
+from gconv import ConvTemporalGraphical, Graph
 
 # from preprocessing import PreProcessing
 
@@ -51,6 +61,37 @@ def zero(x):
 
 def iden(x):
     return x
+
+
+# ST_GCN_LSTM - angus modification 
+class ST_GCN_LSTM(ST_GCN_18):  
+    def __init__(self, in_channels, num_class, graph_cfg, data_cfg, hparams, lstm_hidden_size=256, lstm_layers=2, **kwargs):
+        super().__init__(in_channels, num_class, graph_cfg, data_cfg, hparams, **kwargs)
+        
+        # LSTM Layer to capture long-term dependencies
+        self.lstm = nn.LSTM(input_size=256, hidden_size=lstm_hidden_size, num_layers=lstm_layers, batch_first=True)
+        
+        # Fully connected layer after LSTM
+        self.fc_lstm = nn.Linear(lstm_hidden_size, num_class)
+    
+    def forward(self, x):
+        
+        # Run through ST-GCN blocks
+        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
+            x, _ = gcn(x, self.A * importance)
+
+        # Global pooling
+        x = F.avg_pool2d(x, x.size()[2:])
+        x = x.view(x.size(0), -1)  # Flatten
+
+        # Pass through LSTM
+        x, _ = self.lstm(x.unsqueeze(1))  # Add time dimension for LSTM
+        x = self.fc_lstm(x[:, -1, :])  # Take last time-step output
+
+        return x
+
+
+
 
 # New code from Pierce Mullen
 class ST_GCN_18(LightningModule):
@@ -72,6 +113,8 @@ class ST_GCN_18(LightningModule):
             :math:`V_{in}` is the number of graph nodes,
             :math:`M_{in}` is the number of instance in a frame.
     """
+
+
 
     def __init__(
         self,
@@ -244,15 +287,14 @@ class ST_GCN_18(LightningModule):
         # x = self.softmax(x) # don't need as we use cross entropy loss
         return x
 
+    # configure the optimizer --- angus modification 
     def configure_optimizers(self):
         # Make sure to filter the parameters based on `requires_grad`
-
-        return torch.optim.Adam(
+        return torch.optim.AdamW(
             filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.learning_rate,
+            lr=1e-4, #lowering the learning rate 
+            weight_decay=1e-4 #L2 regularisation to prevent overfitting 
         )
-        # optimizer = torch.optim.Adam(self.parameters(), lr = self.learning_rate)
-        # return optimizer
 
     def training_step(self, batch, batch_idx):
         # Make sure dataloaders are on cuda

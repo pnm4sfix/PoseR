@@ -66,6 +66,7 @@ class ConvTemporalGraphical(nn.Module):
     ):
         super().__init__()
 
+        # number of spatial kernels (graph adj matries)
         self.kernel_size = kernel_size
         self.conv = nn.Conv2d(
             in_channels,
@@ -78,18 +79,28 @@ class ConvTemporalGraphical(nn.Module):
         )
 
     def forward(self, x, A):
+        
+        # ensuring adj matrix matches kernel size
         assert A.size(0) == self.kernel_size
 
+        # apply 2d convolution
         x = self.conv(x)
 
+        # get batch sizes, channels, time steps and nodes 
         n, kc, t, v = x.size()
+        
+        # reshape to apply adj matrix manipulation
         x = x.view(n, self.kernel_size, kc // self.kernel_size, t, v)
+        
+        # einstein summation to apply graph adj (spatial convolution)
         x = torch.einsum("nkctv,kvw->nctw", (x, A))
-
+        
+        # return processed features and adjacency
         return x.contiguous(), A
 
 
 class Gconv(nn.Module):
+    
     def __init__(self, in_channels, out_channels, kernel_size):
         if isinstance(kernel_size, int):
             gcn_kernel_size = kernel_size

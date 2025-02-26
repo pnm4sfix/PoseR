@@ -130,6 +130,7 @@ class C3D(LightningModule):
         # return optimizer
 
     def training_step(self, batch, batch_idx):
+        
         # Make sure dataloaders are on cuda
         x, y = batch
         output = self(x)

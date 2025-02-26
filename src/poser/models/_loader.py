@@ -29,7 +29,7 @@ except:
 
 # Split data into
 
-# Finetuning
+# Fine tuning
 # Freeze all the parameters in the network
 # for param in model.parameters():
 #    param.requires_grad = False
