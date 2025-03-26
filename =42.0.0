@@ -1,0 +1,16 @@
+Requirement already satisfied: setuptools in ./poser-env/lib/python3.8/site-packages (75.3.2)
+Requirement already satisfied: wheel in ./poser-env/lib/python3.8/site-packages (0.45.1)
+Collecting setuptools_scm
+  Using cached setuptools_scm-8.2.0-py3-none-any.whl.metadata (6.8 kB)
+Collecting packaging>=20 (from setuptools_scm)
+  Using cached packaging-24.2-py3-none-any.whl.metadata (3.2 kB)
+Collecting tomli>=1 (from setuptools_scm)
+  Using cached tomli-2.2.1-py3-none-any.whl.metadata (10 kB)
+Collecting typing-extensions (from setuptools_scm)
+  Using cached typing_extensions-4.12.2-py3-none-any.whl.metadata (3.0 kB)
+Using cached setuptools_scm-8.2.0-py3-none-any.whl (43 kB)
+Using cached packaging-24.2-py3-none-any.whl (65 kB)
+Using cached tomli-2.2.1-py3-none-any.whl (14 kB)
+Using cached typing_extensions-4.12.2-py3-none-any.whl (37 kB)
+Installing collected packages: typing-extensions, tomli, packaging, setuptools_scm
+Successfully installed packaging-24.2 setuptools_scm-8.2.0 tomli-2.2.1 typing-extensions-4.12.2

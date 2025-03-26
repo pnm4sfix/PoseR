@@ -35,8 +35,6 @@ import torch.nn.functional as F
 from pytorch_lightning import LightningModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
-
-# importing torcheval - model evaluation 
 from torchmetrics.functional.classification.accuracy import accuracy
 from torcheval.metrics.functional import multiclass_auprc
 from torcheval.metrics import MulticlassAUPRC   
@@ -44,13 +42,14 @@ from torcheval.metrics.functional import binary_accuracy
 from torcheval.metrics import BinaryAUPRC
 from torcheval.metrics import MulticlassAccuracy, BinaryAccuracy
 import time
+
+# from torchmetrics.regression import R2Score
 from torcheval.metrics.functional import r2_score
 
-# importing from other scripts 
-from _loader import ZebData
-
-# not sure where this is importing in from? ... replace dot with actual script. 
-from gconv import ConvTemporalGraphical, Graph
+# import sys
+# sys.path.insert(1, "../")
+from .._loader import ZebData
+from . import ConvTemporalGraphical, Graph
 
 # from preprocessing import PreProcessing
 
@@ -63,39 +62,10 @@ def iden(x):
     return x
 
 
-# ST_GCN_LSTM - angus modification 
-class ST_GCN_LSTM(ST_GCN_18):  
-    def __init__(self, in_channels, num_class, graph_cfg, data_cfg, hparams, lstm_hidden_size=256, lstm_layers=2, **kwargs):
-        super().__init__(in_channels, num_class, graph_cfg, data_cfg, hparams, **kwargs)
-        
-        # LSTM Layer to capture long-term dependencies
-        self.lstm = nn.LSTM(input_size=256, hidden_size=lstm_hidden_size, num_layers=lstm_layers, batch_first=True)
-        
-        # Fully connected layer after LSTM
-        self.fc_lstm = nn.Linear(lstm_hidden_size, num_class)
-    
-    def forward(self, x):
-        
-        # Run through ST-GCN blocks
-        for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
 
-        # Global pooling
-        x = F.avg_pool2d(x, x.size()[2:])
-        x = x.view(x.size(0), -1)  # Flatten
-
-        # Pass through LSTM
-        x, _ = self.lstm(x.unsqueeze(1))  # Add time dimension for LSTM
-        x = self.fc_lstm(x[:, -1, :])  # Take last time-step output
-
-        return x
-
-
-
-
-# New code from Pierce Mullen
-class ST_GCN_18(LightningModule):
-    r"""Spatial temporal graph convolutional networks.
+# ST_GCN_LSTM - Angus Gray modification
+class ST_GCN_LSTM(LightningModule):
+    r"""Spatial temporal graph convolutional networks and a LSTM model running parallel.
 
     Args:
         in_channels (int): Number of channels in the input data
@@ -261,6 +231,26 @@ class ST_GCN_18(LightningModule):
         if self.soft:
             self.softmax = nn.Softmax(dim=1)
 
+        # defining lstm_hidden_size and layers 
+        lstm_hidden_size = 256 # defines the number of hidden layers in each LSTM layer, matching ST_GCN for fusion
+        lstm_layers = 2 # number of stacked layers, more layers for stability but overfitting issues 
+        
+
+        # LSTM Architecture - definition
+        self.lstm = nn.LSTM(input_size=256, hidden_size=lstm_hidden_size, num_layers=lstm_layers, batch_first=True)
+
+        # Fully connected layers for separate pathways - LSTM && ST_GCN different pathways  
+        self.fc_gcn = nn.Linear(256, num_class)
+        self.fc_lstm = nn.Linear(lstm_hidden_size, num_class)
+
+        # Fusion layer combining ST-GCN and LSTM outputs
+        self.fc_fusion = nn.Linear(num_class * 2, num_class)
+
+
+
+    # ---------------
+    # FORWARD METHOD
+    # ---------------
     def forward(self, x):
         # data normalization
         N, C, T, V, M = x.size()
@@ -271,31 +261,51 @@ class ST_GCN_18(LightningModule):
         x = x.permute(0, 1, 3, 4, 2).contiguous()
         x = x.view(N * M, C, T, V)
 
-        # forward
+       
+         # Angus Modification - keeping original code the same but integrating LSTM pathway.  
+         # ST-GCN Pathway - graph convolution blocks and learnable weights 
         for gcn, importance in zip(self.st_gcn_networks, self.edge_importance):
-            x, _ = gcn(x, self.A * importance)
+            
+            # x_gcn is the feature representation from the st-gcn blocks 
+            x_gcn, _ = gcn(x, self.A * importance)
 
-        # global pooling
-        x = F.avg_pool2d(x, x.size()[2:])
-        x = x.view(N, M, -1, 1, 1).mean(dim=1)
+        # st_gcn block prep for 
+        x_gcn = F.avg_pool2d(x_gcn, x_gcn.size()[2:])  # Global pooling
+        x_gcn = x_gcn.view(self.batch_size, -1)  # Flatten
+        x_gcn = self.fc_gcn(x_gcn)  # Pass through Fully connected layer
 
-        # prediction
-        x = self.fcn(x)
-        x = x.view(x.size(0), -1)
-        #if self.soft:
-        #    x = self.softmax(x)
-        # x = self.softmax(x) # don't need as we use cross entropy loss
-        return x
+        # LSTM Pathway
+        x_lstm, _ = self.lstm(x.view(self.batch_size, x.size(2), -1))  # Reshape for LSTM
+        x_lstm = self.fc_lstm(x_lstm[:, -1, :])  # Take last time step output
 
-    # configure the optimizer --- angus modification 
+        # Ensure both outputs have the same dimension before fusion, housekeeping just incase. 
+        # adding a linear layer to project one to match to the other dimension - before fusion. 
+        if x_gcn.shape[1] != x_lstm.shape[1]:
+            x_gcn = nn.Linear(x_gcn.shape[1], x_lstm.shape[1]).to(x_gcn.device)(x_gcn)
+
+        # Fusion of GCN and LSTM outputs
+        x_combined = torch.cat((x_gcn, x_lstm), dim=1) # combing both feature representations 
+        x_out = self.fc_fusion(x_combined)
+        
+        
+        return x_out # returning the final prediction 
+
+    
+    # slightly configured the optimiser introducing beta for aid in learning additional schedulars to prevent training getting stuck with a parallel model implemented 
     def configure_optimizers(self):
-        # Make sure to filter the parameters based on `requires_grad`
-        return torch.optim.AdamW(
+        optimizer = torch.optim.AdamW(
             filter(lambda p: p.requires_grad, self.parameters()),
-            lr=1e-4, #lowering the learning rate 
-            weight_decay=1e-4 #L2 regularisation to prevent overfitting 
+            lr=1e-4, # learning rate
+            betas=(0.9, 0.98), # smoother weight updates 
+            weight_decay=1e-4 # weight decay 
         )
+        # models running in parallel may lead to training getting stuck in a local minimum (false positives)
+        scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)  
+        return [optimizer], [scheduler]
 
+    # ----------
+    # TRAINING
+    # ----------
     def training_step(self, batch, batch_idx):
         # Make sure dataloaders are on cuda
         x, y = batch
@@ -336,8 +346,17 @@ class ST_GCN_18(LightningModule):
         elapsed_time = time.time() - self.start_time
         self.log("elapsed_time", elapsed_time, prog_bar=True, logger=True, on_epoch=True)
         self.log("train_acc", acc, prog_bar=True, logger=True, on_epoch=True)
+
+
+   
+        # loss value for predictions of model - utilise in interactive timeline
         return loss
 
+
+
+    # ----------------
+    # VALIDATION LAYER
+    # ----------------
     def validation_step(self, batch, batch_idx):
         x, y = batch
         output = self(x)
