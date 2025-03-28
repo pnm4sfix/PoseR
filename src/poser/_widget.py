@@ -258,6 +258,7 @@ class PoserWidget(Container):
 
         self.add_1d_widget()
         self.viewer.dims.events.current_step.connect(self.update_slider)
+        self.widget.canvas.events.mouse_press.connect(self.jump_to_event)
 
         ### infererence
         self.batch_size_spinbox = SpinBox(label="Batch Size", value=16, max = 1024)
@@ -711,10 +712,10 @@ class PoserWidget(Container):
 
     def add_1d_widget(self):
         self.viewer1d = napari_plot.ViewerModel1D()  # ViewerModel1D()
-        widget = QtViewer(self.viewer1d)
+        self.widget = QtViewer(self.viewer1d)
 
         self.viewer.window.add_dock_widget(
-            widget, area="bottom", name="Movement"
+            self.widget, area="bottom", name="Movement"
         )
         self.viewer1d.axis.x_label = "Time"
         self.viewer1d.axis.y_label = "Movement"
@@ -3943,6 +3944,37 @@ class PoserWidget(Container):
         )
         count_df = df.behaviour.value_counts()
         count_df.to_csv(count_filename)
+
+    
+
+    def jump_to_event(self, event):
+        """
+        Moves the Napari viewer to the corresponding frame when clicking a behavior event.
+        If a user clicks on an empty area, allow them to add a new behavior.
+        """
+        print(event.pos)
+        #if event.inaxes and self.behaviours:
+        #    x_click = event.xdata  # Get the clicked x-coordinate (time)#
+
+            # Find the closest behavior event
+        #    closest_idx = np.argmin(np.abs([start for start, _ in self.behaviours] - x_click))
+        #    frame = int(self.behaviours[closest_idx][0])  # Convert to frame index
+
+        #    # Move the Napari viewer to the detected frame
+        #    self.viewer.dims.set_point(0, frame)
+
+        #    print(f"Jumped to frame: {frame}")
+
+        #    # Check if the clicked position is outside any detected behaviors
+        #    start, stop = self.behaviours[closest_idx]
+        #    if not (start <= x_click <= stop):  
+        #        print("Clicked outside an existing behavior. Adding a new one...")
+
+        #        # Call the function to add behavior manually
+        #        self.add_behaviour_from_selected_area()
+
+        #    else:
+        #        print("Clicked on an existing behavior. No changes made.")
 
     
 
