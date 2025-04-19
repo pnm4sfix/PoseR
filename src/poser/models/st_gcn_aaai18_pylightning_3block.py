@@ -53,7 +53,7 @@ def iden(x):
     return x
 
 # New code from Pierce Mullen
-class ST_GCN_18(LightningModule):
+class ST_GCN_18_3BLOCK(LightningModule):
     r"""Spatial temporal graph convolutional networks.
 
     Args:

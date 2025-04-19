@@ -1,0 +1,31 @@
+data_cfg:
+  T: "window" # extracts behaviour around center, other options are "current"
+  V: 19 # num of nodes
+  fps: 330. # frame rate
+  T2: 300 # timepoints to pad to
+  numLabels: 3 # number of labels
+  denominator: 8 # used to calculate window for T: "window"
+  center: 13 # center node representing center of mass of animal
+  classification_dict: # classification map
+    0: "forward"
+    1: "left"
+    2: "right"
+    3: "unclassified"
+  labels_to_ignore: ["unclassified"] # list of labels to ignore during training
+
+train_cfg:
+  devices: 1 # number of devices - allows parallel processing if more than 1
+  auto_lr: True # find best learning rate for training automatically
+  accelerator: "gpu" # gpu or cpu
+  graph_layout: "zebrafishlarvae" # how the nodes connect to each other - can be preconfigured name or list of connections e.g.[[0, 1], [1, 2]] where the first node connects to the second, and the second to the third
+  dropout: 0 # whether to include dropout in learning process to help generalisation
+  num_channels: 3 # number of input channels (X, Y, Confidence Interval) for 2d pose estimation
+  num_workers: 0 # leave at 0 for now
+  transform: None # default to None
+  backbone: "ST-GCN" # default to ST-GCN - other models available in future
+  detection_backbone: "YOLOv8"
+  detection_ckpt: "yolo_zeb_l3.pt"
+  detection_config: "yolo_zeb_config"
+  pose_backbone: "YOLOv8"
+  pose_ckpt: "yolo_zeb_l3.pt"
+

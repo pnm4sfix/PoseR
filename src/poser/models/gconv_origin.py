@@ -21,10 +21,11 @@ r"""Copyright [2018] [@misc{mmskeleton2019,
 # This is the original implementation for ST-GCN papers.
 
 import torch
-import torch.nn as nn
-
+import torch.nn as nn 
 
 class ConvTemporalGraphical(nn.Module):
+    
+    
     r"""The basic module for applying a graph convolution.
 
     Args:

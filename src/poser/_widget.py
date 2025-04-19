@@ -7,32 +7,35 @@ see: https://napari.org/stable/plugins/guides.html?#widgets
 Replace code below according to your needs.
 """
 
-from ast import Try
-from cProfile import label
-from re import I, L
-import sys
-from tkinter import W
-
-sys.path.insert(1, "./")
-import os
-
 # from skimage.segmentation import watershed
 # from skimage.feature import peak_local_max
 # from scipy import ndimage as ndi
 # from sklearn.manifold import TSNE
 # from matplotlib.animation import FuncAnimation
-import time
-from typing import TYPE_CHECKING
 
+
+from ast import Try
+from cProfile import label
+from re import I, L
 import napari_plot
-import seaborn as sns
-import numpy as np
-import pandas as pd
-import scipy.stats as st
-import tables as tb
-import torch
-import torch.nn as nn
-import yaml
+import pytorch_lightning
+
+
+ # lazily import modules into the viewer once called. 
+from napari_plot._qt.qt_viewer import QtViewer
+from pytorch_lightning import Trainer
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.callbacks.early_stopping import EarlyStopping
+from pytorch_lightning.callbacks.stochastic_weight_avg import (
+            StochasticWeightAveraging,
+)
+from pytorch_lightning.loggers import TensorBoardLogger
+from scipy.ndimage import gaussian_filter1d as gaussian_filter1d
+from scipy.signal import find_peaks
+from torch.utils.data import DataLoader
+    
+import napari
+from magicgui import magicgui
 from magicgui.widgets import (
     CheckBox,
     ComboBox,
@@ -43,27 +46,50 @@ from magicgui.widgets import (
     PushButton,
     SpinBox,
     TextEdit,
-)
-from napari_plot._qt.qt_viewer import QtViewer
-from pytorch_lightning import Trainer
-from pytorch_lightning.callbacks import ModelCheckpoint
-from pytorch_lightning.callbacks.early_stopping import EarlyStopping
-from pytorch_lightning.callbacks.stochastic_weight_avg import (
-    StochasticWeightAveraging,
-)
-from pytorch_lightning.loggers import TensorBoardLogger
-from scipy.ndimage import gaussian_filter1d as gaussian_filter1d
-from scipy.signal import find_peaks
-from torch.utils.data import DataLoader
+        )
+        
+from PyQt5.QtWidgets import QWidget, QVBoxLayout, QLabel
+#from qtpy.QtWidget import QWidget, QVBoxLayout, QLabel
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.widgets import Cursor
+import poser._loader
+import os 
+import ipywidgets as widgets 
+from IPython.display import display
+import napari_plot
+import seaborn as sns
+import numpy as np
+import pandas as pd
+import scipy.stats as st
+import tables as tb
+import torch
+import torch.nn as nn
+import yaml
 
+
+
+# specifies a search globally for modules 
+import sys
+sys.path.insert(1, "./")
+
+from tkinter import W
+import os
+import time
+from typing import TYPE_CHECKING
+
+
+# essential imports (needed immediately for class structure)
 from ._loader import HyperParams, ZebData
 from .models import c3d, st_gcn_aaai18_pylightning_3block
 
-
+# try/ except optional heavy modules only if req 
 try:
     import pygmtools as pygm
 except:
     print("pygmtools not installed")
+
+# lightweight version.
 import networkx as nx
 
 try:
@@ -82,6 +108,8 @@ if TYPE_CHECKING:
     pass
 
 
+# ------ Poser Widget Class ------------- 
+
 class PoserWidget(Container):
     # your QWidget.__init__ can optionally request the napari viewer instance
     # in one of two ways:
@@ -89,8 +117,12 @@ class PoserWidget(Container):
     # 2. use a type annotation of 'napari.viewer.Viewer' for any parameter
     def __init__(self, napari_viewer):
         super().__init__()
+        
+        
+      
+        
         self.viewer = napari_viewer
-
+    
         # Add behaviour labels to a list
 
         self.title_label = Label(label="Settings")
@@ -733,21 +765,253 @@ class PoserWidget(Container):
         # Preprocess_txt_file? - maybe include later if a tx file is selected with a pop up?
         # Extend window - redundant
 
-    def add_behaviour_from_selected_area(self, value):
-        # get x range of viewer1d
-        # subset data using those frame indices
-        # append behaviour to self behaviours
 
+
+    ### FUNCTIONS BELOW 
+    # 
+    # Functions below detail an updating function for the user, selecting behaviours or empty
+    # areas in the timeline will allow them to update the classification data for the model to utilise
+    # here they can re-train the model and make predictions again with their preferences saved. 
+    
+
+    
+
+    def plot_behavior_timeline(self):
+        """
+        Visualizes extracted behaviors as an interactive timeline in Napari's 1D viewer.
+        Users can click on behaviors to jump to corresponding video frames.
+        """
+
+        if not self.behaviours:
+            print("No behaviors detected.")
+            return
+
+        # Remove existing behavior timeline (if any) before adding a new one
+        if hasattr(self, "regions_layer") and self.regions_layer:
+            self.viewer1d.layers.remove(self.regions_layer)
+
+        # Convert behavior events into timeline format for Napari
+        self.regions = [([start, stop], "vertical") for start, stop in self.behaviours]
+
+        # Add interactive behavior regions to Napari 1D viewer
+        self.regions_layer = self.viewer1d.add_region(
+            self.regions, color="green", opacity=0.4, name="Behavior Timeline"
+        )
+
+        # Enable clicking on timeline to jump to behavior frames
+        self.viewer1d.canvas.events.mouse_press.connect(self.jump_to_event)
+
+        print("Behavior timeline updated in Napari 1D viewer.")
+    def jump_to_event(self, event):
+        """
+        Moves the Napari viewer to the corresponding frame when clicking a behavior event.
+        If a user clicks on an empty area, allow them to add a new behavior.
+        """
+
+        if event.inaxes and self.behaviours:
+            x_click = event.xdata  # Get the clicked x-coordinate (time)
+
+            # Find the closest behavior event
+            closest_idx = np.argmin(np.abs([start for start, _ in self.behaviours] - x_click))
+            frame = int(self.behaviours[closest_idx][0])  # Convert to frame index
+
+            # Move the Napari viewer to the detected frame
+            self.viewer.dims.set_point(0, frame)
+
+            print(f"Jumped to frame: {frame}")
+
+            # Check if the clicked position is outside any detected behaviors
+            start, stop = self.behaviours[closest_idx]
+            if not (start <= x_click <= stop):  
+                print("Clicked outside an existing behavior. Adding a new one...")
+
+                # Call the function to add behavior manually
+                self.add_behaviour_from_selected_area()
+
+            else:
+                print("Clicked on an existing behavior. No changes made.")
+    def add_behaviour_from_selected_area(self):
+        """
+        Allows users to manually add a behavior from the selected area.
+        This also saves the corrected behavior so the model can use it later.
+        """ 
+
+        # Get the selected start/stop from the timeline (frames)
         start, stop = self.viewer1d.camera.rect[:2]
-        self.behaviours.append((int(start), int(stop)))
-        print(self.behaviours)
 
-        if self.ind not in list(self.classification_data.keys()):
+        if stop <= start:
+            print("Invalid selection: Stop frame must be after start frame.")
+            return
+
+        # Check if this behavior already exists
+        for existing_start, existing_stop in self.behaviours:
+            if abs(existing_start - start) < 5 and abs(existing_stop - stop) < 5:
+                print("This behavior is already detected. Skipping addition.")
+                return
+
+        # Append new behavior to the behaviors list
+        self.behaviours.append((int(start), int(stop)))
+        print(f"Added new behavior: {start} → {stop}")
+
+        # Ensure classification data includes this new behavior
+        if self.ind not in self.classification_data:
             self.classification_data[self.ind] = {}
 
+        # Save new behavior to classification data
+        self.classification_data[self.ind][len(self.behaviours)] = {
+            "classification": "unclassified",
+            "start": int(start),
+            "stop": int(stop),
+            "ci": np.zeros(stop - start)  # Placeholder confidence scores
+        }
+
+        # Update behavior selection UI
         self.spinbox.max = len(self.behaviours)
         self.spinbox.value = len(self.behaviours)
-        # self.behaviour_changed(len(self.behaviours))
+
+        # Replot the updated timeline
+        self.plot_behavior_timeline()
+
+        # Save corrections to file - so this aids in future training for the user 
+        self.save_classification_data()
+    def save_classification_data(self, event=None):
+        """Saves corrected behavior labels so the model can use them later."""
+        try:
+            self.save_to_h5(event)  # Saves as an HDF5 
+            print("Saved to file. Please press train to update and refine your model")
+        except:
+            print("Failed to save to h5")
+
+        try:
+            self.save_ethogram()  # Saves a CSV version for analysis
+            print("New Classification has been saved to the ethogram")
+        except:
+            print("Failed to save to CSV")
+    def train(self, use_corrections=False):
+        """
+        Trains or retrains the model based on the selected mode - this is based on if users provided feedback on the predictions 
+        of the model and labelled certain behaviours differently... 
+        
+        Args:
+            use_corrections (bool): If True, incorporates manually corrected behaviors 
+                                    into training. If False, performs normal training.
+        """
+
+        # **Step 1: Check if Training Data is Available**
+        if os.path.exists(os.path.join(self.decoder_data_dir, "Zebtrain.npy")):
+            print("Data Prepared")
+        else:
+            print("Preparing Data")
+            self.prepare_data()
+
+        #  **Step 2: Load Model Configurations**
+        data_cfg, graph_cfg, hparams = self.initialise_params()
+        print(data_cfg, graph_cfg, hparams)
+
+        #  **Step 3: Load Corrected Behaviors if Retraining**
+        if use_corrections:
+            print("Loading corrected behaviors for retraining...")
+            corrected_data = self.load_corrected_classification_data()
+            data_cfg["corrected_labels"] = corrected_data  # Attach corrections to dataset
+
+        # **Step 4: Initialize or Reuse Model**
+        for n in range(self.numRuns):
+            print(f"Trial {n}: Initializing model...")
+
+            # 🛠 **Reuse existing model if retraining**
+            if hasattr(self, "model") and self.model is not None and use_corrections:
+                print("Reusing existing model for retraining...")
+            else:
+                # 🚀 **Create a new model for normal training**
+                if self.backbone == "ST-GCN":
+                    self.model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
+                        in_channels=self.numChannels,
+                        num_workers=self.num_workers,
+                        num_class=self.numlabels,
+                        graph_cfg=graph_cfg,
+                        data_cfg=data_cfg,
+                        hparams=hparams,
+                    )
+                elif self.backbone == "C3D":
+                    self.model = c3d.C3D(
+                        num_class=self.numlabels,
+                        num_channels=self.numChannels,
+                        data_cfg=data_cfg,
+                        hparams=hparams,
+                        num_workers=self.num_workers,
+                    )
+
+        # **Step 5: Set Up Logging & Callbacks**
+        TTLogger = TensorBoardLogger(save_dir=self.decoder_data_dir)
+        
+        print(f"Early stopping metric: {self.early_stop_metric}, Mode: {self.early_stop_mode}, Patience: {self.patience}")
+
+        early_stop = EarlyStopping(
+            monitor=self.early_stop_metric, mode=self.early_stop_mode, patience=self.patience
+        )
+
+        swa = StochasticWeightAveraging(swa_lrs=1e-2)
+
+        # **Step 6: Handle Checkpoint Saving**
+        log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
+        new_version_folder = self.get_new_checkpoint_folder(log_folder)
+
+        checkpoint_callback = ModelCheckpoint(
+            monitor=self.early_stop_metric,
+            dirpath=new_version_folder,
+            filename="{epoch}-{val_loss:.2f}-{val_acc:.2f}--{auprc:.2f}--{elapsed_time:.2f}",
+            save_top_k=1,  # Save the best model
+            mode=self.early_stop_mode,
+            every_n_epochs=1,
+        )
+
+        # **Step 7: Train or Retrain the Model**
+        print(f"Training {'with corrections' if use_corrections else 'normally'}...")
+
+        try:
+            # 🔄 **Use PyTorch Lightning Trainer**
+            trainer = Trainer(
+                logger=TTLogger,
+                devices=1,
+                accelerator=self.accelerator,
+                max_epochs=100,
+                callbacks=[early_stop, checkpoint_callback],
+                auto_lr_find=True,
+            )
+
+            trainer.tune(self.model)  # Fine-tune model learning rate
+
+        except:
+            # **Handle PyTorch Lightning Version Differences**
+            from pytorch_lightning.tuner import Tuner
+            trainer = Trainer(
+                logger=TTLogger,
+                devices=1,
+                accelerator=self.accelerator,
+                max_epochs=100,
+                callbacks=[early_stop, checkpoint_callback],
+            )
+            tuner = Tuner(trainer)
+            tuner.lr_find(self.model)
+
+        trainer.fit(self.model)  # Start Training
+
+        print(f"Finished Training - best model is {checkpoint_callback.best_model_path}")
+
+        #  **Step 8: Load New Checkpoints & Allow Fine-tuning**
+        self.populate_chkpt_dropdown()
+
+        # **Optional: Add Fine-tuning Step**
+        self.finetune_model()
+        
+
+
+
+
+
+
+
+
 
     def plot_movement_1d(self):
         # plot colors mapped to confidence interval - can't do this yet even for scatter
@@ -900,6 +1164,7 @@ class PoserWidget(Container):
         points = [[z, y, x] for z, y, x in zipped]
         points = np.array(points)
 
+        
         self.points = points
 
     def get_tracks(self):
@@ -974,11 +1239,18 @@ class PoserWidget(Container):
     def calulate_orthogonal_variance(
         self, amd_threshold=2, confidence_threshold=0.8
     ):
-        """Estimates locomotion based on orthogonal movement. Good for zebrafish."""
-        # print("Calculating Orthogonal Variance")
-
+        """Estimates locomotion based on orthogonal/perpendicular movement - 90 deg. Good for zebrafish."""
+        print("Calculating Orthogonal Variance")
+        
+        # sanity check 
+        if self.points is None:
+            print("ERROR: self.points is None before rehshape.")
+            return
+    
         # Get euclidean trajectory - not necessary for orthogonal algorithm but batch requires it
         reshap = self.points.reshape(self.n_nodes, -1, 3)
+        
+        
         center = reshap[self.center_node, :, 1:]  # selects x,y center nodes
         self.egocentric = reshap.copy()
         self.egocentric[:, :, 1:] = reshap[:, :, 1:] - center.reshape(
@@ -1190,44 +1462,74 @@ class PoserWidget(Container):
         self.populate_chkpt_dropdown()  # because it keeps erasing it
 
     def vid_picker_changed(self, event):
-        """This function is called when a new video is selected.
-
-        Parameters:
-
-        event: widget event"""
         print(f"Video File Changed to {event}")
 
         try:
             self.video_file = event.value.value
-        except:
-            try:
-                self.video_file = event.value
-            except:
-                self.video_file = str(event)
+        except AttributeError:
+            self.video_file = str(event)
 
-        # check avi, mp4
-        if (".avi" in self.video_file.lower()) | (
-            ".mp4" in self.video_file.lower()
-        ):
-            # vid = pims.open(str(self.video_file))
-            self.fps = self.config_data["data_cfg"]["fps"]
+        # Try to auto-load DLC h5 if not already loaded
+        if not hasattr(self, "x") or not hasattr(self, "y"):
+            print("DLC data not loaded — trying to auto-load it...")
+            
+            # look for h5 files or avi? 
+            default_h5 = self.video_file.replace(".avi", "test_DLC_file.h5")
+            if os.path.exists(default_h5):
+                print(f"Found matching DLC file: {default_h5}")
+                self.h5_picker_changed(default_h5)
+            else:
+                print(f"No matching DLC file found for {self.video_file}")
+                return
+
+        # Video loading and automatic processing continues...
+        if self.video_file.lower().endswith((".avi", ".mp4", ".mov", ".mkv")):
             try:
                 self.im = VideoReaderNP(str(self.video_file))
-            except:
-                print("Couldn't read video file")
+            except Exception as e:
+                print(f"Error loading video: {e}")
                 self.im = None
 
             if self.im is not None:
-                # add a video layer if none
                 if self.im_subset is None:
-                    self.im_subset = self.viewer.add_image(
-                        self.im, name="Video Recording"
-                    )
-                    self.label_menu.choices = self.choices
+                    self.im_subset = self.viewer.add_image(self.im, name="Video Recording")
                 else:
                     self.im_subset.data = self.im
 
-                self.populate_chkpt_dropdown()  # because adding layers keeps erasing it
+                self.automatic_process_video()
+
+    
+    def automatic_process_video(self):
+        """Function to process video automatically DIRECTLY after loading."""
+        print("Starting video processing...")
+            
+        if self.im is None:
+            print("No video loaded.")
+            return
+
+        # before extracing movement behaviours we will need to collect points
+        self.get_points()
+
+        # Extract movement behaviours   
+        self.extract_behaviours()
+
+        # Convert extracted frames into model input format
+        self.preprocess_bouts()
+
+        # Run the model on the extracted frames
+        if hasattr(self, "model") and self.model is not None:
+            print("Running model on video frames...")
+
+            model_input = self.zebdata[: self.batch_size][0].to(self.device)
+            with torch.no_grad():
+                probs = self.model(model_input).cpu().numpy()
+
+            # Store predictions in Napari ethogram layer
+            self.populate_predicted_etho(probs)
+        else:
+            print("Skipping analysis. No models were found please refer to the UI. ")
+
+
 
     def convert_h5_todict(self, event):
         """reads pytables and converts to dict. If new dict saved overwrites existing pytables"""
@@ -1572,6 +1874,7 @@ class PoserWidget(Container):
             self.populate_groundt_etho(etho)
 
     def extract_behaviours(self, value=None):
+        
         print(f"Extracting behaviours using {self.extract_method} method")
         # reset classification data
         # reset viewer1d
@@ -1922,6 +2225,7 @@ class PoserWidget(Container):
 
     def read_coords(self, h5_file):
         """Reads coordinates from DLC files (h5 and csv). Optional data cleaning."""
+        """Making sure it reads and sets self.x y and z from the .h5 file """
 
         if ".h5" in str(h5_file):
             self.dlc_data = pd.read_hdf(h5_file)
@@ -2002,6 +2306,12 @@ class PoserWidget(Container):
                 "ci": ci,
             }  # think i need ci for the model too
         self.ind_spinbox.max = int(data_t.individuals.unique().shape[0])
+
+        self.x = x
+        self.y = y 
+        #self.z = z #optional
+        self.ci = ci 
+
 
     def add_behaviour(self, value):
         behaviour_label = self.add_behaviour_text.value
@@ -2736,6 +3046,28 @@ class PoserWidget(Container):
         self.zebdata.data = padded_bouts
         self.zebdata.labels = np.zeros(padded_bouts.shape[0])
 
+    # you will need to import in different models and their associated class if you want to run this model_dict 
+    from poser.models.st_gcn_lstm import ST_GCN_LSTM
+    from poser.models.st_gcn_aaai18_pylightning import ST_GCN_18
+    from poser.models.st_gcn_aaai18_pylightning_3block import ST_GCN_18_3BLOCK
+    
+    MODEL_DICT = {
+            "ST-GCN-LSTM": ST_GCN_LSTM,
+            "ST-GCN-3BLOCK":  ST_GCN_18,
+            "ST-GCN":    ST_GCN_18_3BLOCK
+    }
+    
+    @magicgui(
+        # how magicgui - to support understanding
+        # @magicgui(my_param = {"choices - def a gui for the user": [...], 'label': 
+        # controls what text appears in the gui- label controls what label text appears in the GUI})
+        model_dropdown={"choices": list(MODEL_DICT.keys()), "label": "Model Choices"}
+        )
+    def model_selection(model_dropdown):
+        """dropdown menu to select type of model user wishes to run"""
+        print(f"User selected model:{model_dropdown}")
+        
+    
     def predict_behaviours(self):
         data_cfg, graph_cfg, hparams = self.initialise_params()
 
@@ -2745,15 +3077,21 @@ class PoserWidget(Container):
             num_workers=self.num_workers,
             pin_memory=False,
         )
-
-        # load model check point,
-        log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
-        self.chkpt = os.path.join(
-            log_folder, self.chkpt_dropdown.value
-        )  # spinbox
-
-        try: # old pytorch lightning
-            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
+        
+        # show model selection dropdown
+        select_model.show(run=True)
+        selected_model_name = select_model()
+        
+        if not selected_model_name:
+            print("No model selected. Program cannot run.")
+            return
+        
+        # get the corresponding model class 
+        ModelClass = MODEL_DICT[selected_model_name]
+        
+        # load the selected model 
+        try: 
+            model = ModelClass(
                 in_channels=self.numChannels,
                 num_workers=self.num_workers,
                 num_class=self.numlabels,
@@ -2761,17 +3099,19 @@ class PoserWidget(Container):
                 data_cfg=data_cfg,
                 hparams=hparams,
             ).load_from_checkpoint(
-                self.chkpt,
+                 self.chkpt,
                 in_channels=self.numChannels,
                 num_workers=self.num_workers,
                 num_class=self.numlabels,
                 graph_cfg=graph_cfg,
                 data_cfg=data_cfg,
-                hparams=hparams,
+                hparams=hparams, 
             )
         except:
-            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, data_cfg=data_cfg)
-
+            model = ModelClass.load_from_checkpoint(self.chkpt, data_cfg=data_cfg)
+        
+        # Create Trainer and Predict 
+                        
         # create trainer object,
         ## optimise trainer to just predict as currently its preparing data thinking its training
         # predict
@@ -2781,6 +3121,8 @@ class PoserWidget(Container):
         )  # returns a list of the processed batches
         self.predictions = torch.concat(predictions, dim=0)
         print(self.predictions)
+
+
 
     def update_classification_data_with_predictions(self):
         label_dict = self.config_data["data_cfg"]["classification_dict"]
