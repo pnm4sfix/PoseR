@@ -19,13 +19,6 @@ r"""Copyright [@misc{mmskeleton2019,
  * Modifications made by [Angus Gray] on [20-02-25]"""
 
 
-
-
-
-
-
-
-
 # loading modules 
 import os
 import numpy as np
@@ -63,7 +56,7 @@ def iden(x):
 
 
 
-# ST_GCN_LSTM - Angus Gray modification
+# ST_GCN_LSTM - Angus Gray Modification
 class ST_GCN_LSTM(LightningModule):
     r"""Spatial temporal graph convolutional networks and a LSTM model running parallel.
 
@@ -107,7 +100,7 @@ class ST_GCN_LSTM(LightningModule):
             pass
         self.num_workers = num_workers
         self.data_dir = data_cfg["data_dir"]
-        self.augment = data_cfg["augment"]
+        self.augment = data_cfg.get("augment", False)
         self.ideal_sample_no = data_cfg["ideal_sample_no"]
         self.shift = data_cfg["shift"]
 

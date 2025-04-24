@@ -1,14 +1,23 @@
-
-# importing plugins
 import os
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pore.models import ConvTemporalGraphical, Graph
-from pore.preprocessing import PreProcessing
-from pore.recognition import ZebData
+
+from poser.models.gconv_origin import ConvTemporalGraphical 
+from poser.models.graph import Graph
+#from poser.preprocessing import PreProcessing 
+from poser._loader import ZebData
+
+#from pore.models import ConvTemporalGraphical, Graph
+#from pore.preprocessing import PreProcessing - i neeed my preprocessing!!!
+#from pore.recognition import ZebData
+
 from pytorch_lightning import LightningModule
-from pytorch_lightning.metrics.functional import accuracy
+
+from torchmetrics.functional import accuracy
+#from pytorch_lightning.metrics.functional import accuracy
+
 from torch.utils.data import DataLoader, random_split
 from torchvision.transforms import Lambda
 
@@ -69,12 +78,14 @@ class ST_GCN_18(LightningModule):
         self.num_classes = num_class
         self.save_hyperparameters("hparams")
 
-        # load graph structure
+        # load graph
         self.graph = Graph(**graph_cfg)
-        A = torch.tensor(self.graph.A, dtype=torch.float32, requires_grad=False)
+        A = torch.tensor(
+            self.graph.A, dtype=torch.float32, requires_grad=False
+        )
         self.register_buffer("A", A)
 
-        # Building Network Code below 
+        # build networks
         spatial_kernel_size = A.size(0)
         temporal_kernel_size = 9
         kernel_size = (temporal_kernel_size, spatial_kernel_size)
