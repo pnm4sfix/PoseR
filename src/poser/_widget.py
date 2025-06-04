@@ -7,6 +7,9 @@ see: https://napari.org/stable/plugins/guides.html?#widgets
 Replace code below according to your needs.
 """
 
+# Drag Drop Functional Code. 
+
+
 from ast import Try
 from cProfile import label
 from re import I, L
