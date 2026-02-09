@@ -2079,6 +2079,7 @@ class PoserWidget(Container):
             imgsz=h - (h % 32),
             #tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
             stream=True,
+            max_det = 1
         )
 
         # check frame data already exists
@@ -2269,7 +2270,8 @@ class PoserWidget(Container):
             # "ci": subset.ci,
             # }
             print(self.coords_data[ind])
-
+        # set ind spinbox max to number of inds
+        self.ind_spinbox.max = len(self.coords_data)
         # print(self.points_layer.properties)
 
         # check for bounding boxes
