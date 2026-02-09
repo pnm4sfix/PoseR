@@ -2047,7 +2047,92 @@ class PoserWidget(Container):
             self.predict_poses()
 
     def predict_poses(self):
-        try:
+        from ultralytics import YOLO
+        self.initialise_params()
+
+        # Load a model
+        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        self.chkpt = self.chkpt_dropdown.value
+         # spinbox
+
+        # check its not a yolo pretrainied
+        if "yolo" in self.chkpt:
+            self.model = YOLO(self.chkpt)
+        # it is one of our trained yolo models that need to be downloaded first
+        else:
+            url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/" + self.chkpt
+            self.model = YOLO(url)
+
+        if self.accelerator == "gpu":
+            self.device = torch.device("cuda")
+        elif self.accelerator == "cpu":
+            self.device = torch.device("cpu")
+
+        self.model.to(self.device)
+
+
+        h = self.im.shape[1]
+        nframes = nframes = self.im_subset.data.shape[0]
+        print(h)
+        results = self.model.track(
+            source=self.video_file,
+            imgsz=h - (h % 32),
+            #tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
+            stream=True,
+        )
+
+        # check frame data already exists
+        if self.points_layer is None:
+            point_properties = {"confidence": [0], "ind": [0], "node": [0]}
+            self.points_layer = self.viewer.add_points(
+                np.zeros((1, 3)),
+                properties=point_properties,
+                size=self.im_subset.data.shape[2] / 100,
+            )
+
+        points = []
+
+        point_properties = self.points_layer.properties.copy()
+
+
+        for frame, result in enumerate(results):
+            keypoints = result.keypoints
+            track_ids = (
+                result.boxes.id.cpu().numpy().astype(int)
+                if result.boxes is not None and result.boxes.id is not None
+                else np.arange(len(keypoints))
+            )
+
+            if keypoints is None:
+                continue
+
+            xy = keypoints.xy.cpu().numpy()
+            conf = (
+                keypoints.conf.cpu().numpy()
+                if keypoints.conf is not None
+                else np.ones(xy.shape[:2])
+            )
+
+            for person_idx in range(xy.shape[0]):
+                for node_idx in range(xy.shape[1]):
+                    x, y = xy[person_idx, node_idx]
+                    points.append((frame, y, x))
+                    point_properties["confidence"] = np.append(
+                        point_properties["confidence"], conf[person_idx, node_idx]
+                    )
+                    point_properties["ind"] = np.append(
+                        point_properties["ind"], track_ids[person_idx]
+                    )
+                    point_properties["node"] = np.append(
+                        point_properties["node"], node_idx
+                    )
+
+        self.points_layer.data = np.concatenate(
+            (self.points_layer.data, np.array(points))
+        )
+        self.points_layer.properties = point_properties
+
+        """        try:
             from mmpose.apis import (
                 init_pose_model,
                 inference_top_down_pose_model,
@@ -2150,45 +2235,45 @@ class PoserWidget(Container):
             # self.points_layer.properties["node"] = point_properties[
             #    "node"
             # ]
-            self.points_layer.properties = point_properties
+            self.points_layer.properties = point_properties"""
 
-            df = pd.DataFrame(self.points_layer.properties)
-            df2 = pd.DataFrame(self.points_layer.data)
-            point_data = pd.concat([df, df2], axis=1)
-            point_data.drop(0, axis=0, inplace=True)
-            point_data.columns = ["ci", "ind", "node", "frame", "y", "x"]
+        df = pd.DataFrame(self.points_layer.properties)
+        df2 = pd.DataFrame(self.points_layer.data)
+        point_data = pd.concat([df, df2], axis=1)
+        point_data.drop(0, axis=0, inplace=True)
+        point_data.columns = ["ci", "ind", "node", "frame", "y", "x"]
 
-            print(point_data.head())
+        print(point_data.head())
 
-            for ind in point_data.ind.unique():
-                coord_data = {"x": None, "y": None, "ci": None}
+        for ind in point_data.ind.unique():
+            coord_data = {"x": None, "y": None, "ci": None}
 
-                subset = point_data[point_data.ind == ind]
+            subset = point_data[point_data.ind == ind]
 
-                for datum in ["x", "y", "ci"]:
-                    empty = np.empty((self.n_nodes, nframes))
-                    empty[:] = np.nan
-                    subset_pivot = subset.pivot(
-                        columns="frame", values=datum, index="node"
-                    )
+            for datum in ["x", "y", "ci"]:
+                empty = np.empty((self.n_nodes, nframes))
+                empty[:] = np.nan
+                subset_pivot = subset.pivot(
+                    columns="frame", values=datum, index="node"
+                )
 
-                    empty_df = pd.DataFrame(empty)
-                    empty_df.loc[:, subset_pivot.columns] = subset_pivot
+                empty_df = pd.DataFrame(empty)
+                empty_df.loc[:, subset_pivot.columns] = subset_pivot
 
-                    coord_data[datum] = empty_df
+                coord_data[datum] = empty_df
 
-                self.coords_data[ind] = coord_data  # {
-                # "x": subset.x,
-                # "y": subset.y,
-                # "z": subset.frame,
-                # "ci": subset.ci,
-                # }
-                print(self.coords_data[ind])
+            self.coords_data[ind] = coord_data  # {
+            # "x": subset.x,
+            # "y": subset.y,
+            # "z": subset.frame,
+            # "ci": subset.ci,
+            # }
+            print(self.coords_data[ind])
 
-            # print(self.points_layer.properties)
+        # print(self.points_layer.properties)
 
-            # check for bounding boxes
-            # call inference_top_down_mode(self.model, im)
+        # check for bounding boxes
+        # call inference_top_down_mode(self.model, im)
 
     def predict_object_detection(self):
         self.initialise_params()
