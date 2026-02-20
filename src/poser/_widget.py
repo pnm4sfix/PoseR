@@ -2072,14 +2072,16 @@ class PoserWidget(Container):
 
             point_properties = self.points_layer.properties.copy()
 
-            analysed_frames = np.unique(self.points_layer.data[:, 0])
+            analysed_frames_set = set(
+                np.unique(self.points_layer.data[:, 0]).astype(int)
+            )
             nframes = self.im_subset.data.shape[0]
             for frame in range(nframes):
                 exists = False
                 # for point in self.points_layer.data.tolist():  # its a list
                 #    if point[0] == self.frame:
                 #        print("point exists")
-                if np.isin(analysed_frames, frame):
+                if frame in analysed_frames_set:
                     exists = True
 
                 if exists == False:
