@@ -1,0 +1,54 @@
+# Zebrafish 60fps adult skeleton — 23 nodes (linear body chain)
+
+name: zeb60fps
+num_nodes: 23
+node_names:
+  - node_0
+  - node_1
+  - node_2
+  - node_3
+  - node_4
+  - node_5
+  - node_6
+  - node_7
+  - node_8
+  - node_9
+  - node_10
+  - node_11
+  - node_12
+  - node_13
+  - node_14
+  - node_15
+  - node_16
+  - node_17
+  - node_18
+  - node_19
+  - node_20
+  - node_21
+  - node_22
+edges:
+  - [0, 1]
+  - [1, 2]
+  - [2, 3]
+  - [3, 4]
+  - [4, 5]
+  - [5, 6]
+  - [6, 7]
+  - [7, 8]
+  - [8, 9]
+  - [9, 10]
+  - [10, 11]
+  - [11, 12]
+  - [12, 13]
+  - [13, 14]
+  - [14, 15]
+  - [15, 16]
+  - [16, 17]
+  - [17, 18]
+  - [18, 19]
+  - [19, 20]
+  - [20, 21]
+  - [21, 22]
+center_node: 0
+head_node: 0
+partition_strategy: spatial

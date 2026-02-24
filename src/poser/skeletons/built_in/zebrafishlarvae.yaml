@@ -1,0 +1,50 @@
+# Zebrafish larva skeleton — 19 nodes
+
+name: zebrafishlarvae
+num_nodes: 19
+node_names:
+  - head_top
+  - l_eye
+  - r_eye
+  - mouth
+  - l_otic
+  - yolk
+  - r_otic
+  - heart
+  - body_mid
+  - body_rear
+  - segment_1
+  - segment_2
+  - segment_3
+  - segment_4
+  - segment_5
+  - segment_6
+  - segment_7
+  - segment_8
+  - tail_tip
+edges:
+  - [0, 1]
+  - [0, 5]
+  - [1, 2]
+  - [1, 4]
+  - [2, 3]
+  - [4, 3]
+  - [5, 6]
+  - [5, 8]
+  - [8, 7]
+  - [6, 7]
+  - [7, 9]
+  - [3, 9]
+  - [0, 9]
+  - [9, 10]
+  - [10, 11]
+  - [11, 12]
+  - [12, 13]
+  - [13, 14]
+  - [14, 15]
+  - [15, 16]
+  - [16, 17]
+  - [17, 18]
+center_node: 13
+head_node: 0
+partition_strategy: spatial

@@ -50,11 +50,19 @@ class Graph:
         max_hop=1,
         dilation=1,
         center=0,
+        # New keyword-only parameters for programmatic construction
+        edge_list=None,
+        num_nodes_override=None,
+        center_node=None,
     ):
         self.max_hop = max_hop
         self.dilation = dilation
         self.layout = layout
-        self.center = center
+        # center_node kwarg takes priority; falls back to legacy center param
+        self.center = center_node if center_node is not None else center
+        # When edge_list is provided and layout == "list", use them directly
+        self._edge_list_override = edge_list
+        self._num_nodes_override = num_nodes_override
         self.get_edge(layout)
         self.hop_dis = get_hop_distance(
             self.num_node, self.edge, max_hop=max_hop
@@ -354,8 +362,23 @@ class Graph:
             self.edge = self_link + neighbor_link
             self.center = 10
 
+        elif layout == "list":
+            # 0-indexed edge list supplied via edge_list kwarg.
+            # Use num_nodes_override if given (handles isolated nodes).
+            edges_0idx = self._edge_list_override or []
+            if self._num_nodes_override is not None:
+                self.num_node = self._num_nodes_override
+            elif edges_0idx:
+                self.num_node = int(np.unique(np.array(edges_0idx)).max()) + 1
+            else:
+                raise ValueError("'list' layout requires edge_list or num_nodes_override.")
+            self_link = [(i, i) for i in range(self.num_node)]
+            neighbor_link = [(int(i), int(j)) for (i, j) in edges_0idx]
+            self.edge = self_link + neighbor_link
+            # center stays as set in __init__ (center_node kwarg)
+
         elif type(layout) == list:
-            print(layout)
+            # Legacy: list passed directly as layout arg (1-based indices)
             self.num_node = np.unique(np.array(layout)).shape[0]
             self_link = [(i, i) for i in range(self.num_node)]
             neighbor_1base = layout
@@ -363,7 +386,6 @@ class Graph:
             self.edge = self_link + neighbor_link
 
         else:
-            # print(layout)
             raise ValueError("Do Not Exist This Layout.")
 
 
