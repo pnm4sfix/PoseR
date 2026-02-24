@@ -943,14 +943,15 @@ class PoserWidget(Container):
             self.y = pd.DataFrame(self.y)
             self.ci = pd.DataFrame(self.ci)
            
-            x_flat = self.x.to_numpy().flatten()
-            y_flat = self.y.to_numpy().flatten()
-            try:
-                z_flat = self.z.to_numpy().flatten()
+        x_flat = self.x.to_numpy().flatten()
+        y_flat = self.y.to_numpy().flatten()
+        
+        try:
+            z_flat = self.z.to_numpy().flatten()
 
-            except:
-                print("no z frame coord")
-                z_flat = np.tile(self.x.columns, self.x.shape[0])
+        except:
+            print("no z frame coord")
+            z_flat = np.tile(self.x.columns, self.x.shape[0])
 
         
 
