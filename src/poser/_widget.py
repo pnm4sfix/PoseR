@@ -142,7 +142,7 @@ class PoserWidget(Container):
             tooltip="Select labeled h5 file",
         )
         self.h5_picker = FileEdit(
-            label="Select a DLC h5 file", value="./", tooltip="Select h5 file"
+            label="Select a DLC/Sleep/Poser pose h5 file", value="./", tooltip="Select h5 file"
         )
         self.vid_picker = FileEdit(
             label="Select the corresponding raw video",
@@ -438,7 +438,7 @@ class PoserWidget(Container):
                         if ".ckpt" in sub_file:
                             ckpt_file = os.path.join(version_folder, sub_file)
                             self.ckpt_files.append(ckpt_file)
-
+                self.ckpt_files.extend(["zeblr.ckpt", "zebtensor.ckpt"]) # zebrep, zebtensor, calsm21, flyvfly, oftbody, oftfull
             else:
                 self.ckpt_files = []
 
@@ -777,22 +777,29 @@ class PoserWidget(Container):
         ]
 
     def plot_behaving_region(self):
-        self.regions.append(([self.start, self.stop], "vertical"))
-        print(self.regions)
-        choices = self.label_menu.choices
-        # regions = [
-        #    ([self.start, self.stop], "vertical"),
-        # ]
-        if self.regions_layer is None:
-            self.regions_layer = self.viewer1d.add_region(
-                self.regions,
-                color=["green"],
-                opacity=0.4,
-                name="Behaviour",
-            )
+
+        # check if region exists and skip if so
+        if ([self.start, self.stop], "vertical") in self.regions:
+            print("region already exists")
+            
         else:
-            self.regions_layer.data = self.regions
-        self.label_menu.choices = choices
+            self.regions.append(([self.start, self.stop], "vertical"))
+            print(self.regions)
+            choices = self.label_menu.choices
+            # regions = [
+            #    ([self.start, self.stop], "vertical"),
+            # ]
+            if self.regions_layer is None:
+                print("adding region layer")
+                self.regions_layer = self.viewer1d.add_region(
+                    self.regions,
+                    color=["green"],
+                    opacity=0.4,
+                    name="Behaviour",
+                )
+            else:
+                self.regions_layer.data = self.regions
+            self.label_menu.choices = choices
 
     def reset_viewer1d_layers(self):
         try:
@@ -801,6 +808,9 @@ class PoserWidget(Container):
                 # print(layer)
                 self.viewer1d.layers.remove(layer)
             self.viewer1d.clear_canvas()
+            self.regions_layer = None
+            self.regions = []
+            self.frame_line = None
             print(f"Layers remaining are {self.viewer1d.layers}")
         except:
             pass
@@ -839,6 +849,40 @@ class PoserWidget(Container):
         etho = self.classification_data_to_ethogram()
         self.populate_groundt_etho(etho)
 
+    # create a function to convert and save points layer and image subset to yolo for ultralyitcs pose estimation training - should be a text file for each frame and a png for each frame
+    def convert_points_pose_to_yolo(self, points_layer, image_layer): ## Not working yet
+        # create txt file for each frame with coordinates of points in yolo format
+        # create png file for each frame with image subset
+        for frame in range(image_layer.data.shape[0]):
+
+            for point in points_layer.data:
+                frame = int(point[0])
+                y = point[1]
+                x = point[2]
+
+                # convert to yolo format - normalised x and y coordinates and class label (assume 1 class for now)
+                img_h, img_w = image_layer.data[frame].shape[:2]
+                x_center = x / img_w
+                y_center = y / img_h
+                width = 0.01  # assign a width and height for the point - this is arbitrary and can be adjusted
+                height = 0.01
+
+                yolo_line = f"0 {x_center} {y_center} {width} {height}\n"
+
+                # save txt file
+                txt_file_path = os.path.join(
+                    self.decoder_data_dir, f"frame_{frame:05d}.txt"
+                )
+                with open(txt_file_path, "a") as f:
+                    f.write(yolo_line)
+
+                # save png file
+                png_file_path = os.path.join(
+                    self.decoder_data_dir, f"frame_{frame:05d}.png"
+                )
+            
+    
+
     def update_classification(self):
         """Updates classification label in GUI"""
         print("updated")
@@ -869,15 +913,23 @@ class PoserWidget(Container):
                     ]
                 )
             )
-            self.label_menu.value = self.classification_data[self.ind][
+            self.label_menu.value = int(self.classification_data[self.ind][
                 self.behaviour_no
-            ]["classification"]
+            ]["classification"]            )
         except:
             self.label_menu.value = str(
                 self.classification_data[self.ind][self.behaviour_no][
                     "classification"
                 ]
             )
+            try:
+                self.label_menu.value = int(
+                self.classification_data[self.ind][self.behaviour_no][
+                    "classification"
+                ]
+            )
+            except:
+                pass
 
     def update_extract_method(self, value):
         self.extract_method = value
@@ -886,15 +938,22 @@ class PoserWidget(Container):
     def get_points(self):
         """Converts coordinates into points format for napari points layer"""
         # print("Getting Individuals Points")
+        if type(self.x) == np.ndarray:
+            self.x = pd.DataFrame(self.x)
+            self.y = pd.DataFrame(self.y)
+            self.ci = pd.DataFrame(self.ci)
+           
         x_flat = self.x.to_numpy().flatten()
         y_flat = self.y.to_numpy().flatten()
-
+        
         try:
             z_flat = self.z.to_numpy().flatten()
 
         except:
             print("no z frame coord")
             z_flat = np.tile(self.x.columns, self.x.shape[0])
+
+        
 
         zipped = zip(z_flat, y_flat, x_flat)
         points = [[z, y, x] for z, y, x in zipped]
@@ -906,8 +965,8 @@ class PoserWidget(Container):
         """Converts coordinates into tracks format for napari tracks layer"""
         # print("Getting Individuals Tracks")
 
-        x_nose = self.x.to_numpy()[self.center_node]  # -1 # change this to tail node
-        y_nose = self.y.to_numpy()[self.center_node]  # -1
+        x_nose = self.x.to_numpy()[-1]  # -1 # change this to tail node
+        y_nose = self.y.to_numpy()[-1]  # -1
 
         z_nose = np.arange(self.x.shape[1])
         nose_zipped = zip(z_nose, y_nose, x_nose)
@@ -915,7 +974,7 @@ class PoserWidget(Container):
 
         self.tracks = tracks
 
-    def egocentric_variance(self):
+    def egocentric_variance(self, amd_threshold=2, confidence_threshold=0.8):
         """Estimates locomotion based on peaks of egocentric movement ."""
         reshap = self.points.reshape(self.n_nodes, -1, 3)
         center = reshap[self.center_node, :, 1:]  # selects x,y center nodes
@@ -953,7 +1012,7 @@ class PoserWidget(Container):
         self.behaviours = [
             (start, end)
             for start, end in self.behaviours
-            if self.check_behaviour_confidence(start, end)
+            if self.check_behaviour_confidence(start, end, confidence_threshold=confidence_threshold)
         ]
 
         # check no overlap
@@ -979,17 +1038,25 @@ class PoserWidget(Container):
 
         # Get euclidean trajectory - not necessary for orthogonal algorithm but batch requires it
         reshap = self.points.reshape(self.n_nodes, -1, 3)
+        reshap = np.nan_to_num(reshap)
+
         center = reshap[self.center_node, :, 1:]  # selects x,y center nodes
         self.egocentric = reshap.copy()
-        self.egocentric[:, :, 1:] = reshap[:, :, 1:] - center.reshape(
-            (-1, *center.shape)
-        )  # subtract center nodes
+        #self.egocentric[:, :, 1:] = reshap[:, :, 1:] - center.reshape(
+        #    (-1, *center.shape)
+        #)  # subtract center nodes
+        self.egocentric[:, :, 1:] = reshap[:, :, 1:] - center[None, :, :]
         absol_traj = (
             self.egocentric[:, 1:, 1:] - self.egocentric[:, :-1, 1:]
         )  # trajectory
         self.euclidean = np.sqrt(
             np.abs((absol_traj[:, :, 0] ** 2) + (absol_traj[:, :, 1] ** 2))
         )  # euclidean trajectory
+
+        
+        if np.isnan(absol_traj).any():
+            print("NaNs in absol_traj")
+
 
         # use egocentric instead to eliminate crop jitter
         # subsize = int(self.points.shape[0]/self.n_nodes)
@@ -1000,6 +1067,8 @@ class PoserWidget(Container):
             # trajectory_matrix = subset[1:, 1:] - subset[:-1, 1:]
             trajectory_matrix = absol_traj[n]
             orth_matrix = np.flip(trajectory_matrix, axis=1)
+            if np.isnan(orth_matrix).any():
+                print("NaNs detected in orth_matrix BEFORE sign flip")
             orth_matrix[:, 0] = -orth_matrix[
                 :, 0
             ]  # flip elements in trajectory matrix so x is y and y is x and reverse sign of first element. Only works for 2D vectors
@@ -1007,10 +1076,14 @@ class PoserWidget(Container):
                 1:,
             ]  # shift trajectory by looking forward
             present_orth = orth_matrix[:-1,]  # subset all orth but last one
-            projection = np.abs(
-                (np.sum(future_trajectory * present_orth, axis=1))
-                / np.linalg.norm(present_orth, axis=1)
-            )  # project the dot product of each trajectory vector onto its orth vector
+            denom = np.linalg.norm(present_orth, axis=1)
+            denom[denom == 0] = 1
+            projection = np.abs(np.sum(future_trajectory * present_orth, axis=1) / denom)
+
+            #projection = np.abs(
+            #    (np.sum(future_trajectory * present_orth, axis=1))
+            #    / np.linalg.norm(present_orth, axis=1)
+            #)  # project the dot product of each trajectory vector onto its orth vector
             projection[np.isnan(projection)] = 0
             projections.append(projection)
 
@@ -1075,16 +1148,26 @@ class PoserWidget(Container):
         self, start, stop, confidence_threshold=0.8
     ):
         # subset confidence interval data for behaviour
-        subset = self.ci.iloc[:, start:stop]
+        if type(self.ci) == pd.DataFrame:
+            subset = self.ci.iloc[:, start:stop]
+            
+            proportion = np.sum(subset < confidence_threshold, axis=0) / subset.shape[0]
+            return (proportion[proportion > 0.33].shape[0] / proportion.shape[0]) <= 0.33
+            #low_ci_counts = subset[(subset < confidence_threshold)].count()
+            # average counts
+            #mean_low_ci_count = low_ci_counts.mean()
+            #print(f"Mean low confidence interval count is {mean_low_ci_count}")
+            # return boolean, True if ci counts are low (< 1) or high if ci_counts >1
+            #return mean_low_ci_count <= 1
+        else:
+            subset = self.ci[:, start:stop]
+            proportion = np.sum(subset < confidence_threshold, axis=0) / subset.shape[0]
+            return (proportion[proportion > 0.33].shape[0] / proportion.shape[0]) <= 0.33
 
-        # count number of values below threshold
-        low_ci_counts = subset[(subset < confidence_threshold)].count()
+        
 
-        # average counts
-        mean_low_ci_count = low_ci_counts.mean()
-
-        # return boolean, True if ci counts are low (< 1) or high if ci_counts >1
-        return mean_low_ci_count <= 1
+       
+        
 
     def plot_movement(self):
         """Plot movement as track in shape I, Z, Y, X.
@@ -1175,7 +1258,7 @@ class PoserWidget(Container):
         Parameters:
 
         event: widget event"""
-        print(f"DLC File Changed to {event}")
+        print(f"Pose h5 File Changed to {event}")
         try:
             self.h5_file = event.value.value
         except:
@@ -1522,7 +1605,7 @@ class PoserWidget(Container):
             )
             if exists > 0:
                 key = list(self.coords_data.keys())[self.ind - 1]
-
+                
                 self.x = self.coords_data[key]["x"]
                 self.y = self.coords_data[key]["y"]
                 self.ci = self.coords_data[key]["ci"]
@@ -1577,6 +1660,7 @@ class PoserWidget(Container):
         # reset viewer1d
 
         self.reset_viewer1d_layers()
+        self.add_frame_line()
 
         if self.extract_method == "orth":
             # if (self.points.shape[0] > 1e6) & (cp.cuda.runtime.getDeviceCount() >0):
@@ -1592,7 +1676,9 @@ class PoserWidget(Container):
             # self.plot_movement()
 
         elif self.extract_method == "egocentric":
-            self.egocentric_variance()
+            self.amd_threshold = self.amd_threshold_spinbox.value
+            self.confidence_threshold = self.confidence_threshold_spinbox.value
+            self.egocentric_variance(self.amd_threshold, self.confidence_threshold)
             self.movement_labels()
             # self.plot_movement()
         else:
@@ -1681,7 +1767,7 @@ class PoserWidget(Container):
                 ):  # exists > 0:
                     print("exists")
                     # use self.classification_data
-
+                    
                     # self.reset_layers()
 
                     # get points from here, too complicated to create tracks here i think
@@ -1700,7 +1786,7 @@ class PoserWidget(Container):
                     ]["ci"]
                     # self.im_subset = self.viewer.add_image(self.im[self.start:self.stop])
                     # self.points_layer = self.viewer.add_points(self.point_subset, size=5)
-
+                    self.plot_behaving_region()
                     self.im_subset.data = self.im[self.start : self.stop]
 
                     # self.im_subset = self.viewer.layers[0]
@@ -1920,9 +2006,8 @@ class PoserWidget(Container):
 
         classification_file.close()
 
-    def read_coords(self, h5_file):
-        """Reads coordinates from DLC files (h5 and csv). Optional data cleaning."""
-
+    def read_dlc_h5(self, h5_file):
+        # read dlc
         if ".h5" in str(h5_file):
             self.dlc_data = pd.read_hdf(h5_file)
             data_t = self.dlc_data.transpose()
@@ -2003,6 +2088,46 @@ class PoserWidget(Container):
             }  # think i need ci for the model too
         self.ind_spinbox.max = int(data_t.individuals.unique().shape[0])
 
+    def read_sleep_pose_estimation_h5(self, h5_file):
+        import h5py
+        """Reads h5 files from sleep pose estimation. Assumes format of x,y,ci for each bodypart in groups for each individual."""
+        sleep_data = h5py.File(h5_file, "r")
+
+        for individual in sleep_data.keys():
+            indv1 = sleep_data[individual]
+
+            x = indv1["x"][:]
+            y = indv1["y"][:]
+            ci = indv1["ci"][:]
+
+            self.coords_data[individual] = {
+                "x": x,
+                "y": y,
+                "ci": ci,
+            }
+         # set spinbox
+        self.ind_spinbox.max = len(self.coords_data)
+
+    def read_coords(self, h5_file):
+        """Reads coordinates from DLC files (h5 and csv). Optional data cleaning."""
+        if "poser" in str(h5_file):
+            self.read_poser_coords_file(h5_file)
+
+        else:
+            try:
+                self.read_dlc_h5(h5_file)
+            except:
+                print("not dlc format")
+                try:
+                    self.read_sleep_h5(h5_file)
+                except:
+                    print("not sleap format")
+                    try:
+                        self.read_poser_coords_file(h5_file)
+                    except:
+                        print("not poser coords format")
+        
+
     def add_behaviour(self, value):
         behaviour_label = self.add_behaviour_text.value
 
@@ -2047,7 +2172,93 @@ class PoserWidget(Container):
             self.predict_poses()
 
     def predict_poses(self):
-        try:
+        from ultralytics import YOLO
+        self.initialise_params()
+
+        # Load a model
+        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        self.chkpt = self.chkpt_dropdown.value
+         # spinbox
+
+        # check its not a yolo pretrainied
+        if "yolo" in self.chkpt:
+            self.model = YOLO(self.chkpt)
+        # it is one of our trained yolo models that need to be downloaded first
+        else:
+            url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/" + self.chkpt
+            self.model = YOLO(url)
+
+        if self.accelerator == "gpu":
+            self.device = torch.device("cuda")
+        elif self.accelerator == "cpu":
+            self.device = torch.device("cpu")
+
+        self.model.to(self.device)
+
+
+        h = self.im.shape[1]
+        nframes = nframes = self.im_subset.data.shape[0]
+        print(h)
+        results = self.model.track(
+            source=self.video_file,
+            imgsz=h - (h % 32),
+            #tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
+            stream=True,
+            max_det = 1
+        )
+
+        # check frame data already exists
+        if self.points_layer is None:
+            point_properties = {"confidence": [0], "ind": [0], "node": [0]}
+            self.points_layer = self.viewer.add_points(
+                np.zeros((1, 3)),
+                properties=point_properties,
+                size=self.im_subset.data.shape[2] / 100,
+            )
+
+        points = []
+
+        point_properties = self.points_layer.properties.copy()
+
+
+        for frame, result in enumerate(results):
+            keypoints = result.keypoints
+            track_ids = (
+                result.boxes.id.cpu().numpy().astype(int)
+                if result.boxes is not None and result.boxes.id is not None
+                else np.arange(len(keypoints))
+            )
+
+            if keypoints is None:
+                continue
+
+            xy = keypoints.xy.cpu().numpy()
+            conf = (
+                keypoints.conf.cpu().numpy()
+                if keypoints.conf is not None
+                else np.ones(xy.shape[:2])
+            )
+
+            for person_idx in range(xy.shape[0]):
+                for node_idx in range(xy.shape[1]):
+                    x, y = xy[person_idx, node_idx]
+                    points.append((frame, y, x))
+                    point_properties["confidence"] = np.append(
+                        point_properties["confidence"], conf[person_idx, node_idx]
+                    )
+                    point_properties["ind"] = np.append(
+                        point_properties["ind"], track_ids[person_idx]
+                    )
+                    point_properties["node"] = np.append(
+                        point_properties["node"], node_idx
+                    )
+
+        self.points_layer.data = np.concatenate(
+            (self.points_layer.data, np.array(points))
+        )
+        self.points_layer.properties = point_properties
+        self.convert_point_layer_to_coords_data(self.points_layer)
+        """        try:
             from mmpose.apis import (
                 init_pose_model,
                 inference_top_down_pose_model,
@@ -2150,45 +2361,97 @@ class PoserWidget(Container):
             # self.points_layer.properties["node"] = point_properties[
             #    "node"
             # ]
-            self.points_layer.properties = point_properties
+            self.points_layer.properties = point_properties"""
+    def convert_point_layer_to_coords_data(self, point_layer=None):
+        
+        if point_layer is None:
+            point_layer = self.points_layer
+        nframes = int(point_layer.data[:, 0].max() + 1)
+        df = pd.DataFrame(point_layer.properties)
+        df2 = pd.DataFrame(point_layer.data)
+        point_data = pd.concat([df, df2], axis=1)
+        point_data.drop(0, axis=0, inplace=True)
+        point_data.columns = ["ci", "ind", "node", "frame", "y", "x"]
 
-            df = pd.DataFrame(self.points_layer.properties)
-            df2 = pd.DataFrame(self.points_layer.data)
-            point_data = pd.concat([df, df2], axis=1)
-            point_data.drop(0, axis=0, inplace=True)
-            point_data.columns = ["ci", "ind", "node", "frame", "y", "x"]
+        print(point_data.head())
 
-            print(point_data.head())
+        for ind in point_data.ind.unique():
+            coord_data = {"x": None, "y": None, "ci": None}
 
-            for ind in point_data.ind.unique():
-                coord_data = {"x": None, "y": None, "ci": None}
+            subset = point_data[point_data.ind == ind]
 
-                subset = point_data[point_data.ind == ind]
+            for datum in ["x", "y", "ci"]:
+                empty = np.empty((self.n_nodes, nframes))
+                empty[:] = np.nan
+                subset_pivot = subset.pivot(
+                    columns="frame", values=datum, index="node"
+                )
 
-                for datum in ["x", "y", "ci"]:
-                    empty = np.empty((self.n_nodes, nframes))
-                    empty[:] = np.nan
-                    subset_pivot = subset.pivot(
-                        columns="frame", values=datum, index="node"
-                    )
+                empty_df = pd.DataFrame(empty)
+                empty_df.loc[:, subset_pivot.columns] = subset_pivot
 
-                    empty_df = pd.DataFrame(empty)
-                    empty_df.loc[:, subset_pivot.columns] = subset_pivot
+                coord_data[datum] = empty_df
 
-                    coord_data[datum] = empty_df
+            self.coords_data[ind] = coord_data  # {
+            # "x": subset.x,
+            # "y": subset.y,
+            # "z": subset.frame,
+            # "ci": subset.ci,
+            # }
+            print(self.coords_data[ind])
+        # set ind spinbox max to number of inds
+        self.ind_spinbox.max = len(self.coords_data)
+        # print(self.points_layer.properties)
 
-                self.coords_data[ind] = coord_data  # {
-                # "x": subset.x,
-                # "y": subset.y,
-                # "z": subset.frame,
-                # "ci": subset.ci,
-                # }
-                print(self.coords_data[ind])
+        # check for bounding boxes
+        # call inference_top_down_mode(self.model, im)
+        self.save_coords_data_to_h5(None)
 
-            # print(self.points_layer.properties)
+    def save_coords_data_to_h5(self, event):
+        """Saves coordinates data to h5 file."""
+        filename = str(self.video_file) + "_poser_coords.h5"
+        if os.path.exists(filename):
+            print(f"{filename} exists")
+            coords_file = tb.open_file(filename, mode="a", title="coords")
+        else:
+            coords_file = tb.open_file(filename, mode="w", title="coords")
 
-            # check for bounding boxes
-            # call inference_top_down_mode(self.model, im)
+        for ind in self.coords_data.keys():
+            ind_group = coords_file.create_group(
+                "/", str(ind), "Individual" + str(ind)
+            )
+            coords_array = np.array(
+                [
+                    self.coords_data[ind]["x"],
+                    self.coords_data[ind]["y"],
+                    self.coords_data[ind]["ci"],
+                ]
+            )
+            coords_file.create_array(
+                ind_group, "coords", coords_array, "Coordinates"
+            )
+
+        coords_file.close()
+
+
+    def read_poser_coords_file(self, h5_file):
+        """Reads coordinates from Poser h5 file."""
+        coords_file = tb.open_file(h5_file, mode="r", title="coords")
+        for ind in coords_file.list_nodes("/"):
+            coords_array = ind.coords[:]
+            self.coords_data[ind._v_name] = {
+                "x": coords_array[0],
+                "y": coords_array[1],
+                "ci": coords_array[2],
+            }
+        coords_file.close(
+
+
+        )
+        # set spinbox
+        self.ind_spinbox.max = len(self.coords_data)
+
+
 
     def predict_object_detection(self):
         self.initialise_params()
@@ -2735,6 +2998,44 @@ class PoserWidget(Container):
 
         self.zebdata.data = padded_bouts
         self.zebdata.labels = np.zeros(padded_bouts.shape[0])
+    
+    def download_behaviour_models(self):
+        import requests, zipfile, os, io
+        from tqdm import tqdm
+        url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/BehaviourModels.zip"
+
+        # define a output dir that works for any user and ensure it exists
+        output_dir = os.path.join(os.path.expanduser("~"), "PoseR_data")
+
+        # check if file already exists
+        if os.path.exists(os.path.join(output_dir, "BehaviourModels.zip")):
+            print("Behaviour models already downloaded.")
+            return
+        else:
+            os.makedirs(output_dir, exist_ok=True)
+            output_path = os.path.join(output_dir, "BehaviourModels.zip")
+
+            # Download the file
+            response = requests.get(url, stream=True)
+            response.raise_for_status()  # Raise an error for failed requests
+
+            # Save to file
+            with open(output_path, "wb") as f:
+                print("Downloading behaviour models...")
+                for chunk in tqdm(response.iter_content(chunk_size=8192)):
+                    f.write(chunk)
+
+            print("Download complete!")
+
+            # If it's a zip file, extract it
+            
+
+            if output_path.endswith(".zip"):
+                with zipfile.ZipFile(output_path, "r") as zip_ref:
+                    zip_ref.extractall(output_dir)
+                print("Extraction complete!")
+
+            assert os.path.exists(output_path), "Test data not found. Please run `make download_test_data` to download the test data."
 
     def predict_behaviours(self):
         data_cfg, graph_cfg, hparams = self.initialise_params()
@@ -2748,9 +3049,16 @@ class PoserWidget(Container):
 
         # load model check point,
         log_folder = os.path.join(self.decoder_data_dir, "lightning_logs")
-        self.chkpt = os.path.join(
-            log_folder, self.chkpt_dropdown.value
-        )  # spinbox
+
+        if self.chkpt_dropdown.value in ["zeblr.ckpt", "zebtensor.ckpt"]:
+            #pull from github release
+            self.download_behaviour_models()
+            output_dir = os.path.join(os.path.expanduser("~"), "PoseR_data")
+            self.chkpt = os.path.join(output_dir, "BehaviourModels/preprint", self.chkpt_dropdown.value)
+        else:
+            self.chkpt = os.path.join(
+                log_folder, self.chkpt_dropdown.value
+            )  # spinbox
 
         try: # old pytorch lightning
             model = st_gcn_aaai18_pylightning_3block.ST_GCN_18(
@@ -2770,7 +3078,7 @@ class PoserWidget(Container):
                 hparams=hparams,
             )
         except:
-            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, data_cfg=data_cfg)
+            model = st_gcn_aaai18_pylightning_3block.ST_GCN_18.load_from_checkpoint(self.chkpt, data_cfg=data_cfg, weights_only=False)
 
         # create trainer object,
         ## optimise trainer to just predict as currently its preparing data thinking its training

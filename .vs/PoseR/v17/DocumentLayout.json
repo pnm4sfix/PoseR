@@ -7,6 +7,10 @@
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:src\\poser\\_widget.py||{8B382828-6202-11D1-8870-0000F87579D2}"
     },
     {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\_loader.py||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:src\\poser\\_loader.py||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\_tests\\test_widget.py||{8B382828-6202-11D1-8870-0000F87579D2}",
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:src\\poser\\_tests\\test_widget.py||{8B382828-6202-11D1-8870-0000F87579D2}"
     },
@@ -25,10 +29,6 @@
     {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\models\\st_gcn_aaai18_pylightning_3block.py||{8B382828-6202-11D1-8870-0000F87579D2}",
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:src\\poser\\models\\st_gcn_aaai18_pylightning_3block.py||{8B382828-6202-11D1-8870-0000F87579D2}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\_loader.py||{8B382828-6202-11D1-8870-0000F87579D2}",
-      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:src\\poser\\_loader.py||{8B382828-6202-11D1-8870-0000F87579D2}"
     }
   ],
   "DocumentGroupContainers": [
@@ -42,7 +42,7 @@
           "Children": [
             {
               "$type": "Document",
-              "DocumentIndex": 2,
+              "DocumentIndex": 3,
               "Title": "setup.cfg",
               "DocumentMoniker": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\setup.cfg",
               "RelativeDocumentMoniker": "setup.cfg",
@@ -55,7 +55,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 3,
+              "DocumentIndex": 4,
               "Title": "napari.yaml",
               "DocumentMoniker": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\napari.yaml",
               "RelativeDocumentMoniker": "src\\poser\\napari.yaml",
@@ -68,7 +68,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 2,
               "Title": "test_widget.py",
               "DocumentMoniker": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\_tests\\test_widget.py",
               "RelativeDocumentMoniker": "src\\poser\\_tests\\test_widget.py",
@@ -81,7 +81,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 4,
+              "DocumentIndex": 5,
               "Title": "test_and_deploy.yml",
               "DocumentMoniker": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\.github\\workflows\\test_and_deploy.yml",
               "RelativeDocumentMoniker": ".github\\workflows\\test_and_deploy.yml",
@@ -93,7 +93,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 5,
+              "DocumentIndex": 6,
               "Title": "st_gcn_aaai18_pylightning_3block.py",
               "DocumentMoniker": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\models\\st_gcn_aaai18_pylightning_3block.py",
               "RelativeDocumentMoniker": "src\\poser\\models\\st_gcn_aaai18_pylightning_3block.py",
@@ -111,22 +111,23 @@
               "RelativeDocumentMoniker": "src\\poser\\_widget.py",
               "ToolTip": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\_widget.py",
               "RelativeToolTip": "src\\poser\\_widget.py",
-              "ViewState": "AgIAAFoJAAAAAAAAAAAIwDgJAABGAAAAAAAAAA==",
+              "ViewState": "AgIAAFMPAAAAAAAAAAAgwOgAAABBAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
               "WhenOpened": "2024-12-17T15:03:04.201Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 6,
+              "DocumentIndex": 1,
               "Title": "_loader.py",
               "DocumentMoniker": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\_loader.py",
               "RelativeDocumentMoniker": "src\\poser\\_loader.py",
               "ToolTip": "C:\\Users\\pierc\\OneDrive\\Documents\\PoseR\\src\\poser\\_loader.py",
               "RelativeToolTip": "src\\poser\\_loader.py",
-              "ViewState": "AgIAALQAAAAAAAAAAAAAABoBAAAYAAAAAAAAAA==",
+              "ViewState": "AgIAAJAAAAAAAAAAAAAAABoBAAAYAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001001|",
-              "WhenOpened": "2024-12-17T14:43:37.964Z"
+              "WhenOpened": "2024-12-17T14:43:37.964Z",
+              "EditorCaption": ""
             }
           ]
         }

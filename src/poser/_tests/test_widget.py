@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 from napari.layers import Image
-from poser import PoserWidget
+from poser._widget import PoserWidget
 import pandas as pd
 import numpy as np
 import requests
