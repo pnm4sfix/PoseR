@@ -22,9 +22,13 @@ https://napari.org/stable/plugins/index.html
 -->
 ![alt text](https://github.com/pnm4sfix/PoseR/blob/add-functionality/docs/logo.png?raw=true)
 
-## Installation
+## Installation of PoseR anaconda environment
 
-Create an anaconda environment:
+Download Anaconda-Navigator Desktop application using the following URL: 
+
+    https://www.anaconda.com/download/success
+
+Open up Anaconda-Navigator and launch anaconda_prompt from the home page. Creating the PoseR anaconda environment with the following commands: 
 
     conda create -n PoseR python=3.10
 
@@ -32,12 +36,11 @@ Activate PoseR environment:
 
     conda activate PoseR
 
-Install CUDA if using NVIDIA GPU:
+For the GPU version... Install CUDA IF you are using NVIDIA GPU:
 
     conda install -c "nvidia/label/cuda-11.7.0" cuda
 
-Install Pytorch:
-For GPU:
+Install Pytorch IF you are using NVIDIA GPU: 
 
     conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
 
@@ -54,14 +57,12 @@ You can install `PoseR` via [pip]:
 
     pip install PoseR-napari
 
-
-
-To install latest development version :
+To install latest issue developed version :
 
     pip install git+https://github.com/pnm4sfix/PoseR.git
 
 
-## Quick start
+## Quick Start Documentation to utilising PoseR software 
 
 https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/QuickStart.md
 
