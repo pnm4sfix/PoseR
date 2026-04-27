@@ -27,15 +27,24 @@ from pytorch_lightning import LightningModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from torchmetrics.functional.classification.accuracy import accuracy
-from torcheval.metrics.functional import multiclass_auprc
-from torcheval.metrics import MulticlassAUPRC   
-from torcheval.metrics.functional import binary_accuracy
-from torcheval.metrics import BinaryAUPRC
-from torcheval.metrics import MulticlassAccuracy, BinaryAccuracy
 import time
 
+try:
+    from torcheval.metrics.functional import multiclass_auprc
+    from torcheval.metrics import MulticlassAUPRC
+    from torcheval.metrics.functional import binary_accuracy
+    from torcheval.metrics import BinaryAUPRC
+    from torcheval.metrics import MulticlassAccuracy, BinaryAccuracy
+    from torcheval.metrics.functional import r2_score
+    _TORCHEVAL_AVAILABLE = True
+except ImportError:
+    _TORCHEVAL_AVAILABLE = False
+    # Provide no-op stubs so the class body can still be defined;
+    # methods that use these will raise at call-time if torcheval is absent.
+    multiclass_auprc = binary_accuracy = r2_score = None  # type: ignore[assignment]
+    MulticlassAUPRC = BinaryAUPRC = MulticlassAccuracy = BinaryAccuracy = None  # type: ignore[assignment]
+
 # from torchmetrics.regression import R2Score
-from torcheval.metrics.functional import r2_score
 
 # import sys
 # sys.path.insert(1, "../")

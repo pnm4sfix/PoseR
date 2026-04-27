@@ -4,15 +4,29 @@ visibility: public
 
 contributions:
   commands:
-    - id: PoseR-napari.make_qwidget
-      python_name: poser._widget:PoserWidget
-      title: Make Poser Widget
-    - id: PoseR-napari.make_hparams
-      python_name: poser._loader:HyperParams
-      title: Make hparams
-    - id: PoseR-napari.make_dataset
-      python_name: poser._loader:ZebData
-      title: Make dataset
+    - id: PoseR-napari.make_data_panel
+      python_name: poser._panels._factories:make_data_panel
+      title: Data
+    - id: PoseR-napari.make_inference_panel
+      python_name: poser._panels._factories:make_inference_panel
+      title: Inference
+    - id: PoseR-napari.make_analysis_panel
+      python_name: poser._panels._factories:make_analysis_panel
+      title: Analysis
+    - id: PoseR-napari.make_annotation_panel
+      python_name: poser._panels._factories:make_annotation_panel
+      title: Annotation
+    - id: PoseR-napari.make_train_panel
+      python_name: poser._panels._factories:make_train_panel
+      title: Train
   widgets:
-    - command: PoseR-napari.make_qwidget
-      display_name: PoseR
+    - command: PoseR-napari.make_data_panel
+      display_name: PoseR — Data
+    - command: PoseR-napari.make_inference_panel
+      display_name: PoseR — Inference
+    - command: PoseR-napari.make_analysis_panel
+      display_name: PoseR — Analysis
+    - command: PoseR-napari.make_annotation_panel
+      display_name: PoseR — Annotation
+    - command: PoseR-napari.make_train_panel
+      display_name: PoseR — Train

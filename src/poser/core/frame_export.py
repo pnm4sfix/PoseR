@@ -82,6 +82,12 @@ def save_frame_as_yolo(
     xy = keypoints[:, :2]
     valid = ~np.isnan(xy).any(axis=1)
     if not valid.any():
+        # All keypoints are NaN — write a zero-visibility label so the file
+        # is still created (trainer can filter it) rather than silently skipping
+        with open(lbl_path, "w") as f:
+            kp_tokens = ["0.000000 0.000000 0"] * len(keypoints)
+            f.write(f"{class_id} 0.500000 0.500000 1.000000 1.000000 " +
+                    " ".join(kp_tokens) + "\n")
         return img_path, lbl_path
 
     x_min, y_min = xy[valid].min(axis=0)

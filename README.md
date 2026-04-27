@@ -24,46 +24,104 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
-Create an anaconda environment:
+### 1. Create a conda environment
 
     conda create -n PoseR python=3.10
-
-Activate PoseR environment:
-
     conda activate PoseR
 
-Install CUDA if using NVIDIA GPU:
+### 2. Install PyTorch with GPU support
 
-    conda install -c "nvidia/label/cuda-11.7.0" cuda
+Visit https://pytorch.org/get-started/locally/ and select your OS, CUDA version, and conda/pip.
 
-Install Pytorch:
-For GPU:
+Example for **CUDA 12.1**:
 
-    conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
+    conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
 
-For CPU only version:
+Example for **CPU only**:
 
     conda install pytorch torchvision torchaudio cpuonly -c pytorch
 
-Install napari:
+> **Note:** Install PyTorch *before* PoseR so pip does not overwrite the GPU build with a CPU-only wheel.
 
-    pip install napari[all]==0.4.14 npe2==0.6.2 pydantic==1.10.4
+### 3. Install PoseR
 
-
-You can install `PoseR` via [pip]:
+Latest release from PyPI:
 
     pip install PoseR-napari
 
-
-
-To install latest development version :
+Latest development version from GitHub:
 
     pip install git+https://github.com/pnm4sfix/PoseR.git
+
+Editable install (for development):
+
+    git clone https://github.com/pnm4sfix/PoseR.git
+    cd PoseR
+    pip install -e .
+
+### 4. Launch napari
+
+    conda activate PoseR
+    napari
+
+Then open the PoseR panels from the **Plugins** menu.
 
 
 ## Quick start
 
 https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/QuickStart.md
+
+## Feature Status
+
+### Data Panel
+- [x] Add video files to session
+- [x] Add pose files to session (DLC `.h5`, DLC `.csv`, PoseR `.h5`, SLEAP `.h5`)
+- [x] Add a folder of matched video + pose file pairs
+- [x] **Add zarr array store as video** (multi-camera: splits axis-1 into one layer per camera)
+- [x] Activate session entry — loads video and pose layers into napari
+- [x] Lazy video loading via pyav + dask (no RAM spike on open)
+- [x] Mark entry as done / remove entry
+- [x] Navigate to next pending entry
+- [x] Save / load session to JSON
+- [ ] Progress bar during video load
+
+### Inference Panel
+- [x] Pose estimation mode (YOLO-based; bundled zebrafish model + custom `.pt`)
+- [x] Run pose estimation on active session entry
+- [x] **Zarr video inference** — chunk-aligned decompression, predict and track modes
+- [x] Batch pose estimation across all session entries
+- [x] Behaviour decoding mode (ST-GCN skeleton-graph model)
+- [x] Run behaviour prediction on active session entry
+- [x] Batch behaviour prediction across all session entries
+- [x] Export predictions (CSV / HDF5)
+- [ ] GPU device selector
+
+### Annotation Panel
+- [x] Manage behaviour label set (add / edit / remove)
+- [x] Navigate detected bouts (prev / next)
+- [x] Assign label to selected bout
+- [x] Bout-level statistics table
+- [x] Export annotations (CSV / HDF5)
+- [ ] Auto-populate labels from active session entry on load
+
+### Analysis Panel
+- [x] Bout detection — orthogonal movement method
+- [x] Bout detection — egocentric movement method
+- [x] Per-individual analysis
+- [x] Configurable FPS, velocity threshold, and minimum bout length
+- [x] Manual bout marking (set start / end frame)
+- [x] Bout list with napari frame-jump on selection
+- [x] Export frame slices as images
+- [ ] Ethogram visualisation (1-D time series viewer)
+
+### Training Panel
+- [x] Specify training data files manually
+- [x] Use labelled session entries as training data
+- [x] Configure model and hyperparameters via YAML config file
+- [x] Start / stop training subprocess
+- [x] Live training log stream in panel
+- [ ] Fine-tune from a pretrained checkpoint
+- [ ] Evaluate / test a trained model
 
 ## Contributing
 

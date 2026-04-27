@@ -13,8 +13,9 @@ Features:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
+import napari
 import numpy as np
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
@@ -36,9 +37,6 @@ from qtpy.QtWidgets import (
 from poser.core.bout_detection import manual_bout
 from poser.core.session import SessionManager
 
-if TYPE_CHECKING:
-    import napari
-
 
 class AnalysisPanel(QWidget):
     """Bout detection and manual annotation widget.
@@ -56,13 +54,13 @@ class AnalysisPanel(QWidget):
 
     def __init__(
         self,
-        viewer: "napari.Viewer",
-        session: SessionManager,
+        viewer: napari.Viewer,
+        session: Optional[SessionManager] = None,
         on_bouts_updated: Optional[Callable[[List[dict]], None]] = None,
     ):
         super().__init__()
         self._viewer = viewer
-        self._session = session
+        self._session = session or SessionManager(viewer=viewer)
         self._on_bouts_updated = on_bouts_updated
         self._detected_bouts: List[dict] = []
         self._manual_start: Optional[int] = None
@@ -105,6 +103,19 @@ class AnalysisPanel(QWidget):
         self._individual_combo.addItem("ind1")
         ind_row.addWidget(self._individual_combo)
         params_lay.addLayout(ind_row)
+
+        # Center node
+        center_row = QHBoxLayout()
+        center_row.addWidget(QLabel("Center node index:"))
+        self._center_node_spin = QSpinBox()
+        self._center_node_spin.setRange(0, 999)
+        self._center_node_spin.setValue(0)
+        self._center_node_spin.setToolTip(
+            "Index of the body-part used as the reference/centre node "
+            "for egocentric and orthogonal projection calculations."
+        )
+        center_row.addWidget(self._center_node_spin)
+        params_lay.addLayout(center_row)
 
         # Threshold
         thresh_row = QHBoxLayout()
@@ -228,7 +239,7 @@ class AnalysisPanel(QWidget):
             return
 
         # Build a manual bout using the active session entry's coords_data
-        entry = self._session.active_entry
+        entry = self._session.active
         coords_data = entry.coords_data if entry else None
         individual = self._individual_combo.currentText()
 
@@ -251,41 +262,65 @@ class AnalysisPanel(QWidget):
         self._btn_set_end.setEnabled(False)
 
     def _on_detect(self) -> None:
-        entry = self._session.active_entry
-        if entry is None or entry.coords_data is None:
+        entry = self._session.active
+        if entry is None or not entry.coords_data:
             QMessageBox.warning(self, "No data", "Load a pose file first.")
             return
 
         from poser.core.bout_detection import orthogonal_variance, egocentric_variance
 
-        individual = self._individual_combo.currentText()
         coords_data = entry.coords_data
 
+        # Keep the combo in sync with whatever individuals are in coords_data
+        available = list(coords_data.keys())
+        current = self._individual_combo.currentText()
+        if set(available) != {self._individual_combo.itemText(i)
+                               for i in range(self._individual_combo.count())}:
+            self._individual_combo.blockSignals(True)
+            self._individual_combo.clear()
+            self._individual_combo.addItems(available)
+            if current in available:
+                self._individual_combo.setCurrentText(current)
+            self._individual_combo.blockSignals(False)
+
+        individual = self._individual_combo.currentText()
         if individual not in coords_data:
-            available = list(coords_data.keys())
-            QMessageBox.warning(
-                self, "Individual not found",
-                f"'{individual}' not in data.  Available: {available}"
-            )
-            return
+            individual = available[0]
+            self._individual_combo.setCurrentText(individual)
 
         ind = coords_data[individual]
-        x = np.array(ind["x"])
-        y = np.array(ind["y"])
-        points = np.stack([x, y], axis=-1)  # (T, V, 2)
+        x = np.array(ind["x"]).astype(float)   # (n_nodes, n_frames)
+        y = np.array(ind["y"]).astype(float)
+        n_nodes, n_frames = x.shape
+
+        # Build flat (n_nodes * n_frames, 3) array with columns (frame, y, x)
+        # matching what the bout detection functions expect after reshape(n_nodes, -1, 3)
+        frame_idx = np.tile(np.arange(n_frames, dtype=float), n_nodes)
+        points = np.column_stack([frame_idx, y.flatten(), x.flatten()])
+        np.nan_to_num(points, copy=False)
 
         fps = self._fps_spin.value()
         method = self._method_combo.currentText()
-        n_nodes = points.shape[1] if points.ndim == 3 else 9
+        center_node = min(self._center_node_spin.value(), n_nodes - 1)
 
         try:
             if method == "egocentric":
-                bouts, *_ = egocentric_variance(points, fps=fps, n_nodes=n_nodes)
+                bouts, *_ = egocentric_variance(
+                    points, center_node=center_node, fps=fps, n_nodes=n_nodes
+                )
             else:
-                bouts, *_ = orthogonal_variance(points, fps=fps, n_nodes=n_nodes)
+                bouts, *_ = orthogonal_variance(
+                    points, center_node=center_node, fps=fps, n_nodes=n_nodes
+                )
         except Exception as exc:
             QMessageBox.critical(self, "Detection error", str(exc))
             return
+
+        # Detection functions return (start, end) tuples — convert to dicts
+        bouts = [
+            b if isinstance(b, dict) else {"start": int(b[0]), "end": int(b[1])}
+            for b in bouts
+        ]
 
         # Filter by duration
         min_f = self._min_frames_spin.value()
@@ -303,7 +338,7 @@ class AnalysisPanel(QWidget):
         except Exception:
             frame_idx = 0
 
-        entry = self._session.active_entry
+        entry = self._session.active
         export_type = self._export_type_combo.currentText()
 
         output_dir = QFileDialog.getExistingDirectory(self, "Select output directory")
@@ -318,7 +353,21 @@ class AnalysisPanel(QWidget):
             if frame_image is None:
                 QMessageBox.warning(self, "No image", "No image layer found in viewer.")
                 return
-            keypoints = self._get_keypoints(frame_idx, individual, entry)
+
+            # Prefer reading keypoints directly from the visible Points layer
+            # (already filtered, NaN-free) then fall back to coords_data
+            keypoints = self._get_keypoints_from_layer(frame_idx, individual)
+            if keypoints is None:
+                keypoints = self._get_keypoints(frame_idx, individual, entry)
+            if keypoints is None:
+                QMessageBox.warning(
+                    self, "No keypoints",
+                    f"No pose data found for individual '{individual}' "
+                    f"at frame {frame_idx}.\n\n"
+                    "Make sure a pose file is loaded and the correct "
+                    "individual is selected."
+                )
+                return
 
             from poser.core.frame_export import save_frame_as_yolo
             img_path, label_path = save_frame_as_yolo(
@@ -358,31 +407,91 @@ class AnalysisPanel(QWidget):
         self._bout_count_label.setText(f"Bouts detected: {len(self._detected_bouts)}")
 
     def _get_frame_image(self, frame_idx: int):
-        """Try to extract a 2-D image array from the active image layer."""
-        for layer in self._viewer.layers:
-            try:
-                import napari.layers
-                if isinstance(layer, napari.layers.Image):
-                    data = layer.data
-                    if data.ndim >= 3:
-                        return np.array(data[frame_idx])
-                    return np.array(data)
-            except Exception:
-                continue
-        return None
+        """Try to extract a 2-D image array from the *visible* active image layer."""
+        import napari.layers
+        # Prefer the visible layer; if none visible, take the first image layer
+        candidates = [
+            lyr for lyr in self._viewer.layers
+            if isinstance(lyr, napari.layers.Image)
+        ]
+        visible = [lyr for lyr in candidates if lyr.visible]
+        layer = visible[0] if visible else (candidates[0] if candidates else None)
+        if layer is None:
+            return None
+        try:
+            data = layer.data
+            if hasattr(data, 'compute'):   # dask array
+                frame = data[frame_idx].compute()
+            else:
+                frame = np.array(data[frame_idx])
+            return frame
+        except Exception:
+            return None
+
+    def _get_keypoints_from_layer(self, frame_idx: int, individual: str) -> Optional[np.ndarray]:
+        """Read (V, 3) keypoints for *frame_idx* from the visible napari Points layer.
+
+        Returns array of shape (V, 3) with columns x, y, confidence, or None.
+        """
+        import napari.layers
+        visible_pts = [
+            lyr for lyr in self._viewer.layers
+            if isinstance(lyr, napari.layers.Points) and lyr.visible
+        ]
+        if not visible_pts:
+            return None
+        layer = visible_pts[0]
+        pts = layer.data          # (N, 3): frame, y, x
+        props = layer.properties
+
+        frame_mask = pts[:, 0].astype(int) == frame_idx
+        if not frame_mask.any():
+            return None
+
+        xs = pts[frame_mask, 2]
+        ys = pts[frame_mask, 1]
+        confs = props.get("confidence", np.ones(len(xs)))[frame_mask]
+        inds  = props.get("ind",        np.zeros(len(xs), dtype=int))[frame_mask]
+
+        # map individual name to index
+        ind_names = sorted(set(inds))
+        try:
+            ind_idx = int(individual.replace("ind", "")) - 1
+        except Exception:
+            ind_idx = 0
+
+        ind_mask = inds == ind_idx
+        if not ind_mask.any():
+            # fallback: just use all points at this frame
+            ind_mask = np.ones(len(xs), dtype=bool)
+
+        return np.stack([xs[ind_mask], ys[ind_mask], confs[ind_mask]], axis=-1)
 
     def _get_keypoints(self, frame_idx: int, individual: str, entry) -> Optional[np.ndarray]:
         """Return ``(V, 2)`` keypoints for *frame_idx* from session coords_data."""
-        if entry is None or entry.coords_data is None:
+        if entry is None or not entry.coords_data:
             return None
         ind = entry.coords_data.get(individual)
         if ind is None:
             return None
-        x = np.array(ind["x"])
-        y = np.array(ind["y"])
-        if frame_idx >= len(x):
+        import pandas as pd
+        x = ind["x"]
+        y = ind["y"]
+        ci = ind.get("ci")
+        if isinstance(x, np.ndarray):
+            x = pd.DataFrame(x)
+            y = pd.DataFrame(y)
+            if ci is not None:
+                ci = pd.DataFrame(ci)
+        n_nodes, n_frames = x.shape
+        if frame_idx >= n_frames:
             return None
-        return np.stack([x[frame_idx], y[frame_idx]], axis=-1)  # (V, 2)
+        xs = x.iloc[:, frame_idx].to_numpy(dtype=float)  # (V,)
+        ys = y.iloc[:, frame_idx].to_numpy(dtype=float)  # (V,)
+        if ci is not None:
+            cs = ci.iloc[:, frame_idx].to_numpy(dtype=float)
+            return np.stack([xs, ys, cs], axis=-1)  # (V, 3)
+        return np.stack([xs, ys], axis=-1)  # (V, 2)
 
     def _ask_label(self):
         """Simple input dialog to ask for a behaviour label index."""

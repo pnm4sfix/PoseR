@@ -169,13 +169,13 @@ X = p.preprocess(coords, bouts, individual="ind1")
 **You have:** Raw video files only.  
 **You want:** Keypoint detections, then behaviour labels.
 
-### Step A — Run YOLOv8 pose estimation
+### Step A — Run YOLO11 pose estimation
 
 ```bash
 # From the command line, PoseR wraps Ultralytics YOLO:
 poser batch video1.mp4 video2.mp4 \
     --mode pose_estimation \
-    --weights yolov8m-pose.pt \
+    --weights yolo11m-pose.pt \
     --individuals 1 \
     --output pose_output/
 ```
@@ -206,7 +206,7 @@ job = BatchJob(
     pose_files=[],           # empty — video mode
     video_files=["v1.mp4", "v2.mp4"],
     mode="pose_estimation",
-    checkpoint="yolov8m-pose.pt",
+    checkpoint="yolo11m-pose.pt",
     config=cfg,
     output_dir="pose_output/",
 )
@@ -296,7 +296,7 @@ behaviour_schema:
 
 ## W4 — I want to fine-tune a pose estimation model for my species
 
-**You have:** A pre-trained YOLO pose model (e.g. `yolov8m-pose.pt`) and a small set
+**You have:** A pre-trained YOLO11 pose model (e.g. `yolo11m-pose.pt`, or a PoseR species release such as `zeb.pt`) and a small set
 of manually annotated images (or frames exported from videos).  
 **You want:** A species-specific YOLO model that detects *your* keypoints.
 
@@ -314,7 +314,7 @@ In **Analysis Panel**:
 
 ```bash
 poser finetune exported_frames/ \
-    --weights yolov8m-pose.pt \
+    --weights yolo11m-pose.pt \
     --keypoints 9 \
     --epochs 50 \
     --batch 16 \
@@ -328,7 +328,7 @@ from poser.training.finetune_yolo import finetune_yolo
 
 run_dir = finetune_yolo(
     images_dir="exported_frames/",
-    base_weights="yolov8m-pose.pt",
+    base_weights="yolo11m-pose.pt",
     num_keypoints=9,        # must match your skeleton
     epochs=50,
     freeze_backbone=True,   # only fine-tune the head
@@ -511,7 +511,7 @@ This is the complete end-to-end workflow for a new species or context.
 Day 1: Collect raw videos
          │
          ▼
-poser batch videos/ --mode pose_estimation --weights yolov8m-pose.pt
+poser batch videos/ --mode pose_estimation --weights yolo11m-pose.pt
          │
          ▼
 Day 2: Review and annotate in napari (W1)
@@ -741,7 +741,7 @@ Commands:
   train        Train a behaviour decoder from labelled pose files.
   predict      Run inference on a single pose file.
   batch        Batch process multiple files (pose estimation or behaviour).
-  finetune     Fine-tune a YOLOv8 pose model on exported frames.
+  finetune     Fine-tune a YOLO11 pose model on exported frames.
   skeleton     Manage skeleton definitions.
     list         List all built-in and registered skeletons.
     info NAME    Show node names, edges, and centre/head for a skeleton.

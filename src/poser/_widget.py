@@ -526,7 +526,7 @@ class PoserWidget(Container):
                     print(f"shape data shape is {len(shape_data)}")
                     print(f"labels are {labels}")
 
-                    if self.detection_backbone == "YOLOv8":
+                    if self.detection_backbone == "YOLO11":
                         h = self.im_subset.data[self.frame].shape[0]
                         results = self.model(
                             self.im_subset.data[self.frame], imgsz=h - (h % 32)
@@ -2176,7 +2176,7 @@ class PoserWidget(Container):
         self.initialise_params()
 
         # Load a model
-        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        #    self.model = YOLO("yolo11m.pt")  # load an official model
         self.chkpt = self.chkpt_dropdown.value
          # spinbox
 
@@ -2427,7 +2427,7 @@ class PoserWidget(Container):
         self.initialise_params()
 
         # Load a model
-        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        #    self.model = YOLO("yolo11m.pt")  # load an official model
         self.chkpt = self.chkpt_dropdown.value
          # spinbox
 
@@ -2642,11 +2642,11 @@ class PoserWidget(Container):
         #        "ultralytics/yolov5", "yolov5s", pretrained=True
         #    )
 
-        #elif self.detection_backbone == "YOLOv8":
+        #elif self.detection_backbone == "YOLO11":
         from ultralytics import YOLO
 
             # Load a model
-        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        #    self.model = YOLO("yolo11m.pt")  # load an official model
         self.chkpt = self.chkpt_dropdown.value
          # spinbox
 
@@ -2748,7 +2748,7 @@ class PoserWidget(Container):
             # map ids to boxes
             self.get_individual_ids()"""
 
-        #elif self.detection_backbone == "YOLOv8":
+        #elif self.detection_backbone == "YOLO11":
         h = self.im.shape[1]
         print(h)
         results = self.model.track(
@@ -3469,11 +3469,11 @@ class PoserWidget(Container):
                         "ultralytics/yolov5", "yolov5s", pretrained=True
                     )
 
-                elif self.detection_backbone == "YOLOv8":
+                elif self.detection_backbone == "YOLO11":
                     from ultralytics import YOLO
 
                     # Load a model
-                    self.model = YOLO("yolov8m.pt")
+                    self.model = YOLO("yolo11m.pt")
 
                 if self.accelerator == "gpu":
                     self.device = torch.device("cuda")

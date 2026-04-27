@@ -58,6 +58,7 @@ def egocentric_variance(
     points: np.ndarray,
     center_node: int,
     fps: float,
+    n_nodes: int = 0,
     *,
     amd_threshold: float = 2.0,
     confidence_threshold: float = 0.8,
@@ -68,12 +69,15 @@ def egocentric_variance(
     Parameters
     ----------
     points:
-        Shape ``(n_frames * n_nodes, 3)`` — same layout as ``self.points`` in
-        the widget (frame, y, x interleaved for each node).
+        Shape ``(n_nodes * n_frames, 3)`` — columns ``(frame, y, x)`` ordered
+        node-major (all frames for node 0, then all frames for node 1, …).
     center_node:
         Index of the reference/center node.
     fps:
         Frames per second.
+    n_nodes:
+        Number of skeleton nodes.  If 0 (default), inferred from
+        ``points`` (legacy behaviour, may be inaccurate).
     amd_threshold:
         Prominence multiplier relative to the MAD of the smoothed signal.
     confidence_threshold:
@@ -86,7 +90,10 @@ def egocentric_variance(
     (bouts, gauss_filtered, euclidean)
         *bouts* is a list of ``(start, end)`` tuples.
     """
-    n_nodes = int(points[:, 0].max()) + 1 if points.ndim == 2 else points.shape[0]
+    if n_nodes <= 0:
+        # Legacy fallback — unreliable if frame count > 1
+        n_nodes = int(round(points.shape[0] / (int(points[:, 0].max()) + 1)))
+        n_nodes = max(n_nodes, 1)
     reshap = points.reshape(n_nodes, -1, 3)
     reshap = np.nan_to_num(reshap)
 
@@ -277,7 +284,7 @@ def manual_bout(
 
     return {
         "start": start,
-        "stop": end,
+        "end": end,
         "coords": coords_flat,
         "ci": ci_flat,
         "classification": "",

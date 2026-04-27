@@ -1,7 +1,7 @@
 """
 training/finetune_yolo.py
 ~~~~~~~~~~~~~~~~~~~~~~~~~
-Fine-tune an Ultralytics YOLOv8 pose estimation model on new species data.
+Fine-tune an Ultralytics YOLO11 pose estimation model on new species data.
 
 This module provides :func:`finetune_yolo`, a thin wrapper around the
 Ultralytics Python API that:
@@ -20,7 +20,7 @@ Usage
     finetune_yolo(
         images_dir="exported_frames/train",
         val_dir="exported_frames/val",
-        base_weights="yolov8m-pose.pt",
+        base_weights="yolo11m-pose.pt",
         num_keypoints=9,
         epochs=50,
     )
@@ -39,7 +39,7 @@ def finetune_yolo(
     images_dir: str | Path,
     *,
     val_dir: Optional[str | Path] = None,
-    base_weights: str | Path = "yolov8m-pose.pt",
+    base_weights: str | Path = "yolo11m-pose.pt",
     data_yaml: Optional[str | Path] = None,
     num_keypoints: int = 9,
     num_classes: int = 1,
@@ -53,7 +53,7 @@ def finetune_yolo(
     freeze_backbone: bool = True,
     extra_kwargs: Optional[dict] = None,
 ) -> Path:
-    """Fine-tune a YOLOv8 pose model.
+    """Fine-tune a YOLO11 pose model.
 
     Parameters
     ----------
@@ -64,7 +64,7 @@ def finetune_yolo(
         Optional validation image directory.  When ``None``, a fraction of
         *images_dir* is used automatically by YOLO.
     base_weights:
-        A ``.pt`` model checkpoint to start from (YOLOv8/YOLOv11 pose).
+        A ``.pt`` model checkpoint to start from (YOLO11 pose, or a PoseR pretrained release e.g. ``zeb.pt``).
     data_yaml:
         Path to an existing ``data.yaml``.  If ``None``, one is generated
         automatically via :func:`~poser.core.frame_export.build_yolo_data_yaml`.
@@ -126,7 +126,7 @@ def finetune_yolo(
 
     model = YOLO(str(base_weights))
 
-    # Freeze backbone layers (0..9 in YOLOv8)
+    # Freeze backbone layers (0..9 in YOLO11)
     if freeze_backbone:
         freeze_layers = list(range(10))
         log.info("Freezing backbone layers 0–9.")

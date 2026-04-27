@@ -16,6 +16,25 @@ from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
+# Viewer-keyed singleton registry
+# ---------------------------------------------------------------------------
+
+_SESSION_REGISTRY: Dict[int, "SessionManager"] = {}
+
+
+def get_session(viewer) -> "SessionManager":
+    """Return the shared :class:`SessionManager` for *viewer*.
+
+    Creates one on first call and caches it by ``id(viewer)`` so every panel
+    always operates on the same session.
+    """
+    key = id(viewer)
+    if key not in _SESSION_REGISTRY:
+        _SESSION_REGISTRY[key] = SessionManager(viewer=viewer)
+    return _SESSION_REGISTRY[key]
+
+
+# ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
 
@@ -41,9 +60,9 @@ class SessionEntry:
         Arbitrary extra metadata (fps, species, etc.).
     """
 
-    pose_path: str
+    pose_path: str = ""
     video_path: str = ""
-    status: str = "loaded"
+    status: str = "pending"
     coords_data: Dict = field(default_factory=dict)
     classification_data: Dict = field(default_factory=dict)
     layer_names: List[str] = field(default_factory=list)
@@ -52,7 +71,11 @@ class SessionEntry:
     @property
     def stem(self) -> str:
         """Filename stem used for layer naming."""
-        return Path(self.pose_path).stem
+        if self.pose_path:
+            return Path(self.pose_path).stem
+        if self.video_path:
+            return Path(self.video_path).stem
+        return "entry"
 
     def layer_name(self, kind: str) -> str:
         """Return the napari layer name for this entry and layer kind.
@@ -120,8 +143,8 @@ class SessionManager:
     def add(self, pose_path: str, video_path: str = "", meta: Optional[Dict] = None) -> SessionEntry:
         """Add a new entry to the session queue."""
         entry = SessionEntry(
-            pose_path=pose_path,
-            video_path=video_path,
+            pose_path=str(pose_path) if pose_path else "",
+            video_path=str(video_path) if video_path else "",
             meta=meta or {},
         )
         self.entries.append(entry)
@@ -164,7 +187,7 @@ class SessionManager:
             raise IndexError(f"No session entry at index {idx}")
         self._active_idx = idx
         entry = self.entries[idx]
-        entry.status = "annotating"
+        entry.status = "active"
 
         if self.viewer is not None:
             # Collect all layer names belonging to other entries
@@ -208,11 +231,12 @@ class SessionManager:
     # Persistence
     # ------------------------------------------------------------------
 
-    def save(self) -> None:
-        """Write current session to ``session.json``."""
-        if not self.project_dir:
-            return
-        path = os.path.join(self.project_dir, self._SESSION_FILE)
+    def save(self, path=None) -> None:
+        """Write current session to *path* or ``session.json`` in project_dir."""
+        if path is None:
+            if not self.project_dir:
+                return
+            path = os.path.join(self.project_dir, self._SESSION_FILE)
         data = {
             "entries": [e.to_dict() for e in self.entries],
             "active_idx": self._active_idx,
@@ -220,10 +244,11 @@ class SessionManager:
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
 
-    def load(self) -> None:
-        """Restore session from ``session.json`` if it exists."""
-        path = os.path.join(self.project_dir, self._SESSION_FILE)
-        if not os.path.exists(path):
+    def load(self, path=None) -> None:
+        """Restore session from *path* or ``session.json`` in project_dir."""
+        if path is None:
+            path = os.path.join(self.project_dir, self._SESSION_FILE)
+        if not os.path.exists(str(path)):
             return
         with open(path) as f:
             data = json.load(f)

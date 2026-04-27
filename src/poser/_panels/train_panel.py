@@ -12,8 +12,9 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional
+from typing import List, Optional
 
+import napari
 from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
@@ -33,9 +34,6 @@ from qtpy.QtWidgets import (
 
 from poser.core.session import SessionManager
 
-if TYPE_CHECKING:
-    import napari
-
 
 class TrainPanel(QWidget):
     """Napari dock widget for launching behaviour decoder training.
@@ -53,12 +51,12 @@ class TrainPanel(QWidget):
 
     def __init__(
         self,
-        viewer: "napari.Viewer",
-        session: SessionManager,
+        viewer: napari.Viewer,
+        session: Optional[SessionManager] = None,
     ):
         super().__init__()
         self._viewer = viewer
-        self._session = session
+        self._session = session or SessionManager(viewer=viewer)
         self._training_proc: Optional[subprocess.Popen] = None
         self._training_files: List[Path] = []
         self._config_path: Optional[Path] = None

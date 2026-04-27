@@ -12,8 +12,9 @@ Features:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, List, Optional
+from typing import Dict, List, Optional
 
+import napari
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import (
     QComboBox,
@@ -34,9 +35,6 @@ from qtpy.QtWidgets import (
 from poser.core.io import save_to_h5
 from poser.core.session import SessionManager
 
-if TYPE_CHECKING:
-    import napari
-
 
 class AnnotationPanel(QWidget):
     """Widget for manually labelling behaviour bouts.
@@ -53,13 +51,13 @@ class AnnotationPanel(QWidget):
 
     def __init__(
         self,
-        viewer: "napari.Viewer",
-        session: SessionManager,
+        viewer: napari.Viewer,
+        session: Optional[SessionManager] = None,
         behaviour_labels: Optional[Dict[int, str]] = None,
     ):
         super().__init__()
         self._viewer = viewer
-        self._session = session
+        self._session = session or SessionManager(viewer=viewer)
         self._behaviour_labels: Dict[int, str] = behaviour_labels or {0: "behaviour_0", 1: "behaviour_1"}
         self._current_bouts: List[dict] = []
 

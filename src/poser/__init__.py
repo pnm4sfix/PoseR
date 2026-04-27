@@ -4,6 +4,24 @@ except ImportError:
     __version__ = "unknown"
 
 # ---------------------------------------------------------------------------
+# PyTorch availability check — shown once at import time
+# ---------------------------------------------------------------------------
+try:
+    import torch as _torch  # noqa: F401
+except ImportError:
+    import warnings
+    warnings.warn(
+        "\n"
+        "PyTorch is not installed. PoseR requires PyTorch to run inference and training.\n"
+        "Install the right build for your hardware:\n"
+        "  GPU (auto-detect):  poser install-torch\n"
+        "  GPU CUDA 12.6:      pip install torch torchvision "
+        "--extra-index-url https://download.pytorch.org/whl/cu126\n"
+        "  CPU only:           pip install torch torchvision\n",
+        stacklevel=2,
+    )
+
+# ---------------------------------------------------------------------------
 # Legacy napari widget — preserved for backwards compatibility
 # ---------------------------------------------------------------------------
 from poser._widget import PoserWidget

@@ -7,19 +7,22 @@ Entry-point:  ``poser``  (declared in ``setup.cfg``)
 
 Commands
 --------
-``poser train``          — train a behaviour decoder from labelled pose data
-``poser predict``        — run behaviour inference on a pose file
-``poser batch``          — run pose estimation + behaviour decoding on many files
-``poser finetune``       — fine-tune a YOLO pose model on exported frames
-``poser skeleton list``  — list built-in skeleton definitions
-``poser skeleton info``  — show details of a skeleton
-``poser model list``     — list registered / discovered model architectures
-``poser init``           — scaffold a new PoseR project directory
+``poser train``           — train a behaviour decoder from labelled pose data
+``poser predict``         — run behaviour inference on a pose file
+``poser batch``           — run pose estimation + behaviour decoding on many files
+``poser finetune``        — fine-tune a YOLO pose model on exported frames
+``poser install-torch``   — auto-detect CUDA and install matching PyTorch build
+``poser skeleton list``   — list built-in skeleton definitions
+``poser skeleton info``   — show details of a skeleton
+``poser model list``      — list registered / discovered model architectures
+``poser init``            — scaffold a new PoseR project directory
 """
 from __future__ import annotations
 
 import json
 import logging
+import re
+import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -42,6 +45,83 @@ app.add_typer(model_app, name="model")
 
 console = Console()
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# install-torch
+# ---------------------------------------------------------------------------
+
+# CUDA version → PyTorch wheel index mapping (extend as new builds are released)
+_CUDA_INDEX: list[tuple[tuple[int, int], str]] = [
+    ((12, 6), "https://download.pytorch.org/whl/cu126"),
+    ((12, 4), "https://download.pytorch.org/whl/cu124"),
+    ((12, 1), "https://download.pytorch.org/whl/cu121"),
+    ((11, 8), "https://download.pytorch.org/whl/cu118"),
+]
+
+
+def _detect_cuda() -> tuple[str, str]:
+    """Return (cuda_tag, index_url) by querying nvidia-smi, or CPU fallback."""
+    try:
+        result = subprocess.run(
+            ["nvidia-smi"], capture_output=True, text=True, timeout=10
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return "cpu", "https://download.pytorch.org/whl/cpu"
+
+    if result.returncode != 0:
+        return "cpu", "https://download.pytorch.org/whl/cpu"
+
+    m = re.search(r"CUDA Version:\s*(\d+)\.(\d+)", result.stdout)
+    if not m:
+        return "cpu", "https://download.pytorch.org/whl/cpu"
+
+    major, minor = int(m.group(1)), int(m.group(2))
+    for (req_major, req_minor), url in _CUDA_INDEX:
+        if (major, minor) >= (req_major, req_minor):
+            tag = url.rsplit("/", 1)[-1]  # e.g. "cu126"
+            return tag, url
+
+    return "cpu", "https://download.pytorch.org/whl/cpu"
+
+
+@app.command(name="install-torch")
+def install_torch(
+    force_cpu: bool = typer.Option(False, "--cpu", help="Force CPU-only install even if GPU detected."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the install command without running it."),
+) -> None:
+    """Auto-detect CUDA and install the matching PyTorch build.
+
+    Queries [bold]nvidia-smi[/bold] to determine the installed CUDA version, then
+    installs [cyan]torch[/cyan] and [cyan]torchvision[/cyan] from the appropriate
+    PyTorch wheel index.  Falls back to CPU if no GPU is found.
+    """
+    if force_cpu:
+        cuda_tag, index_url = "cpu", "https://download.pytorch.org/whl/cpu"
+    else:
+        cuda_tag, index_url = _detect_cuda()
+
+    cmd = [
+        sys.executable, "-m", "pip", "install",
+        "torch>=2.5", "torchvision>=0.20",
+        "--extra-index-url", index_url,
+    ]
+
+    console.print(f"[bold]Detected:[/bold] {cuda_tag}")
+    console.print(f"[bold]Command :[/bold] {' '.join(cmd)}\n")
+
+    if dry_run:
+        console.print("[yellow]Dry run — not installing.[/yellow]")
+        return
+
+    try:
+        subprocess.check_call(cmd)
+    except subprocess.CalledProcessError as exc:
+        console.print(f"[red]Install failed (exit code {exc.returncode}).[/red]")
+        raise typer.Exit(exc.returncode)
+
+    console.print("\n[green]✓ PyTorch installed successfully.[/green]")
+    console.print("  Verify with:  python -c \"import torch; print(torch.__version__, torch.cuda.is_available())\"")
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +274,7 @@ def batch(
 @app.command()
 def finetune(
     images_dir: Path = typer.Argument(..., help="YOLO-format training images directory."),
-    base_weights: Path = typer.Option(Path("yolov8m-pose.pt"), "--weights", "-w"),
+    base_weights: Path = typer.Option(Path("yolo11m-pose.pt"), "--weights", "-w"),
     val_dir: Optional[Path] = typer.Option(None, "--val-dir"),
     num_keypoints: int = typer.Option(9, "--keypoints", "-k"),
     epochs: int = typer.Option(50, "--epochs", "-e"),
@@ -203,7 +283,7 @@ def finetune(
     name: str = typer.Option("run", "--name"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
-    """Fine-tune a YOLOv8 pose model on exported frames."""
+    """Fine-tune a YOLO11 pose model on exported frames."""
     _setup_logging(verbose)
 
     from poser.training.finetune_yolo import finetune_yolo
