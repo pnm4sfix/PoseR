@@ -26,43 +26,49 @@ https://napari.org/stable/plugins/index.html
 
 ### 1. Create a conda environment
 
-    conda create -n PoseR python=3.10
-    conda activate PoseR
+```bash
+conda create -n PoseR python=3.10 -y
+conda activate PoseR
+```
 
 ### 2. Install PyTorch with GPU support
 
-Visit https://pytorch.org/get-started/locally/ and select your OS, CUDA version, and conda/pip.
+PyTorch must be installed **before** PoseR, otherwise pip may resolve a CPU-only build.
 
-Example for **CUDA 12.1**:
+**GPU (CUDA 12.6 — most current NVIDIA drivers):**
+```bash
+pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu126
+```
 
-    conda install pytorch torchvision torchaudio pytorch-cuda=12.1 -c pytorch -c nvidia
+**Other CUDA versions** — pick the matching tag from https://pytorch.org/get-started/locally/  
+e.g. `cu124`, `cu121`, `cu118`.
 
-Example for **CPU only**:
-
-    conda install pytorch torchvision torchaudio cpuonly -c pytorch
-
-> **Note:** Install PyTorch *before* PoseR so pip does not overwrite the GPU build with a CPU-only wheel.
+**CPU only:**
+```bash
+pip install torch torchvision
+```
 
 ### 3. Install PoseR
 
-Latest release from PyPI:
+**Latest development branch from GitHub (recommended):**
+```bash
+pip install "git+https://github.com/pnm4sfix/PoseR.git@multianimal"
+```
 
-    pip install PoseR-napari
+**Editable install (for development):**
+```bash
+git clone -b multianimal https://github.com/pnm4sfix/PoseR.git
+cd PoseR
+pip install -e .
+```
 
-Latest development version from GitHub:
-
-    pip install git+https://github.com/pnm4sfix/PoseR.git
-
-Editable install (for development):
-
-    git clone https://github.com/pnm4sfix/PoseR.git
-    cd PoseR
-    pip install -e .
+> **Heads up:** Do **not** use `pip install --user` or run the install outside of your conda env — it puts packages in your user site-packages and they will leak into every Python 3.10 environment on your machine.
 
 ### 4. Launch napari
 
-    conda activate PoseR
-    napari
+```bash
+napari
+```
 
 Then open the PoseR panels from the **Plugins** menu.
 
