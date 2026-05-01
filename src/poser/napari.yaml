@@ -19,6 +19,9 @@ contributions:
     - id: PoseR-napari.make_train_panel
       python_name: poser._panels._factories:make_train_panel
       title: Train
+    - id: PoseR-napari.make_ethogram_panel
+      python_name: poser._panels._factories:make_ethogram_panel
+      title: Ethogram
   widgets:
     - command: PoseR-napari.make_data_panel
       display_name: PoseR — Data
@@ -30,3 +33,5 @@ contributions:
       display_name: PoseR — Annotation
     - command: PoseR-napari.make_train_panel
       display_name: PoseR — Train
+    - command: PoseR-napari.make_ethogram_panel
+      display_name: PoseR — Ethogram

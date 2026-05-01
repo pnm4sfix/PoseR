@@ -23,6 +23,7 @@ from typing import Optional
 
 import lightning.pytorch as pl
 from lightning.pytorch.callbacks import (
+    Callback,
     EarlyStopping,
     LearningRateMonitor,
     ModelCheckpoint,
@@ -31,6 +32,29 @@ from lightning.pytorch.callbacks import (
 from poser.training.config import TrainingConfig
 
 log = logging.getLogger(__name__)
+
+
+class _PrintEpochCallback(Callback):
+    """Prints a plain-text epoch summary to stdout after every train epoch.
+
+    Uses ``print(..., flush=True)`` so output streams immediately through
+    pipes (e.g. the napari training panel subprocess).
+    """
+
+    def on_train_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:  # noqa: N802
+        metrics = trainer.callback_metrics
+        parts = [f"Epoch {trainer.current_epoch + 1}/{trainer.max_epochs}"]
+        for key in ("train_loss", "val_loss", "train_acc", "val_acc"):
+            if key in metrics:
+                parts.append(f"{key}={metrics[key]:.4f}")
+        # Fallback: print whatever is available
+        if len(parts) == 1:
+            for k, v in metrics.items():
+                try:
+                    parts.append(f"{k}={float(v):.4f}")
+                except (TypeError, ValueError):
+                    pass
+        print("  ".join(parts), flush=True)
 
 
 class PoseRTrainer:
@@ -80,7 +104,9 @@ class PoseRTrainer:
         train_loader:
             A :class:`torch.utils.data.DataLoader` for training data.
         val_loader:
-            Optional validation dataloader.
+            Optional validation dataloader.  When ``None``, callbacks that
+            monitor ``val_loss`` are automatically switched to ``train_loss``
+            so the trainer does not crash or silently skip checkpointing.
         ckpt_path:
             Resume from a checkpoint.
 
@@ -89,14 +115,20 @@ class PoseRTrainer:
         trainer : pl.Trainer
             The configured trainer after training completes.
         """
-        trainer = self._build_trainer()
+        trainer = self._build_trainer(has_val=val_loader is not None)
         self._trainer = trainer
 
         if self.config.optimiser.auto_lr:
             from lightning.pytorch.tuner import Tuner
+            # Store external loaders on model so val_dataloader() / train_dataloader()
+            # hooks return them if Lightning's LR-finder bypasses external sources.
+            if getattr(model, "_external_dataloaders", False):
+                model._ext_train_dl = train_loader
+                model._ext_val_dl = val_loader
             tuner = Tuner(trainer)
-            tuner.lr_find(model, train_dataloaders=train_loader)
-            log.info("Auto LR: new learning_rate = %.2e", model.hparams.learning_rate)
+            tuner.lr_find(model, train_dataloaders=train_loader,
+                          val_dataloaders=val_loader)
+            log.info("Auto LR: new learning_rate = %.2e", model.learning_rate)
 
         pl.seed_everything(self.config.trainer.seed, workers=True)
         trainer.fit(
@@ -110,13 +142,13 @@ class PoseRTrainer:
     def test(self, model: pl.LightningModule, test_loader) -> list:
         """Run test loop — requires a prior :meth:`fit` call."""
         if self._trainer is None:
-            self._trainer = self._build_trainer()
+            self._trainer = self._build_trainer(has_val=False)
         return self._trainer.test(model, dataloaders=test_loader)
 
     def predict(self, model: pl.LightningModule, dataloader) -> list:
         """Run predict loop."""
         if self._trainer is None:
-            self._trainer = self._build_trainer()
+            self._trainer = self._build_trainer(has_val=False)
         return self._trainer.predict(model, dataloaders=dataloader)
 
     @property
@@ -133,22 +165,40 @@ class PoseRTrainer:
     # Internal builder
     # ------------------------------------------------------------------
 
-    def _build_trainer(self) -> pl.Trainer:
+    def _build_trainer(self, *, has_val: bool = True) -> pl.Trainer:
         tcfg = self.config.trainer
         run_dir = self.config.run_dir
         run_dir.mkdir(parents=True, exist_ok=True)
 
+        import torch
+        torch.set_float32_matmul_precision("medium")  # use Tensor Cores if available
+
+        # When there is no validation set, fall back to monitoring train_loss
+        # so ModelCheckpoint and EarlyStopping don't crash or silently skip.
+        monitor_metric = "val_loss" if has_val else "train_loss"
+        ckpt_filename = (
+            "best-{epoch:03d}-{val_loss:.4f}"
+            if has_val
+            else "best-{epoch:03d}-{train_loss:.4f}"
+        )
+        log.info(
+            "Checkpoint / EarlyStopping monitor: %s%s",
+            monitor_metric,
+            "" if has_val else " (no val set — using train_loss)",
+        )
+
         callbacks = [
+            _PrintEpochCallback(),
             ModelCheckpoint(
                 dirpath=str(run_dir / "checkpoints"),
-                filename="best-{epoch:03d}-{val_loss:.4f}",
-                monitor="val_loss",
+                filename=ckpt_filename,
+                monitor=monitor_metric,
                 mode="min",
                 save_top_k=3,
                 save_last=True,
             ),
             EarlyStopping(
-                monitor="val_loss",
+                monitor=monitor_metric,
                 patience=tcfg.early_stopping_patience,
                 mode="min",
             ),
@@ -179,4 +229,6 @@ class PoseRTrainer:
             callbacks=callbacks,
             logger=logger,
             default_root_dir=str(run_dir),
+            enable_progress_bar=False,   # tqdm overwrites via \r — invisible in a Qt pipe
+            enable_model_summary=True,
         )

@@ -75,6 +75,96 @@ def _resolve_model(name: str):
 
 
 # ---------------------------------------------------------------------------
+# Pose-format converters (used by inference panel)
+# ---------------------------------------------------------------------------
+
+def _coords_dict_to_ctvm(coords_data: dict) -> np.ndarray:
+    """Convert a ``SessionEntry.coords_data`` dict → ``(C=3, T, V, M)`` float32.
+
+    ``coords_data`` maps individual-name → ``{"x": array_VxT, "y": ..., "ci": ...}``.
+    Arrays may be pandas DataFrames or numpy arrays; 1-D arrays are treated as
+    a single-node recording.
+    """
+    individuals = list(coords_data.keys())
+    M = len(individuals)
+    first = coords_data[individuals[0]]
+    x0 = np.nan_to_num(np.array(first["x"], dtype=np.float32))
+    if x0.ndim == 1:
+        x0 = x0[np.newaxis, :]   # (1, T)
+    V, T = x0.shape
+    ctvm = np.zeros((3, T, V, M), dtype=np.float32)
+    for m_idx, ind in enumerate(individuals):
+        d = coords_data[ind]
+        x  = np.nan_to_num(np.array(d["x"],  dtype=np.float32))
+        y  = np.nan_to_num(np.array(d["y"],  dtype=np.float32))
+        ci = np.nan_to_num(np.array(d["ci"], dtype=np.float32))
+        if x.ndim == 1:
+            x = x[np.newaxis, :]; y = y[np.newaxis, :]; ci = ci[np.newaxis, :]
+        ctvm[0, :, :, m_idx] = x.T   # (V,T).T → (T,V)
+        ctvm[1, :, :, m_idx] = y.T
+        ctvm[2, :, :, m_idx] = ci.T
+    return ctvm
+
+
+def _resolve_pose_ctvm(entry) -> tuple:
+    """Return ``(ctvm_array, out_stem)`` for a SessionEntry.
+
+    Resolution order:
+      1. ``*_pose.npy`` — pre-converted CTVM, loaded directly.
+      2. ``.h5`` / ``.csv`` — try ``convert_dlc_to_ctvm`` (DLC), then
+         ``read_coords`` (SLEAP / PoseR-native), then ``_coords_dict_to_ctvm``.
+      3. ``entry.coords_data`` already in memory (any format loaded by Data panel).
+
+    Raises ``ValueError`` with a human-readable message if nothing works.
+    """
+    pose_path = entry.pose_path or ""
+    p = Path(pose_path) if pose_path else None
+
+    # 1. Pre-converted CTVM numpy array ──────────────────────────────
+    if p and p.exists() and p.name.endswith("_pose.npy"):
+        arr = np.load(str(p)).astype(np.float32)
+        if arr.ndim == 3:
+            arr = arr[..., np.newaxis]
+        return arr, p.stem[:-5]   # strip trailing "_pose"
+
+    # 2. Raw pose file (DLC / SLEAP / PoseR-native) ───────────────────
+    if p and p.exists():
+        stem = p.stem
+        ext  = p.suffix.lower()
+        # 2a. DLC h5/csv
+        if ext in (".h5", ".csv"):
+            try:
+                from poser.core.io import convert_dlc_to_ctvm
+                arr = convert_dlc_to_ctvm(str(p)).astype(np.float32)
+                return arr, stem
+            except Exception:
+                pass
+        # 2b. Generic reader (handles SLEAP, PoseR-native, multi-animal DLC)
+        try:
+            from poser.core.io import read_coords
+            coords = read_coords(str(p))
+            if coords:
+                return _coords_dict_to_ctvm(coords), stem
+        except Exception:
+            pass
+
+    # 3. coords_data already in memory ────────────────────────────────
+    if entry.coords_data:
+        stem = p.stem if p else "recording"
+        return _coords_dict_to_ctvm(entry.coords_data), stem
+
+    raise ValueError(
+        f"Could not build a pose array from the active session entry.\n"
+        f"Pose path: {pose_path or '(none)'}\n\n"
+        f"Supported inputs:\n"
+        f"  • *_pose.npy  (already converted CTVM array)\n"
+        f"  • DLC .h5 / .csv\n"
+        f"  • SLEAP .h5\n"
+        f"  • Any format already loaded in the Data panel"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Panel
 # ---------------------------------------------------------------------------
 
@@ -84,6 +174,8 @@ class InferencePanel(QWidget):
     _progress_signal = Signal(int)
     _status_signal = Signal(str)
     _imgsz_signal = Signal(int)
+    # emitted after behaviour inference: (predictions_array, checkpoint_path)
+    predictions_ready = Signal(object, object)
 
     def __init__(
         self,
@@ -97,6 +189,7 @@ class InferencePanel(QWidget):
         self._bouts_getter = bouts_getter
         self._behaviour_checkpoint: Optional[Path] = None
         self._predictions: Dict[int, int] = {}
+        self._predictions_array: Optional[np.ndarray] = None  # per-frame labels
         self._add_points_signal_data = None
 
         self._build_ui()
@@ -746,63 +839,200 @@ class InferencePanel(QWidget):
                                 "Please select a decoder checkpoint first.")
             return
         entry = self._session.active
-        if entry is None or not entry.coords_data:
-            QMessageBox.warning(self, "No data",
-                                "No pose data loaded in the active session entry.")
+        if entry is None:
+            QMessageBox.warning(self, "No session entry",
+                                "Activate a session entry in the Data panel first.")
             return
-        bouts = self._bouts_getter() if self._bouts_getter else []
-        if not bouts:
-            QMessageBox.warning(self, "No bouts",
-                                "Run bout detection in the Analysis Panel first.")
+
+        # Quick check: is there anything to work with at all?
+        if not (entry.pose_path or entry.coords_data):
+            QMessageBox.warning(
+                self, "No pose data",
+                "No pose file or in-memory coords found for this session entry.\n"
+                "Load a DLC / SLEAP / *_pose.npy file in the Data panel first.",
+            )
             return
-        from poser.api import PoseR
-        try:
-            poser = PoseR()
-            X = poser.preprocess(entry.coords_data, bouts)
-            self._predict_from_array(X, bouts)
-        except Exception as exc:
-            QMessageBox.critical(self, "Inference error", str(exc))
-            return
-        self._result_label.setText(
-            f"Predicted {len(self._predictions)} bouts. "
-            f"Labels: {list(self._predictions.values())}"
-        )
+
+        self._status_text.clear()
+        self._progress_bar.setVisible(True)
+        self._progress_bar.setValue(0)
+        ckpt = self._behaviour_checkpoint
+
+        def run():
+            try:
+                import torch, types
+                from torch.utils.data import DataLoader
+
+                pose, out_stem = _resolve_pose_ctvm(entry)
+                if pose.ndim == 3:
+                    pose = pose[..., np.newaxis]
+                C, T_total, V, M = pose.shape
+                self._status_signal.emit(
+                    f"Loaded pose: C={C} T={T_total} V={V} M={M}"
+                )
+
+                # Read hparams from checkpoint
+                dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                raw_ckpt = torch.load(str(ckpt), map_location="cpu", weights_only=False)
+                hp = raw_ckpt.get("hyper_parameters", {})
+                data_cfg   = hp.get("data_cfg", {})
+                T2         = int(data_cfg.get("T2", 100))
+                transform  = data_cfg.get("transform", ["center", "align", "pad"])
+                center_node = int(hp.get("graph_cfg", {}).get("center", 0))
+                head_node  = int(data_cfg.get("head", 0))
+                num_class  = int(hp.get("num_class", 2))
+                dropout    = float(hp.get("dropout", 0.5))
+
+                from poser.models.st_gcn_aaai18_pylightning_3block import ST_GCN_18
+                _hparams = types.SimpleNamespace(
+                    learning_rate=1e-4, batch_size=64, dropout=dropout
+                )
+                model = ST_GCN_18.load_from_checkpoint(
+                    str(ckpt), map_location=dev, hparams=_hparams
+                )
+                model.eval()
+                model.to(dev)
+                self._status_signal.emit("Model loaded.")
+
+                from poser.core.dataset import PoseDataset
+                dummy_labels = np.zeros(T_total, dtype=np.int64)
+                ds = PoseDataset(
+                    data=pose, labels=dummy_labels,
+                    preprocess_frame=True, window_size=T2,
+                    transform=transform, augmentation=None,
+                    center_node=center_node, head_node=head_node,
+                    T=T2, num_class=num_class, C=C,
+                )
+                dl = DataLoader(ds, batch_size=64, shuffle=False, num_workers=0)
+
+                all_preds: list = []
+                with torch.no_grad():
+                    for bi, (x, _) in enumerate(dl):
+                        logits = model(x.to(dev))
+                        all_preds.extend(logits.argmax(dim=-1).cpu().tolist())
+                        self._progress_signal.emit(
+                            int(100 * min((bi + 1) * 64, T_total) / T_total)
+                        )
+
+                predictions = np.array(all_preds, dtype=np.int64)
+                self._predictions_array = predictions
+                self._predictions = {i: int(p) for i, p in enumerate(predictions)}
+
+                # Save alongside the source pose file
+                out_dir = Path(entry.pose_path).parent if entry.pose_path else Path.cwd()
+                out_npy = out_dir / f"{out_stem}_predictions.npy"
+                out_csv = out_npy.with_suffix(".csv")
+                np.save(str(out_npy), predictions)
+                import csv
+                with open(out_csv, "w", newline="") as fh:
+                    w = csv.writer(fh)
+                    w.writerow(["frame", "predicted_label"])
+                    for fi, lbl in enumerate(predictions):
+                        w.writerow([fi, int(lbl)])
+
+                unique, counts = np.unique(predictions, return_counts=True)
+                summary = "  ".join(
+                    f"cls{c}:{n}" for c, n in zip(unique, counts)
+                )
+                self._status_signal.emit(
+                    f"Done: {T_total} frames.  {summary}\n"
+                    f"Saved: {out_npy.name}"
+                )
+                self._progress_signal.emit(100)
+                # Notify ethogram panel
+                self.predictions_ready.emit(predictions, ckpt)
+
+            except Exception as exc:
+                import traceback
+                self._status_signal.emit(f"ERROR: {exc}\n{traceback.format_exc()}")
+
+        threading.Thread(target=run, daemon=True).start()
 
     def _on_predict_batch(self) -> None:
         if not self._behaviour_checkpoint:
             QMessageBox.warning(self, "No checkpoint",
                                 "Please select a decoder checkpoint first.")
             return
-        if not self._session.entries:
-            QMessageBox.warning(self, "Empty session",
-                                "Add files to the session first.")
+        entries_with_npy = [
+            e for e in self._session.entries
+            if (e.pose_path and Path(e.pose_path).exists()) or e.coords_data
+        ]
+        if not entries_with_npy:
+            QMessageBox.warning(
+                self, "No pose files",
+                "No session entries have a pose file or in-memory coords.\n"
+                "Load DLC / SLEAP / *_pose.npy files in the Data panel first.",
+            )
             return
         self._progress_bar.setVisible(True)
         self._progress_bar.setValue(0)
         self._status_text.clear()
+        ckpt = self._behaviour_checkpoint
 
         def run():
-            from poser.core.batch import BatchJob
-            from poser.api import PoseR
-            poser = PoseR()
+            import torch, types
+            from torch.utils.data import DataLoader
 
-            def cb(done, total, path):
-                self._progress_signal.emit(int(100 * done / total))
-                self._status_signal.emit(f"[{done}/{total}] {path}")
+            try:
+                dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                raw_ckpt = torch.load(str(ckpt), map_location="cpu", weights_only=False)
+                hp = raw_ckpt.get("hyper_parameters", {})
+                data_cfg    = hp.get("data_cfg", {})
+                T2          = int(data_cfg.get("T2", 100))
+                transform   = data_cfg.get("transform", ["center", "align", "pad"])
+                center_node = int(hp.get("graph_cfg", {}).get("center", 0))
+                head_node   = int(data_cfg.get("head", 0))
+                num_class   = int(hp.get("num_class", 2))
+                dropout     = float(hp.get("dropout", 0.5))
 
-            job = BatchJob(
-                pose_files=[e.pose_path for e in self._session.entries],
-                mode="behaviour",
-                checkpoint=self._behaviour_checkpoint,
-                config=poser.config,
-                output_dir=Path("batch_output"),
-                n_individuals=1,
-                progress_callback=cb,
-            )
-            results = job.run()
-            n_ok = sum(1 for r in results if r.success)
-            self._status_signal.emit(f"Done: {n_ok}/{len(results)} succeeded.")
-            self._progress_signal.emit(100)
+                from poser.models.st_gcn_aaai18_pylightning_3block import ST_GCN_18
+                _hparams = types.SimpleNamespace(
+                    learning_rate=1e-4, batch_size=64, dropout=dropout
+                )
+                model = ST_GCN_18.load_from_checkpoint(
+                    str(ckpt), map_location=dev, hparams=_hparams
+                )
+                model.eval()
+                model.to(dev)
+
+                for i, entry in enumerate(entries_with_npy):
+                    self._status_signal.emit(
+                        f"[{i+1}/{len(entries_with_npy)}] {Path(entry.pose_path).name if entry.pose_path else 'in-memory'}"
+                    )
+                    pose, out_stem = _resolve_pose_ctvm(entry)
+                    if pose.ndim == 3:
+                        pose = pose[..., np.newaxis]
+                    C, T_total, V, M = pose.shape
+
+                    from poser.core.dataset import PoseDataset
+                    ds = PoseDataset(
+                        data=pose,
+                        labels=np.zeros(T_total, dtype=np.int64),
+                        preprocess_frame=True, window_size=T2,
+                        transform=transform, augmentation=None,
+                        center_node=center_node, head_node=head_node,
+                        T=T2, num_class=num_class, C=C,
+                    )
+                    dl = DataLoader(ds, batch_size=64, shuffle=False, num_workers=0)
+                    preds: list = []
+                    with torch.no_grad():
+                        for x, _ in dl:
+                            preds.extend(model(x.to(dev)).argmax(dim=-1).cpu().tolist())
+
+                    arr = np.array(preds, dtype=np.int64)
+                    out_dir = Path(entry.pose_path).parent if entry.pose_path else Path.cwd()
+                    out_npy = out_dir / f"{out_stem}_predictions.npy"
+                    np.save(str(out_npy), arr)
+                    self._status_signal.emit(f"  -> {out_npy.name}")
+                    self._progress_signal.emit(int(100 * (i + 1) / len(entries_with_npy)))
+                    self.predictions_ready.emit(arr, ckpt)
+
+                self._status_signal.emit(
+                    f"Batch complete: {len(entries_with_npy)} files."
+                )
+            except Exception as exc:
+                import traceback
+                self._status_signal.emit(f"ERROR: {exc}\n{traceback.format_exc()}")
 
         threading.Thread(target=run, daemon=True).start()
 

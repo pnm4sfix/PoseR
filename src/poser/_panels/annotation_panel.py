@@ -14,14 +14,16 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Optional
 
+import numpy as np
 import napari
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QComboBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -32,22 +34,21 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from poser.core.io import save_to_h5
 from poser.core.session import SessionManager
 
 
 class AnnotationPanel(QWidget):
     """Widget for manually labelling behaviour bouts.
 
-    Parameters
-    ----------
-    viewer:
-        The running ``napari.Viewer`` instance.
-    session:
-        Shared :class:`~poser.core.session.SessionManager`.
-    behaviour_labels:
-        Mapping ``{index: label_name}``.
+    Signals
+    -------
+    annotations_changed(np.ndarray)
+        Emitted with a per-frame label array (dtype int64) whenever a bout
+        label is assigned or the bout list is reloaded.  Connected by the
+        factory to ``EthogramPanel.load_annotations``.
     """
+
+    annotations_changed = Signal(object)
 
     def __init__(
         self,
@@ -70,6 +71,12 @@ class AnnotationPanel(QWidget):
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
+
+        # ── Load bouts from Analysis panel ───────────────────────────
+        btn_load = QPushButton("↻  Load Bouts from Analysis Panel")
+        btn_load.setToolTip("Reads bouts saved by the Analysis panel for the active session entry.")
+        btn_load.clicked.connect(self._on_load_from_session)
+        root.addWidget(btn_load)
 
         # ── Bout list ─────────────────────────────────────────────────
         bout_grp = QGroupBox("Detected Bouts")
@@ -107,6 +114,29 @@ class AnnotationPanel(QWidget):
 
         root.addWidget(label_grp)
 
+        # ── Manage Labels ─────────────────────────────────────────────
+        manage_grp = QGroupBox("Manage Labels")
+        manage_lay = QVBoxLayout(manage_grp)
+
+        manage_info = QLabel("Add or remove behaviour labels.")
+        manage_info.setStyleSheet("font-size: 10px; color: grey;")
+        manage_lay.addWidget(manage_info)
+
+        add_row = QHBoxLayout()
+        self._new_label_edit = QLineEdit()
+        self._new_label_edit.setPlaceholderText("Label name (e.g. swim)")
+        add_row.addWidget(self._new_label_edit)
+        btn_add_label = QPushButton("Add")
+        btn_add_label.clicked.connect(self._on_add_label)
+        add_row.addWidget(btn_add_label)
+        manage_lay.addLayout(add_row)
+
+        btn_remove_label = QPushButton("Remove Selected Label")
+        btn_remove_label.clicked.connect(self._on_remove_label)
+        manage_lay.addWidget(btn_remove_label)
+
+        root.addWidget(manage_grp)
+
         # ── Current assignment display ────────────────────────────────
         self._current_label_display = QLabel("Current: —")
         self._current_label_display.setStyleSheet("font-weight: bold;")
@@ -120,7 +150,7 @@ class AnnotationPanel(QWidget):
         # ── Export ────────────────────────────────────────────────────
         export_grp = QGroupBox("Export Labels")
         export_lay = QHBoxLayout(export_grp)
-        btn_export = QPushButton("Save Labelled Bouts (HDF5)…")
+        btn_export = QPushButton("Save Training Data (.npy)…")
         btn_export.clicked.connect(self._on_export)
         export_lay.addWidget(btn_export)
         root.addWidget(export_grp)
@@ -156,7 +186,7 @@ class AnnotationPanel(QWidget):
             )
             self._bout_list.addItem(item)
         self._update_stats()
-
+        self._emit_annotations()
     def set_behaviour_labels(self, labels: Dict[int, str]) -> None:
         """Update label schema and rebuild buttons."""
         self._behaviour_labels = labels
@@ -165,6 +195,38 @@ class AnnotationPanel(QWidget):
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
+
+    def _on_load_from_session(self) -> None:
+        """Load bouts saved by the Analysis panel onto the active session entry."""
+        entry = self._session.active
+        if entry is None or not entry.bouts:
+            QMessageBox.information(
+                self, "No bouts",
+                "No bouts found on the active session entry.\n"
+                "Use the Analysis panel to detect or manually define bouts first."
+            )
+            return
+        self.load_bouts(entry.bouts)
+
+    def _on_add_label(self) -> None:
+        name = self._new_label_edit.text().strip()
+        if not name:
+            return
+        next_idx = max(self._behaviour_labels.keys(), default=-1) + 1
+        self._behaviour_labels[next_idx] = name
+        self._new_label_edit.clear()
+        self._rebuild_label_buttons()
+
+    def _on_remove_label(self) -> None:
+        """Remove the highest-index label (simple remove-last approach)."""
+        if not self._behaviour_labels:
+            return
+        if len(self._behaviour_labels) == 1:
+            QMessageBox.warning(self, "Cannot remove", "At least one label is required.")
+            return
+        last_idx = max(self._behaviour_labels.keys())
+        del self._behaviour_labels[last_idx]
+        self._rebuild_label_buttons()
 
     def _on_bout_selected(self, row: int) -> None:
         if row < 0 or row >= len(self._current_bouts):
@@ -204,10 +266,48 @@ class AnnotationPanel(QWidget):
 
         self._current_label_display.setText(f"Assigned: [{label_idx}] {label_name}")
         self._update_stats()
+        self._emit_annotations()
 
         # Auto-advance to next bout
         if row + 1 < self._bout_list.count():
             self._bout_list.setCurrentRow(row + 1)
+
+    # ------------------------------------------------------------------
+    # Ethogram integration
+    # ------------------------------------------------------------------
+
+    def _bouts_to_labels(self) -> Optional[np.ndarray]:
+        """Convert current bouts to a dense per-frame label array.
+
+        Returns ``None`` if there are no bouts.  Frames not covered by any
+        bout are assigned label 0 (background / other).
+        """
+        if not self._current_bouts:
+            return None
+        # Try to get total frame count from the session entry first
+        T: Optional[int] = None
+        entry = self._session.active
+        if entry is not None and entry.coords_data:
+            try:
+                individual = next(iter(entry.coords_data))
+                x_data = entry.coords_data[individual]["x"]
+                T = len(x_data[0]) if hasattr(x_data[0], "__len__") else np.array(x_data).shape[-1]
+            except Exception:
+                pass
+        if T is None:
+            T = max(int(b["end"]) for b in self._current_bouts) + 1
+        labels = np.zeros(T, dtype=np.int64)
+        for b in self._current_bouts:
+            lbl = b.get("label", -1)
+            # -1 means detected but not yet labelled — drawn as gray in ethogram
+            labels[max(0, int(b["start"])) : min(T, int(b["end"]))] = lbl
+        return labels
+
+    def _emit_annotations(self) -> None:
+        """Build per-frame label array and emit ``annotations_changed``."""
+        labels = self._bouts_to_labels()
+        if labels is not None:
+            self.annotations_changed.emit(labels)
 
     def _on_export(self) -> None:
         if not self._current_bouts:
@@ -218,41 +318,88 @@ class AnnotationPanel(QWidget):
         if unlabelled:
             reply = QMessageBox.question(
                 self, "Unlabelled bouts",
-                f"{len(unlabelled)} bouts are still unlabelled. Export anyway?",
+                f"{len(unlabelled)} bouts are still unlabelled. "
+                "Unlabelled frames will default to label 0 (other). Continue?",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if reply != QMessageBox.Yes:
                 return
 
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save labelled bouts", "classification.h5", "HDF5 (*.h5)"
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select output folder for training data"
         )
-        if not path:
+        if not folder:
             return
 
-        entry = self._session.active_entry
-        video_file = entry.video_path.name if entry and entry.video_path else "unknown"
+        entry = self._session.active
+        if entry is None or not entry.coords_data:
+            QMessageBox.warning(self, "No pose data", "No pose data on the active entry.")
+            return
 
-        # Build classification_data list expected by save_to_h5
-        classification_data = []
-        for b in self._current_bouts:
-            if b.get("label", -1) >= 0:
-                classification_data.append({
-                    "coords": b.get("coords"),
-                    "label": b["label"],
-                    "start": b["start"],
-                    "end": b["end"],
-                    "individual": b.get("individual", "ind1"),
-                })
+        try:
+            import json
+            import numpy as np
+            from pathlib import Path
 
-        n_nodes = self._current_bouts[0].get("coords", [[]])[0].__len__() if self._current_bouts else 9
-        save_to_h5(
-            classification_data=classification_data,
-            video_file=video_file,
-            n_nodes=n_nodes,
-            behaviour_schema=self._behaviour_labels,
+            out = Path(folder)
+            individual = list(entry.coords_data.keys())[0]
+            ind_data = entry.coords_data[individual]
+
+            # Build CTVM array: C=3 (x, y, ci), T=frames, V=nodes, M=1
+            x = np.array(ind_data["x"])   # (V, T)
+            y = np.array(ind_data["y"])   # (V, T)
+            ci = np.array(ind_data["ci"]) # (V, T)
+            V, T = x.shape
+
+            # Stack to (C, T, V, M=1)
+            pose = np.stack([x, y, ci], axis=0)  # (3, V, T)
+            pose = pose.transpose(0, 2, 1)        # (3, T, V)
+            pose = pose[:, :, :, np.newaxis]       # (3, T, V, 1) = (C, T, V, M)
+
+            # Build per-frame label array
+            # -1 = detected but unlabelled (ignored during training)
+            #  0 = background (not in any bout)
+            # >0 = class label
+            labels = np.zeros(T, dtype=np.int64)
+            for b in self._current_bouts:
+                lbl = b.get("label", -1)
+                start = max(0, int(b["start"]))
+                end = min(T, int(b["end"]))
+                labels[start:end] = lbl  # -1 preserved for unlabelled bouts
+
+            # Build schema — ensure 0 = "other"
+            schema = {0: "other"}
+            for idx, name in self._behaviour_labels.items():
+                if idx != 0:
+                    schema[idx] = name
+                elif name not in ("behaviour_0", "other"):
+                    schema[0] = name
+
+            stem = Path(entry.pose_path).stem if entry.pose_path else "recording"
+            np.save(str(out / f"{stem}_pose.npy"), pose)
+            np.save(str(out / f"{stem}_labels.npy"), labels)
+            with open(out / f"{stem}_schema.json", "w") as fh:
+                json.dump({str(k): v for k, v in schema.items()}, fh, indent=2)
+
+        except Exception as exc:
+            QMessageBox.critical(self, "Export failed", str(exc))
+            return
+
+        labelled_frames = int((labels > 0).sum())
+        unlabelled_frames = int((labels == -1).sum())
+        QMessageBox.information(
+            self, "Saved",
+            f"Saved to: {folder}\n\n"
+            f"  {stem}_pose.npy    \u2014 shape {pose.shape}  (C, T, V, M)\n"
+            f"  {stem}_labels.npy  \u2014 {labelled_frames}/{T} frames labelled"
+            + (f", {unlabelled_frames} unlabelled (-1)" if unlabelled_frames else "") + "\n"
+            f"  {stem}_schema.json \u2014 {len(schema)} classes\n\n"
+            f"Unlabelled frames (-1) are ignored by the trainer.\n"
+            f"Load for training with:\n"
+            f"  PoseDataset(data_file='{stem}_pose.npy',\n"
+            f"              label_file='{stem}_labels.npy',\n"
+            f"              preprocess_frame=True, window_size=12)"
         )
-        QMessageBox.information(self, "Saved", f"Exported {len(classification_data)} bouts to:\n{path}")
 
     # ------------------------------------------------------------------
     # Helpers

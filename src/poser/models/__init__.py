@@ -8,6 +8,9 @@ from poser.models.registry import (
     list_checkpoints,
 )
 
+# Import built-in architectures so their @register_model decorators run
+from poser.models import st_gcn_aaai18_pylightning_3block as _st_gcn_3block  # noqa: F401
+
 __all__ = [
     "ConvTemporalGraphical",
     "Graph",

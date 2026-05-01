@@ -90,6 +90,12 @@ class PoseDataset(torch.utils.data.Dataset):
         binary_class=None,
         preprocess_frame: bool = False,
         window_size: Optional[int] = None,
+        # --- in-memory constructors (used by data_prep.py) ---
+        data: Optional[np.ndarray] = None,
+        labels: Optional[np.ndarray] = None,
+        augmentation: Optional[dict] = None,
+        num_class: Optional[int] = None,
+        C: Optional[int] = None,
     ):
         self.ideal_sample_no = ideal_sample_no
         self.transform = transform
@@ -97,10 +103,27 @@ class PoseDataset(torch.utils.data.Dataset):
         self.center_node = center_node
         self.head_node = head_node
         self.T = T
+        self.num_class = num_class
+        # augmentation dict → augment flag
+        if augmentation is not None:
+            augment = any(augmentation.values())
         self.augment = augment
         self.preprocess_frame = preprocess_frame
         self.window_size = window_size
         print(f"PoseDataset — augment={self.augment}")
+
+        # ── In-memory path (data= / labels= arrays) ──────────────────
+        if data is not None:
+            self.data = data.astype(np.float32)
+            if self.data.ndim == 4:
+                self.C, self.T0, self.V, self.M = self.data.shape
+            elif self.data.ndim == 5:
+                self.N, self.C, self.T0, self.V, self.M = self.data.shape
+            if labels is not None:
+                self.labels = labels.astype(np.int64)
+            else:
+                self.labels = np.zeros(len(self.data), dtype=np.int64)
+            return  # skip file-loading block below
 
         if data_file is not None:
             filesize = os.path.getsize(data_file) / 1e9
@@ -208,19 +231,28 @@ class PoseDataset(torch.utils.data.Dataset):
 
     def preprocess_frames(self, frame: int, window_size: int) -> np.ndarray:
         hw = window_size // 2
-        t0, t1 = frame - hw, frame + hw
-        left_pad = right_pad = None
-        if t0 < 0:
-            left_pad = np.zeros((self.C, abs(t0), self.V, self.M))
-            t0 = 0
-        if t1 > self.T0:
-            right_pad = np.zeros((self.C, t1 - self.T0, self.V, self.M))
-            t1 = self.T0
-        bhv = self.data[:, t0:t1].copy()
-        if left_pad is not None:
-            bhv = np.concatenate([left_pad, bhv], axis=1)
-        if right_pad is not None:
-            bhv = np.concatenate([bhv, right_pad], axis=1)
+        t0 = frame - hw
+        t1 = frame + hw
+
+        # Clamp to valid data range
+        t0c = max(0, t0)
+        t1c = min(self.T0, t1)
+        bhv = self.data[:, t0c:t1c].copy()  # (C, actual_len, V, M)
+
+        left_need = max(0, -t0)
+        right_need = max(0, t1 - self.T0)
+
+        if left_need > 0 or right_need > 0:
+            # Use reflect if the clip is long enough, fall back to edge otherwise
+            available = bhv.shape[1]
+            if available > 1:
+                pad_width = ((0, 0), (left_need, right_need), (0, 0), (0, 0))
+                bhv = np.pad(bhv, pad_width, mode="reflect")
+            else:
+                # Clip is 0 or 1 frame — edge-pad (avoids reflect crash on tiny clips)
+                pad_width = ((0, 0), (left_need, right_need), (0, 0), (0, 0))
+                bhv = np.pad(bhv, pad_width, mode="edge" if available == 1 else "constant")
+
         return bhv
 
     # ------------------------------------------------------------------

@@ -385,6 +385,26 @@ class Graph:
             neighbor_link = [(i - 1, j - 1) for (i, j) in neighbor_1base]
             self.edge = self_link + neighbor_link
 
+        elif layout == "auto":
+            # Fully-connected graph for unknown/custom skeletons.
+            # Every keypoint is connected to every other keypoint.
+            # Requires num_nodes_override to be set (auto-detected from data).
+            if self._num_nodes_override is None:
+                raise ValueError(
+                    "'auto' layout requires num_nodes_override. "
+                    "Set config.model.num_nodes or let prepare_dataset auto-detect it."
+                )
+            self.num_node = self._num_nodes_override
+            self_link = [(i, i) for i in range(self.num_node)]
+            neighbor_link = [
+                (i, j)
+                for i in range(self.num_node)
+                for j in range(self.num_node)
+                if i != j
+            ]
+            self.edge = self_link + neighbor_link
+            # center stays as set in __init__ (center_node kwarg or default 0)
+
         else:
             raise ValueError("Do Not Exist This Layout.")
 

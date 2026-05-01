@@ -23,26 +23,29 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from pytorch_lightning import LightningModule
+try:
+    from lightning.pytorch import LightningModule
+except ImportError:
+    from pytorch_lightning import LightningModule
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader, Subset, WeightedRandomSampler
 from torchmetrics.functional.classification.accuracy import accuracy
 import time
 
 try:
-    from torcheval.metrics.functional import multiclass_auprc
-    from torcheval.metrics import MulticlassAUPRC
-    from torcheval.metrics.functional import binary_accuracy
-    from torcheval.metrics import BinaryAUPRC
-    from torcheval.metrics import MulticlassAccuracy, BinaryAccuracy
-    from torcheval.metrics.functional import r2_score
-    _TORCHEVAL_AVAILABLE = True
+    from torchmetrics.classification import (
+        MulticlassAveragePrecision as MulticlassAUPRC,
+        BinaryAveragePrecision as BinaryAUPRC,
+        MulticlassAccuracy,
+        BinaryAccuracy,
+    )
+    from torchmetrics.functional.classification import binary_accuracy
+    from torchmetrics.functional.regression import r2_score
+    _TORCHMETRICS_AVAILABLE = True
 except ImportError:
-    _TORCHEVAL_AVAILABLE = False
-    # Provide no-op stubs so the class body can still be defined;
-    # methods that use these will raise at call-time if torcheval is absent.
-    multiclass_auprc = binary_accuracy = r2_score = None  # type: ignore[assignment]
+    _TORCHMETRICS_AVAILABLE = False
     MulticlassAUPRC = BinaryAUPRC = MulticlassAccuracy = BinaryAccuracy = None  # type: ignore[assignment]
+    binary_accuracy = r2_score = None  # type: ignore[assignment]
 
 # from torchmetrics.regression import R2Score
 
@@ -50,6 +53,7 @@ except ImportError:
 # sys.path.insert(1, "../")
 from .._loader import ZebData
 from . import ConvTemporalGraphical, Graph
+from .registry import register_model
 
 # from preprocessing import PreProcessing
 
@@ -62,6 +66,7 @@ def iden(x):
     return x
 
 # New code from Pierce Mullen
+@register_model("st_gcn_3block", description="3-block Spatial Temporal GCN (Yan et al. 2018)")
 class ST_GCN_18(LightningModule):
     r"""Spatial temporal graph convolutional networks.
 
@@ -96,9 +101,8 @@ class ST_GCN_18(LightningModule):
         **kwargs,
     ):
         super().__init__()
-        # self.hparams.update(hparams)
         try:
-            self.save_hyperparameters()
+            self.save_hyperparameters(ignore=["hparams"])
         except:
             pass
         self.num_workers = num_workers
@@ -205,9 +209,9 @@ class ST_GCN_18(LightningModule):
                     in_channels, 128, kernel_size, 1, residual=False, **kwargs0
                 ),
                 st_gcn_block(
-                    128, 128, kernel_size, 1, dropout=self.dropout, **kwargs
+                    128, 128, kernel_size, 1, dropout=self.dropout, **kwargs0
                 ),  # remove to trim
-                st_gcn_block(128, 256, kernel_size, 2, **kwargs),
+                st_gcn_block(128, 256, kernel_size, 2, **kwargs0),
             )
         )
 
@@ -254,14 +258,127 @@ class ST_GCN_18(LightningModule):
         return x
 
     def configure_optimizers(self):
-        # Make sure to filter the parameters based on `requires_grad`
+        """Build optimiser (and optional LR scheduler) from ``_optimiser_config``.
 
-        return torch.optim.Adam(
+        When the model is instantiated via :meth:`from_training_config` the
+        ``_optimiser_config`` attribute is set from ``TrainingConfig.optimiser``
+        and this method uses it fully.  When the model is loaded from a legacy
+        checkpoint (no ``_optimiser_config``), it falls back to plain Adam at
+        ``self.learning_rate``.
+        """
+        ocfg = getattr(self, "_optimiser_config", None)
+        lr = ocfg.learning_rate if ocfg is not None else self.learning_rate
+        wd = ocfg.weight_decay if ocfg is not None else 0.0
+
+        optimizer = torch.optim.Adam(
             filter(lambda p: p.requires_grad, self.parameters()),
-            lr=self.learning_rate,
+            lr=lr,
+            weight_decay=wd,
         )
-        # optimizer = torch.optim.Adam(self.parameters(), lr = self.learning_rate)
-        # return optimizer
+
+        if ocfg is None or ocfg.scheduler == "none":
+            return optimizer
+
+        # ── Cosine annealing (with optional linear warmup) ──────────
+        if ocfg.scheduler == "cosine":
+            warmup_steps = int(getattr(ocfg, "warmup_epochs", 0))
+            total_steps = int(getattr(self, "_max_epochs", 200))
+
+            def _lr_lambda(epoch: int) -> float:
+                if epoch < warmup_steps:
+                    return (epoch + 1) / max(1, warmup_steps)
+                progress = (epoch - warmup_steps) / max(1, total_steps - warmup_steps)
+                import math
+                return 0.5 * (1.0 + math.cos(math.pi * progress))
+
+            scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=_lr_lambda)
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "epoch"},
+            }
+
+        # ── Step / reduce-on-plateau fall-through ───────────────────
+        if ocfg.scheduler == "reduce_on_plateau":
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer, mode="min", patience=5, factor=0.5
+            )
+            return {
+                "optimizer": optimizer,
+                "lr_scheduler": {"scheduler": scheduler, "interval": "epoch", "monitor": "val_loss"},
+            }
+
+        return optimizer
+
+    @classmethod
+    def from_training_config(cls, config: "TrainingConfig") -> "ST_GCN_18":
+        """Instantiate ST_GCN_18 from a :class:`~poser.training.config.TrainingConfig`.
+
+        This is the preferred entry-point when training from the CLI or
+        TrainPanel — it translates the Pydantic config into the legacy
+        ``graph_cfg`` / ``data_cfg`` / ``hparams`` constructor arguments
+        and attaches ``_optimiser_config`` / ``_max_epochs`` for use in
+        :meth:`configure_optimizers`.
+
+        Parameters
+        ----------
+        config:
+            A fully populated :class:`~poser.training.config.TrainingConfig`.
+
+        Returns
+        -------
+        ST_GCN_18
+            Freshly initialised model, ready to pass to ``PoseRTrainer.fit``.
+        """
+        dcfg = config.data
+        mcfg = config.model
+        ocfg = config.optimiser
+        tcfg = config.trainer
+
+        graph_cfg = {
+            "layout": mcfg.layout,
+            "strategy": "spatial",
+            "center": dcfg.center_node,
+            # Passed so 'auto' layout can build a graph of the right size.
+            # For named layouts (zebrafish, rat, etc.) this is stored but ignored.
+            "num_nodes_override": mcfg.num_nodes,
+        }
+
+        data_cfg = {
+            "data_dir": ".",
+            "augment": False,          # augmentation is handled by PoseDataset
+            "ideal_sample_no": dcfg.ideal_sample_no,
+            "shift": False,
+            "transform": dcfg.transforms,
+            "labels_to_ignore": None,
+            "label_dict": None,
+            "calc_class_weights": False,
+            "regress": False,
+            "T2": dcfg.T2,
+            "head": dcfg.head_node,
+            "softmax": False,
+            "weighted_random_sampler": tcfg.weighted_random_sampler,
+            "binary": False,
+            "binary_class": None,
+        }
+
+        class _HParams:
+            learning_rate = ocfg.learning_rate
+            batch_size = tcfg.batch_size
+            dropout = mcfg.dropout
+
+        model = cls(
+            in_channels=mcfg.in_channels,
+            num_class=mcfg.num_class,
+            graph_cfg=graph_cfg,
+            data_cfg=data_cfg,
+            hparams=_HParams(),
+            edge_importance_weighting=mcfg.edge_importance_weighting,
+            dropout=mcfg.dropout,
+        )
+        model._optimiser_config = ocfg
+        model._max_epochs = tcfg.max_epochs
+        model._external_dataloaders = True  # skip legacy setup() file loading
+        return model
 
     def training_step(self, batch, batch_idx):
         # Make sure dataloaders are on cuda
@@ -286,7 +403,7 @@ class ST_GCN_18(LightningModule):
             preds = torch.sigmoid(output.flatten())
             acc = binary_accuracy(preds, y)
         else:
-            loss = F.cross_entropy(output, y, weight=self.class_weights)
+            loss = F.cross_entropy(output, y, weight=self.class_weights, ignore_index=-1)
             preds = torch.argmax(output, dim=1)
             acc = accuracy(
                 preds, y, task="multiclass", num_classes=self.num_classes
@@ -318,17 +435,19 @@ class ST_GCN_18(LightningModule):
             loss = F.binary_cross_entropy_with_logits(output.flatten(), y)
             preds = torch.sigmoid(output.flatten())
             #acc = binary_accuracy(preds, y)
-            self.auprc.update(output.flatten(), y)
+            self.auprc.update(preds, y)  # BinaryAveragePrecision needs probabilities
             self.acc.update(preds, y)
         else:
-            loss = F.cross_entropy(output, y)
+            loss = F.cross_entropy(output, y, ignore_index=-1)
             preds = torch.argmax(output, dim=1)
-            #acc = accuracy(
-            #    preds, y, task="multiclass", num_classes=self.num_classes
-            #)
-            self.auprc.update(output, y)
-            self.acc.update(preds, y)
-            #auprc = multiclass_auprc(output, y, num_classes=self.num_classes)
+            # Mask out unlabelled frames (-1) before updating metrics
+            labelled_mask = y >= 0
+            if labelled_mask.any():
+                self.auprc.update(torch.softmax(output[labelled_mask], dim=1), y[labelled_mask])
+                self.acc.update(preds[labelled_mask], y[labelled_mask])
+            else:
+                self.auprc.update(torch.softmax(output, dim=1), y.clamp(min=0))
+                self.acc.update(preds, y.clamp(min=0))
 
         self.log(
             "val_loss",
@@ -364,12 +483,12 @@ class ST_GCN_18(LightningModule):
             loss = F.binary_cross_entropy_with_logits(output.flatten(), y)
             preds = torch.sigmoid(output.flatten())
             #acc = binary_accuracy(preds, y)
-            self.auprc.update(output.flatten(), y)
+            self.auprc.update(preds, y)  # BinaryAveragePrecision needs probabilities
             self.acc.update(preds, y)
         else:
             loss = F.cross_entropy(output, y)
             preds = torch.argmax(output, dim=1)
-            self.auprc.update(output, y)
+            self.auprc.update(torch.softmax(output, dim=1), y)  # MulticlassAveragePrecision needs probabilities
             self.acc.update(preds, y)
             #acc = accuracy(
             #    preds, y, task="multiclass", num_classes=self.num_classes
@@ -388,15 +507,13 @@ class ST_GCN_18(LightningModule):
         # self.log("val_acc_top3", acc3, prog_bar = True)
 
     def on_train_start(self):
-        # self.hparams = {"lr": self.learning_rate,
-        #                "batch_size": self.batch_size}
-        self.logger.log_hyperparams(
-            self.hparams,
-            {
-                "hp/learning_rate": self.learning_rate,
-                "hp/batch_size": self.batch_size,
-            },
-        )
+        params = dict(self.hparams)
+        params["hp/learning_rate"] = self.learning_rate
+        params["hp/batch_size"] = self.batch_size
+        try:
+            self.logger.log_hyperparams(params)
+        except Exception:
+            pass  # logger may not support hyperparams (e.g. CSVLogger limitations)
         self.start_time = time.time()
 
     def on_train_end(self):
@@ -438,11 +555,11 @@ class ST_GCN_18(LightningModule):
     def on_validation_epoch_start(self):
         # Create the metric at the start of each validation epoch
         if self.binary:
-            self.auprc = BinaryAUPRC()  # For binary
-            self.acc = BinaryAccuracy()
+            self.auprc = BinaryAUPRC().to(self.device)
+            self.acc = BinaryAccuracy().to(self.device)
         else:
-            self.auprc = MulticlassAUPRC(num_classes = self.num_classes)  # For multiclass
-            self.acc = MulticlassAccuracy(num_classes = self.num_classes)
+            self.auprc = MulticlassAUPRC(num_classes=self.num_classes).to(self.device)
+            self.acc = MulticlassAccuracy(num_classes=self.num_classes).to(self.device)
 
     def on_validation_epoch_end(self):
         # Log the metric value at the end of the validation epoch
@@ -452,11 +569,11 @@ class ST_GCN_18(LightningModule):
     def on_test_epoch_start(self):
         # Create the metric at the start of each test epoch
         if self.binary:
-            self.auprc = BinaryAUPRC()
-            self.acc = BinaryAccuracy()
+            self.auprc = BinaryAUPRC().to(self.device)
+            self.acc = BinaryAccuracy().to(self.device)
         else:
-            self.auprc = MulticlassAUPRC(num_classes = self.num_classes)
-            self.acc = MulticlassAccuracy(num_classes = self.num_classes)
+            self.auprc = MulticlassAUPRC(num_classes=self.num_classes).to(self.device)
+            self.acc = MulticlassAccuracy(num_classes=self.num_classes).to(self.device)
 
     def on_test_epoch_end(self):
         # Log the metric value at the end of the test epoch
@@ -490,8 +607,14 @@ class ST_GCN_18(LightningModule):
 
     def setup(self, stage=None):
         print(f"STAGE IS {stage}")
-        if stage == "predict":
-            pass
+        # When DataLoaders are provided externally (from_training_config path)
+        # skip all legacy file-based data loading, but still initialise every
+        # attribute that training_step / validation_step will reference.
+        if getattr(self, "_external_dataloaders", False):
+            # class_weights: always None in the external path (weighting is
+            # handled by WeightedRandomSampler in data_prep.py instead)
+            self.class_weights = None
+            return
         elif stage == "validate":
             try: 
                 self.val_data = ZebData(
@@ -748,6 +871,9 @@ class ST_GCN_18(LightningModule):
                 self.pose_test = self.test_data
 
     def train_dataloader(self):
+        # External-dataloader path (from_training_config): return the stored loader.
+        if getattr(self, "_external_dataloaders", False):
+            return self._ext_train_dl
         if self.weighted_random_sampler:
             if isinstance(self.pose_train, Subset):
                 class_weights = self.pose_train.dataset.get_class_weights()
@@ -784,6 +910,9 @@ class ST_GCN_18(LightningModule):
     
 
     def val_dataloader(self):
+        # External-dataloader path (from_training_config): return the stored loader.
+        if getattr(self, "_external_dataloaders", False):
+            return self._ext_val_dl
         return DataLoader(
             self.pose_val,
             batch_size=self.batch_size,

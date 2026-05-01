@@ -27,22 +27,42 @@ class DataConfig(BaseModel):
     """Parameters governing how raw pose data is pre-processed."""
 
     fps: int = Field(25, ge=1, description="Frames per second of the source video.")
-    T: int = Field(100, ge=4, description="Clip length in frames before padding.")
-    T2: int = Field(100, ge=4, description="Padded clip length fed to the model.")
+    T: int = Field(100, ge=2, description="Raw clip half-window in frames (preprocess_frame mode) OR clip length before padding (5D mode).")
+    T2: int = Field(100, ge=2, description="Padded clip length fed to the model.")
     C: int = Field(3, ge=2, le=3, description="Channels per node (2=xy, 3=xyc).")
     M: int = Field(1, ge=1, description="Max individuals per frame.")
-    denominator: float = Field(100.0, gt=0.0, description="Normalisation divisor for coordinates.")
+    denominator: float = Field(100.0, gt=0.0, description="Normalisation divisor for coordinates. Legacy: window = 2*fps/denominator when T_method='window'.")
     confidence_threshold: float = Field(0.5, ge=0.0, le=1.0)
     center_data: bool = True
     align_data: bool = True
-    T_method: Literal["pad", "interpolate"] = "pad"
+    center_node: int = Field(0, ge=0, description="Node index used for centring (x/y offset subtracted).")
+    head_node: int = Field(0, ge=0, description="Node index used for heading alignment.")
+    transforms: List[str] = Field(
+        default_factory=lambda: ["center", "align", "pad"],
+        description='Ordered list of per-clip transforms to apply. Tokens: "center", "align", "pad", "pad_flip", "flipy".',
+    )
+    ideal_sample_no: Optional[int] = Field(None, description="Oversample to this many samples via dynamic augmentation. None = no oversampling.")
+    T_method: Literal["pad", "window", "interpolate"] = Field(
+        "pad",
+        description=(
+            '"pad" — use T directly as clip length. '
+            '"window" — compute T from fps/denominator: T = 2*int(fps/denominator).'
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _resolve_window_T(self) -> "DataConfig":
+        """If T_method=='window', override T from fps/denominator."""
+        if self.T_method == "window":
+            self.T = 2 * int(self.fps / self.denominator)
+        return self
 
 
 class ModelConfig(BaseModel):
     """Architecture hyper-parameters."""
 
     architecture: str = Field("st_gcn_3block", description="Registered architecture name.")
-    layout: str = Field("zebrafish", description="Skeleton layout name.")
+    layout: str = Field("auto", description="Skeleton layout name. 'auto' builds a fully-connected graph from the data shape.")
     in_channels: int = Field(3, ge=1)
     num_class: int = Field(2, ge=2)
     num_nodes: int = Field(9, ge=2)
@@ -80,6 +100,15 @@ class TrainerConfig(BaseModel):
     gradient_clip_val: float = Field(1.0, ge=0.0)
     log_every_n_steps: int = Field(10, ge=1)
     seed: int = 42
+
+    weighted_random_sampler: bool = Field(
+        True,
+        description=(
+            "Use WeightedRandomSampler to balance class frequencies. "
+            "When ideal_sample_no is also set, the sampler draws exactly "
+            "that many samples per epoch, inflating rare classes."
+        ),
+    )
 
     class_weights: Optional[List[float]] = Field(
         None,
@@ -167,6 +196,9 @@ class TrainingConfig(BaseModel):
         # --- legacy flat format compatibility ---
         if "model" not in raw and "layout" in raw:
             raw = _migrate_legacy(raw)
+        # --- legacy data_cfg / train_cfg format (original decoder_config.yml) ---
+        elif "data_cfg" in raw or "train_cfg" in raw:
+            raw = _migrate_legacy_nested(raw)
 
         return cls.model_validate(raw)
 
@@ -209,12 +241,19 @@ def _migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
     # Data
     migrated["data"] = {
         "fps": raw.get("fps", 25),
-        "T": raw.get("T", 100),
+        "T": raw.get("T", 100) if raw.get("T") != "window" else 100,
+        "T_method": "window" if raw.get("T") == "window" else "pad",
         "T2": raw.get("T2", 100),
-        "C": raw.get("C", 3),
+        "C": raw.get("C", raw.get("num_channels", 3)),
         "M": raw.get("M", 1),
         "denominator": raw.get("denominator", 100.0),
         "confidence_threshold": raw.get("confidence_threshold", 0.5),
+        "center_data": raw.get("center_data", raw.get("center") is not None),
+        "align_data": raw.get("align_data", "align" in raw.get("transform", [])),
+        "center_node": int(raw["center"]) if isinstance(raw.get("center"), (int, float)) else 0,
+        "head_node": int(raw.get("head", 0)),
+        "transforms": raw.get("transform", ["center", "align", "pad"]),
+        "ideal_sample_no": raw.get("ideal_sample_no"),
     }
 
     # Trainer
@@ -242,6 +281,86 @@ def _migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
         migrated["behaviour_schema"] = {"labels": norm}
 
     # Pass-through fields
+    for key in ("output_dir", "run_name", "species"):
+        if key in raw:
+            migrated[key] = raw[key]
+
+    return migrated
+
+
+def _migrate_legacy_nested(raw: Dict[str, Any]) -> Dict[str, Any]:
+    """Convert the original ``data_cfg`` / ``train_cfg`` YAML format."""
+    dc: Dict[str, Any] = raw.get("data_cfg", {})
+    tc: Dict[str, Any] = raw.get("train_cfg", {})
+
+    migrated: Dict[str, Any] = {}
+
+    # Data
+    t_val = dc.get("T", 100)
+    migrated["data"] = {
+        "fps": dc.get("fps", 25),
+        "T": t_val if t_val != "window" else 100,
+        "T_method": "window" if t_val == "window" else "pad",
+        "T2": dc.get("T2", 100),
+        "C": dc.get("num_channels", dc.get("C", 3)),
+        "M": dc.get("M", 1),
+        "denominator": dc.get("denominator", 100.0),
+        "confidence_threshold": dc.get("confidence_threshold", 0.5),
+        "center_data": dc.get("center") is not None,
+        "align_data": "align" in dc.get("transform", tc.get("transform", [])),
+        "center_node": int(dc["center"]) if isinstance(dc.get("center"), (int, float)) else 0,
+        "head_node": int(dc.get("head", 0)),
+        "transforms": tc.get("transform", dc.get("transform", ["center", "align", "pad"])),
+        "ideal_sample_no": dc.get("ideal_sample_no"),
+    }
+
+    # Model
+    n_labels = dc.get("numLabels", dc.get("num_class", 2))
+    v_nodes = dc.get("V", 9)
+    migrated["model"] = {
+        "layout": tc.get("graph_layout_name", "custom"),
+        "num_class": n_labels,
+        "num_nodes": v_nodes,
+        "in_channels": dc.get("num_channels", 3),
+        "dropout": tc.get("dropout", 0.5),
+    }
+
+    # Trainer
+    migrated["trainer"] = {
+        "max_epochs": tc.get("max_epochs", 200),
+        "batch_size": tc.get("batch_size", 32),
+        "accelerator": tc.get("accelerator", "auto"),
+        "early_stopping_patience": tc.get("patience", 20),
+        "weighted_random_sampler": bool(dc.get("weighted_random_sampler", True)),
+    }
+
+    # Optimiser
+    migrated["optimiser"] = {
+        "auto_lr": bool(tc.get("auto_lr", False)),
+        "lr": tc.get("lr", 1e-3),
+        "weight_decay": tc.get("weight_decay", 1e-4),
+    }
+
+    # Augmentation
+    augment = bool(dc.get("augmentation", True))
+    migrated["augmentation"] = {
+        "rotate": augment,
+        "jitter": augment,
+        "scale": augment,
+        "shear": False,
+        "roll": augment,
+        "fragment": augment,
+    }
+
+    # Behaviour schema from classification_dict
+    cls_dict = dc.get("classification_dict", {})
+    if cls_dict:
+        # keys are ints → label indices; values are also ints in legacy → use index as name
+        norm: Dict[int, str] = {}
+        for k, v in cls_dict.items():
+            norm[int(k)] = str(v)
+        migrated["behaviour_schema"] = {"labels": norm}
+
     for key in ("output_dir", "run_name", "species"):
         if key in raw:
             migrated[key] = raw[key]

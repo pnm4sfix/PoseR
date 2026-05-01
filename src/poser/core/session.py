@@ -66,6 +66,7 @@ class SessionEntry:
     coords_data: Dict = field(default_factory=dict)
     classification_data: Dict = field(default_factory=dict)
     layer_names: List[str] = field(default_factory=list)
+    bouts: List = field(default_factory=list)
     meta: Dict = field(default_factory=dict)
 
     @property

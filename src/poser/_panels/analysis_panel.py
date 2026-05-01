@@ -241,7 +241,25 @@ class AnalysisPanel(QWidget):
         # Build a manual bout using the active session entry's coords_data
         entry = self._session.active
         coords_data = entry.coords_data if entry else None
+        if not coords_data:
+            QMessageBox.warning(self, "No data", "Load a pose file first.")
+            return
+
+        # Sync combo with actual keys in coords_data (DLC uses 'individual1' etc.)
+        available = list(coords_data.keys())
         individual = self._individual_combo.currentText()
+        if set(available) != {self._individual_combo.itemText(i)
+                               for i in range(self._individual_combo.count())}:
+            self._individual_combo.blockSignals(True)
+            self._individual_combo.clear()
+            self._individual_combo.addItems(available)
+            if individual in available:
+                self._individual_combo.setCurrentText(individual)
+            self._individual_combo.blockSignals(False)
+        individual = self._individual_combo.currentText()
+        if individual not in coords_data:
+            individual = available[0]
+            self._individual_combo.setCurrentText(individual)
 
         bout = manual_bout(
             start=self._manual_start,
@@ -251,6 +269,7 @@ class AnalysisPanel(QWidget):
         )
         self._detected_bouts.append(bout)
         self._update_bout_count()
+        self._save_bouts_to_session(self._detected_bouts)
         if self._on_bouts_updated:
             self._on_bouts_updated(list(self._detected_bouts))
 
@@ -329,8 +348,15 @@ class AnalysisPanel(QWidget):
 
         self._detected_bouts = bouts
         self._update_bout_count()
+        self._save_bouts_to_session(bouts)
         if self._on_bouts_updated:
             self._on_bouts_updated(list(bouts))
+
+    def _save_bouts_to_session(self, bouts: list) -> None:
+        """Persist bouts onto the active SessionEntry so other panels can read them."""
+        entry = self._session.active
+        if entry is not None:
+            entry.bouts = list(bouts)
 
     def _on_export_frame(self) -> None:
         try:

@@ -1,4 +1,4 @@
-"""
+﻿"""
 cli/main.py
 ~~~~~~~~~~~
 Typer-based command-line interface for PoseR.
@@ -7,15 +7,15 @@ Entry-point:  ``poser``  (declared in ``setup.cfg``)
 
 Commands
 --------
-``poser train``           — train a behaviour decoder from labelled pose data
-``poser predict``         — run behaviour inference on a pose file
-``poser batch``           — run pose estimation + behaviour decoding on many files
-``poser finetune``        — fine-tune a YOLO pose model on exported frames
-``poser install-torch``   — auto-detect CUDA and install matching PyTorch build
-``poser skeleton list``   — list built-in skeleton definitions
-``poser skeleton info``   — show details of a skeleton
-``poser model list``      — list registered / discovered model architectures
-``poser init``            — scaffold a new PoseR project directory
+``poser train``           - train a behaviour decoder from labelled pose data
+``poser predict``         - run behaviour inference on a pose file
+``poser batch``           - run pose estimation + behaviour decoding on many files
+``poser finetune``        - fine-tune a YOLO pose model on exported frames
+``poser install-torch``   - auto-detect CUDA and install matching PyTorch build
+``poser skeleton list``   - list built-in skeleton definitions
+``poser skeleton info``   - show details of a skeleton
+``poser model list``      - list registered / discovered model architectures
+``poser init``            - scaffold a new PoseR project directory
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ from rich.table import Table
 
 app = typer.Typer(
     name="poser",
-    help="PoseR — multi-species behaviour decoding from pose estimation data.",
+    help="PoseR - multi-species behaviour decoding from pose estimation data.",
     rich_markup_mode="rich",
     no_args_is_help=True,
 )
@@ -111,7 +111,7 @@ def install_torch(
     console.print(f"[bold]Command :[/bold] {' '.join(cmd)}\n")
 
     if dry_run:
-        console.print("[yellow]Dry run — not installing.[/yellow]")
+        console.print("[yellow]Dry run - not installing.[/yellow]")
         return
 
     try:
@@ -120,7 +120,7 @@ def install_torch(
         console.print(f"[red]Install failed (exit code {exc.returncode}).[/red]")
         raise typer.Exit(exc.returncode)
 
-    console.print("\n[green]✓ PyTorch installed successfully.[/green]")
+    console.print("\n[green]OK PyTorch installed successfully.[/green]")
     console.print("  Verify with:  python -c \"import torch; print(torch.__version__, torch.cuda.is_available())\"")
 
 
@@ -130,11 +130,12 @@ def install_torch(
 
 @app.command()
 def train(
-    files: List[Path] = typer.Argument(..., help="HDF5 classification files to train on."),
+    files: List[Path] = typer.Argument(..., help="HDF5 or *_pose.npy files to train on."),
     config: Path = typer.Option("decoder_config.yml", "--config", "-c", help="TrainingConfig YAML."),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Override output directory."),
     epochs: Optional[int] = typer.Option(None, "--epochs", "-e", help="Override max_epochs."),
     run_name: Optional[str] = typer.Option(None, "--name", "-n", help="Run name / sub-directory."),
+    num_class: Optional[int] = typer.Option(None, "--num-class", help="Override model num_class."),
     auto_lr: bool = typer.Option(False, "--auto-lr", help="Run LR-finder before training."),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -151,15 +152,20 @@ def train(
         console.print(f"[green]Loaded config:[/green] {config}")
     else:
         cfg = TrainingConfig()
-        console.print("[yellow]Config file not found — using defaults.[/yellow]")
+        console.print("[yellow]Config file not found - using defaults.[/yellow]")
 
     # Apply CLI overrides
     if output_dir:
         cfg.output_dir = output_dir
+    else:
+        # Default: place runs alongside the training data, not in CWD
+        cfg.output_dir = files[0].resolve().parent / "poser_runs"
     if epochs:
         cfg.trainer.max_epochs = epochs
     if run_name:
         cfg.run_name = run_name
+    if num_class:
+        cfg.model.num_class = num_class
     if auto_lr:
         cfg.optimiser.auto_lr = True
 
@@ -167,27 +173,61 @@ def train(
     console.print(f"Loading {len(files)} classification file(s)...")
     try:
         train_dl, val_dl = prepare_dataset(files, cfg)
-    except ValueError as exc:
+    except Exception as exc:
+        import traceback
         console.print(f"[red]Data error:[/red] {exc}")
+        console.print(traceback.format_exc())
         raise typer.Exit(1)
 
-    # Build model
-    from poser.models.registry import load_model
-    model = load_model(
-        cfg.model.architecture,
-        num_class=cfg.model.num_class,
-        num_nodes=cfg.model.num_nodes,
-        in_channels=cfg.model.in_channels,
-        layout=cfg.model.layout,
-    )
+    # Build model - prefer from_training_config so OptimiserConfig is wired in
+    from poser.models.registry import list_models
+    arch = cfg.model.architecture.lower()
+    console.print(f"Building model: [bold]{arch}[/bold]")
+
+    # Ensure built-in models are imported so @register_model decorators run
+    try:
+        import poser.models.st_gcn_aaai18_pylightning_3block  # noqa: F401
+    except ImportError:
+        pass
+
+    from poser.models.registry import load_model as _load_model
+    arch_cls = _load_model.__func__.__self__ if hasattr(_load_model, "__func__") else None  # type: ignore[attr-defined]
+
+    # Try from_training_config first (preferred - wires OptimiserConfig)
+    try:
+        from poser.models.registry import _registry  # type: ignore[attr-defined]
+        model_cls = _registry.get_class(arch)
+        if hasattr(model_cls, "from_training_config"):
+            model = model_cls.from_training_config(cfg)
+            console.print("  [green]OK[/green] OptimiserConfig wired via from_training_config")
+        else:
+            # Fallback: plain instantiation with flat kwargs
+            model = _load_model(
+                arch,
+                num_class=cfg.model.num_class,
+                num_nodes=cfg.model.num_nodes,
+                in_channels=cfg.model.in_channels,
+                layout=cfg.model.layout,
+            )
+    except Exception as exc:
+        import traceback
+        console.print(f"[red]Model build error:[/red] {exc}")
+        console.print(traceback.format_exc())
+        raise typer.Exit(1)
 
     # Train
     trainer = PoseRTrainer(cfg)
     console.print(
-        f"[bold]Training[/bold] {cfg.model.architecture} "
+        f"[bold]Training[/bold] {arch} "
         f"| classes={cfg.model.num_class} | epochs={cfg.trainer.max_epochs}"
     )
-    trainer.fit(model, train_dl, val_dl)
+    try:
+        trainer.fit(model, train_dl, val_dl)
+    except Exception as exc:
+        import traceback
+        console.print(f"[red]Training error:[/red] {exc}")
+        console.print(traceback.format_exc())
+        raise typer.Exit(1)
 
     best = trainer.best_checkpoint
     console.print(f"\n[green]Training complete.[/green]  Best checkpoint: {best}")
@@ -223,6 +263,176 @@ def predict(
     with open(out_path, "w") as fh:
         json.dump({str(k): int(v) for k, v in result.items()}, fh, indent=2)
     console.print(f"[green]Predictions saved to:[/green] {out_path}")
+
+
+# ---------------------------------------------------------------------------
+# predict-npy  (frame-by-frame inference on a *_pose.npy file)
+# ---------------------------------------------------------------------------
+
+@app.command(name="predict-npy")
+def predict_npy(
+    pose_file: Path = typer.Argument(
+        ..., help="Input *_pose.npy file, shape (C, T, V, M)."
+    ),
+    checkpoint: Path = typer.Option(
+        ..., "--checkpoint", "-w", help="Trained .ckpt file."
+    ),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o",
+        help="Output path. Defaults to <pose_file>_predictions.npy and .csv."
+    ),
+    batch_size: int = typer.Option(64, "--batch", "-b", help="Inference batch size."),
+    device: str = typer.Option(
+        "auto", "--device", "-d", help="'auto', 'cpu', or 'cuda'."
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v"),
+) -> None:
+    """Run frame-by-frame behaviour inference on a *_pose.npy file.
+
+    Loads the model architecture and hyperparameters directly from the
+    checkpoint (no extra config needed).  Produces a .npy array of
+    per-frame predicted class indices and a .csv with frame, label columns.
+    """
+    _setup_logging(verbose)
+
+    import numpy as np
+    import torch
+    from torch.utils.data import DataLoader
+
+    # ── Resolve device ──────────────────────────────────────────────────
+    if device == "auto":
+        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        dev = torch.device(device)
+    console.print(f"Device: [cyan]{dev}[/cyan]")
+
+    # ── Load pose data ───────────────────────────────────────────────────
+    if not pose_file.exists():
+        console.print(f"[red]File not found:[/red] {pose_file}")
+        raise typer.Exit(1)
+    pose = np.load(pose_file)
+    if pose.ndim == 3:          # (C, T, V) — no M axis
+        pose = pose[..., np.newaxis]
+    if pose.ndim != 4:
+        console.print(f"[red]Expected 4-D array (C, T, V, M), got shape {pose.shape}[/red]")
+        raise typer.Exit(1)
+    C, T_total, V, M = pose.shape
+    console.print(f"Pose data: C={C}  T={T_total}  V={V}  M={M}")
+
+    # ── Load model from checkpoint ────────────────────────────────────
+    if not checkpoint.exists():
+        console.print(f"[red]Checkpoint not found:[/red] {checkpoint}")
+        raise typer.Exit(1)
+
+    console.print(f"Loading model from [cyan]{checkpoint.name}[/cyan] ...")
+    try:
+        # Read hparams from checkpoint without fully loading weights yet
+        raw_ckpt = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        hp = raw_ckpt.get("hyper_parameters", {})
+        data_cfg = hp.get("data_cfg", {})
+        T2        = int(data_cfg.get("T2", 100))
+        transform = data_cfg.get("transform", ["center", "align", "pad"])
+        center_node = int(hp.get("graph_cfg", {}).get("center", 0))
+        head_node = int(data_cfg.get("head", 0))
+        num_class = int(hp.get("num_class", 2))
+    except Exception as exc:
+        console.print(f"[red]Could not read checkpoint hparams:[/red] {exc}")
+        raise typer.Exit(1)
+
+    console.print(
+        f"Checkpoint hparams: num_class={num_class}  T2={T2}  "
+        f"center_node={center_node}  transforms={transform}"
+    )
+
+    try:
+        from poser.models.st_gcn_aaai18_pylightning_3block import ST_GCN_18
+        import types
+
+        # 'hparams' was a required __init__ arg that got removed from the
+        # checkpoint because it couldn't be pickled.  Provide a minimal stub
+        # so load_from_checkpoint can reconstruct the model.
+        _infer_hparams = types.SimpleNamespace(
+            learning_rate=1e-4,          # unused in eval mode
+            batch_size=batch_size,
+            dropout=float(hp.get("dropout", 0.5)),
+        )
+
+        model = ST_GCN_18.load_from_checkpoint(
+            str(checkpoint),
+            map_location=dev,
+            hparams=_infer_hparams,
+        )
+        model.eval()
+        model.to(dev)
+    except Exception as exc:
+        import traceback as _tb
+        console.print(f"[red]Failed to load model:[/red] {exc}")
+        console.print(_tb.format_exc())
+        raise typer.Exit(1)
+
+    console.print("Model loaded.")
+
+    # ── Build dataset (unlabelled sliding-window) ─────────────────────
+    from poser.core.dataset import PoseDataset
+
+    dummy_labels = np.zeros(T_total, dtype=np.int64)
+    ds = PoseDataset(
+        data=pose,
+        labels=dummy_labels,
+        preprocess_frame=True,
+        window_size=T2,
+        transform=transform,
+        augmentation=None,
+        center_node=center_node,
+        head_node=head_node,
+        T=T2,
+        num_class=num_class,
+        C=C,
+    )
+    dl = DataLoader(ds, batch_size=batch_size, shuffle=False, num_workers=0)
+
+    # ── Inference ─────────────────────────────────────────────────────
+    all_preds: list = []
+    n_batches = (T_total + batch_size - 1) // batch_size
+    console.print(f"Running inference over {T_total} frames ({n_batches} batches)...")
+
+    with torch.no_grad():
+        for batch_idx, (x, _) in enumerate(dl):
+            x = x.to(dev)
+            logits = model(x)
+            preds = logits.argmax(dim=-1).cpu().numpy()
+            all_preds.extend(preds.tolist())
+            if batch_idx % max(1, n_batches // 10) == 0:
+                console.print(
+                    f"  {min((batch_idx+1)*batch_size, T_total)}/{T_total} frames done"
+                )
+
+    predictions = np.array(all_preds, dtype=np.int64)  # (T_total,)
+
+    # ── Save outputs ──────────────────────────────────────────────────
+    base = output or pose_file.parent / (pose_file.stem + "_predictions")
+    npy_path = base.with_suffix(".npy")
+    csv_path = base.with_suffix(".csv")
+
+    np.save(npy_path, predictions)
+
+    import csv
+    with open(csv_path, "w", newline="") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["frame", "predicted_label"])
+        for frame_idx, label in enumerate(predictions):
+            writer.writerow([frame_idx, int(label)])
+
+    console.print(f"\n[green]Done.[/green]  {T_total} frames predicted.")
+    console.print(f"  .npy -> {npy_path}")
+    console.print(f"  .csv -> {csv_path}")
+
+    # Quick class distribution summary
+    unique, counts = np.unique(predictions, return_counts=True)
+    console.print("\nPredicted class distribution:")
+    for cls_id, cnt in zip(unique, counts):
+        pct = 100.0 * cnt / T_total
+        console.print(f"  class {cls_id:3d}: {cnt:6d} frames  ({pct:.1f}%)")
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +534,7 @@ def skeleton_list() -> None:
             s.name,
             str(s.num_nodes),
             str(s.center_node),
-            str(s.head_node) if s.head_node is not None else "—",
+            str(s.head_node) if s.head_node is not None else "N/A",
         )
     console.print(table)
 
@@ -430,9 +640,18 @@ def init(
 # ---------------------------------------------------------------------------
 
 def _setup_logging(verbose: bool) -> None:
-    level = logging.DEBUG if verbose else logging.WARNING
+    level = logging.DEBUG if verbose else logging.INFO
     logging.basicConfig(level=level, format="%(levelname)s %(name)s: %(message)s")
+    if not verbose:
+        # Silence chatty third-party libraries but keep Lightning/torch visible
+        for _noisy in ("urllib3", "PIL", "matplotlib", "numba", "h5py",
+                       "fsspec", "botocore", "boto3"):
+            logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
 def main() -> None:  # pragma: no cover
     app()
+
+
+if __name__ == "__main__":
+    main()

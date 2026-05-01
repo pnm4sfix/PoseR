@@ -81,6 +81,10 @@ class TrainPanel(QWidget):
         btn_add_files.clicked.connect(self._on_add_files)
         data_lay.addWidget(btn_add_files)
 
+        btn_add_numpy = QPushButton("Add numpy training folder…")
+        btn_add_numpy.clicked.connect(self._on_add_numpy_folder)
+        data_lay.addWidget(btn_add_numpy)
+
         btn_use_session = QPushButton("Use session files (done only)")
         btn_use_session.clicked.connect(self._on_use_session_files)
         data_lay.addWidget(btn_use_session)
@@ -113,6 +117,18 @@ class TrainPanel(QWidget):
         self._epochs_spin.setValue(200)
         epochs_row.addWidget(self._epochs_spin)
         cfg_lay.addLayout(epochs_row)
+
+        # Quick override: num_class
+        class_row = QHBoxLayout()
+        class_row.addWidget(QLabel("Num classes:"))
+        self._num_class_spin = QSpinBox()
+        self._num_class_spin.setRange(2, 100)
+        self._num_class_spin.setValue(2)
+        self._num_class_spin.setToolTip(
+            "Number of behaviour classes (auto-set when loading a numpy folder with a schema.json)."
+        )
+        class_row.addWidget(self._num_class_spin)
+        cfg_lay.addLayout(class_row)
 
         # Run name
         name_row = QHBoxLayout()
@@ -156,6 +172,49 @@ class TrainPanel(QWidget):
     # Slots
     # ------------------------------------------------------------------
 
+    def _on_add_numpy_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select folder with numpy training data", ""
+        )
+        if not folder:
+            return
+        folder = Path(folder)
+        pose_files = sorted(folder.glob("*_pose.npy"))
+        paired = []
+        for pf in pose_files:
+            stem = pf.stem[: -len("_pose")]
+            lf = folder / f"{stem}_labels.npy"
+            if lf.exists():
+                paired.append(pf)
+
+        if not paired:
+            QMessageBox.warning(
+                self, "No data found",
+                f"No matching *_pose.npy / *_labels.npy pairs found in:\n{folder}",
+            )
+            return
+
+        self._training_files = paired
+        self._update_file_label()
+
+        # Auto-set num_class from schema if present
+        for pf in paired:
+            stem = pf.stem[: -len("_pose")]
+            schema_path = folder / f"{stem}_schema.json"
+            if schema_path.exists():
+                import json
+                try:
+                    schema = json.loads(schema_path.read_text())
+                    n = len(schema)
+                    if n >= 2:
+                        self._num_class_spin.setValue(n)
+                        self._log_signal.emit(
+                            f"[INFO] num_class set to {n} from {schema_path.name}"
+                        )
+                except Exception:
+                    pass
+                break
+
     def _on_add_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select labelled HDF5 files", "",
@@ -190,11 +249,16 @@ class TrainPanel(QWidget):
             QMessageBox.warning(self, "Already running", "Training is already in progress.")
             return
 
+        # Default output dir = same folder as the first training file
+        _output_dir = str(self._training_files[0].resolve().parent / "poser_runs")
+
         cmd = [
-            sys.executable, "-m", "poser.cli.main", "train",
+            sys.executable, "-u", "-m", "poser.cli.main", "train",
             *[str(f) for f in self._training_files],
             "--epochs", str(self._epochs_spin.value()),
             "--name", self._run_name_edit.text(),
+            "--num-class", str(self._num_class_spin.value()),
+            "--output", _output_dir,
         ]
         if self._config_path:
             cmd += ["--config", str(self._config_path)]
@@ -205,11 +269,18 @@ class TrainPanel(QWidget):
         self._log_signal.emit(f"$ {' '.join(cmd)}\n")
 
         try:
+            import os
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"  # force line-by-line flush
+            env["PYTHONUTF8"] = "1"        # UTF-8 stdout so Rich/unicode don't crash cp1252 pipe
             self._training_proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
+                env=env,
             )
         except Exception as exc:
             QMessageBox.critical(self, "Launch error", str(exc))
@@ -248,7 +319,10 @@ class TrainPanel(QWidget):
         proc = self._training_proc
         if proc is None or proc.stdout is None:
             return
-        for line in proc.stdout:
+        # Use iter(readline, '') rather than 'for line in proc.stdout:' —
+        # the iterator has 8 KB read-ahead buffering which delays output;
+        # readline() blocks only until the next '\n' is available.
+        for line in iter(proc.stdout.readline, ""):
             self._log_signal.emit(line)
         proc.wait()
         self._done_signal.emit(proc.returncode)
