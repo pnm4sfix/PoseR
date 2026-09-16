@@ -44,14 +44,22 @@ def rotate_transform(behaviour: np.ndarray, num_angles: int) -> np.ndarray:
 
 
 def jitter_transform(behaviour: np.ndarray, num_jitter: int) -> np.ndarray:
-    """Add small random noise (±2 px) to x/y coordinates.
+    """Add uniform noise in [-2, 2) pixels to the x and y coordinates.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_jitter:
-        Number of jittered copies to produce.
+    Training augmentation: every coordinate gets its own independent offset,
+    and each copy its own noise field. The confidence channel is carried
+    through untouched.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_jitter: How many jittered copies to produce.
+
+    Returns:
+        Shape (num_jitter, C, T, V, M).
+
+    Note:
+        Draws from the global numpy random state, so seed np.random to make a
+        run reproducible.
     """
     jittered = np.zeros((num_jitter, *behaviour.shape))
     for i in range(num_jitter):

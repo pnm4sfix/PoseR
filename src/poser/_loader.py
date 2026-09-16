@@ -6,7 +6,7 @@ from sklearn.utils import class_weight
 import psutil
 import os
 
-from .core.augmentation import rotate_transform
+from .core.augmentation import jitter_transform, rotate_transform
 
 try:
     import cupy as cp
@@ -540,20 +540,16 @@ class ZebData(torch.utils.data.Dataset):
         return rotate_transform(behaviour, numAngles)
 
     def jitter_transform(self, behaviour, numJitter):
-        """Adds noise to poses returning a set number of rotated poses.
+        """Add uniform noise in [-2, 2) pixels to the x and y coordinates.
 
-        # N, C, T, V, M"""
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numJitter: How many jittered copies to produce.
 
-        jittered = np.zeros((numJitter, *behaviour.shape))
-
-        for jitter_no in range(numJitter):
-            # random jitter between -5 and +5 pixels
-            jitter = (np.random.random(behaviour[:2].shape) * 4) - 2
-
-            jittered[jitter_no] = behaviour.copy()
-            jittered[jitter_no, :2] = behaviour[:2] + jitter
-
-        return jittered
+        Returns:
+            Shape (numJitter, C, T, V, M).
+        """
+        return jitter_transform(behaviour, numJitter)
 
     def scale_transform(self, behaviour, numScales):
         """Randomly scales poses"""

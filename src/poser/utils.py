@@ -35,23 +35,6 @@ def plotting_palette():
     return palette
 
 
-def jitter_transform(behaviour, numJitter):
-    """Adds noise to poses returning a set number of rotated poses.
-
-    # N, C, T, V, M"""
-
-    jittered = np.zeros((numJitter, *behaviour.shape))
-
-    for jitter_no in range(numJitter):
-        # random jitter between -5 and +5 pixels
-        jitter = (np.random.random(behaviour[:2].shape) * 4) - 2
-
-        jittered[jitter_no] = behaviour.copy()
-        jittered[jitter_no, :2] = behaviour[:2] + jitter
-
-    return jittered
-
-
 def scale_transform(behaviour, numScales):
     """Randomly scales poses"""
 
