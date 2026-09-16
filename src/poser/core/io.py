@@ -21,7 +21,6 @@ All readers return a coords_data dict::
 from __future__ import annotations
 
 import logging
-import os
 from functools import partial
 from pathlib import Path
 from typing import Dict, Optional, Union
@@ -263,26 +262,18 @@ def save_to_h5(
 ) -> str:
     """Write classification_data to a PoseR .h5 file.
 
-    Parameters
-    ----------
-    classification_data:
-        ``{ind: {behaviour: {"classification": str, "coords": ndarray,
-                              "ci": ndarray, "start": int, "stop": int}}}``
-    video_file:
-        Used to derive the output filename (``<video_file>_classification.h5``).
-    n_nodes:
-        Number of skeleton nodes.
-    behaviour_schema:
-        PyTables ``IsDescription`` subclass defining the label table schema.
+    Args:
+        classification_data: {individual: {behaviour: bout}}, where bout has
+            keys classification, coords, ci, start and stop.
+        video_file: Names the output, which is <video_file>_classification.h5.
+        behaviour_schema: PyTables IsDescription subclass defining the label
+            table schema.
 
-    Returns
-    -------
-    str
-        Absolute path to the written file.
+    Returns:
+        Path to the written file, relative if video_file was relative.
     """
     filename = str(video_file) + "_classification.h5"
-    mode = "a" if os.path.exists(filename) else "w"
-    with tb.open_file(filename, mode=mode, title="classification") as f:
+    with tb.open_file(filename, mode="a", title="classification") as f:
         for ind, ind_subset in classification_data.items():
             ind_group = f.create_group("/", str(ind), f"Individual{ind}")
             ind_table = f.create_table(
@@ -312,21 +303,15 @@ def save_to_h5(
 def save_coords_to_h5(coords_data: Dict, video_file: PathLike) -> str:
     """Write coords_data to a PoseR-native coords .h5 file.
 
-    Parameters
-    ----------
-    coords_data:
-        ``{individual: {"x": array, "y": array, "ci": array}}``.
-    video_file:
-        Used to derive output filename (``<video_file>_poser_coords.h5``).
+    Args:
+        coords_data: {individual: {"x", "y", "ci"}}, each (V, T).
+        video_file: Names the output, which is <video_file>_poser_coords.h5.
 
-    Returns
-    -------
-    str
-        Absolute path to the written file.
+    Returns:
+        Path to the written file, relative if video_file was relative.
     """
     filename = str(video_file) + "_poser_coords.h5"
-    mode = "a" if os.path.exists(filename) else "w"
-    with tb.open_file(filename, mode=mode, title="coords") as f:
+    with tb.open_file(filename, mode="a", title="coords") as f:
         for ind, data in coords_data.items():
             ind_group = f.create_group("/", str(ind), f"Individual{ind}")
             coords_array = np.array([data["x"], data["y"], data["ci"]])
