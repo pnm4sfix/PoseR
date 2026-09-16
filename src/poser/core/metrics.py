@@ -6,6 +6,12 @@ import logging
 from typing import Dict, Optional
 
 import numpy as np
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
+    confusion_matrix,
+)
 
 log = logging.getLogger(__name__)
 
@@ -27,13 +33,6 @@ def benchmark_model_performance(
         Keys accuracy, balanced_accuracy, confusion_matrix and
         classification_report.
     """
-    from sklearn.metrics import (  # lazy: sklearn.metrics costs ~780ms to import
-        accuracy_score,
-        balanced_accuracy_score,
-        classification_report,
-        confusion_matrix,
-    )
-
     accuracy = accuracy_score(targets, predictions)
     balanced_accuracy = balanced_accuracy_score(targets, predictions)
     matrix = confusion_matrix(targets, predictions)
