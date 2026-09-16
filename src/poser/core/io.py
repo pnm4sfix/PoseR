@@ -207,18 +207,19 @@ def read_coords(
     ) from last_exc
 
 
-# ---------------------------------------------------------------------------
-# Classification h5 (PyTables)
-# ---------------------------------------------------------------------------
 
 def read_classification_h5(filepath: PathLike) -> Dict:
     """Read a PoseR classification .h5 file.
 
-    Returns
-    -------
-    dict
-        ``{ind_int: {behaviour_int: {"classification": str, "coords": ndarray,
-                                      "ci": ndarray, "start": int, "stop": int}}}``
+    Returns:
+        {individual: {behaviour: bout}}, where bout has keys classification,
+        coords, ci, start and stop. coords is (n, 3) and ci is (n,), with n
+        the number of nodes times frames in that bout.
+
+    Note:
+        Behaviour keys are 1-based. The on-disk table numbers behaviours from
+        zero and this adds one, so they do not match the array names in the
+        file.
     """
     classification_data: Dict = {}
     with tb.open_file(str(filepath), mode="r") as f:
