@@ -23,3 +23,7 @@ class UnsupportedFormatError(PoseFormatError):
     Narrower than PoseFormatError: the file was rejected on its name, before
     anything tried to parse it.
     """
+
+
+class BehaviourWriteError(PoseRError):
+    """A behaviour could not be written to a classification file."""

@@ -29,7 +29,11 @@ import numpy as np
 import pandas as pd
 import tables as tb
 
-from .exceptions import PoseFormatError, UnsupportedFormatError
+from .exceptions import (
+    BehaviourWriteError,
+    PoseFormatError,
+    UnsupportedFormatError,
+)
 
 PathLike = Union[str, Path]
 
@@ -295,7 +299,10 @@ def save_to_h5(
                     row.append()
                     ind_table.flush()
                 except Exception as exc:
-                    print(f"  Warning: could not save behaviour {behaviour}: {exc}")
+                    raise BehaviourWriteError(
+                        f"Could not write behaviour {behaviour} for "
+                        f"individual {ind} to {filename}: {exc}"
+                    ) from exc
 
     return filename
 
