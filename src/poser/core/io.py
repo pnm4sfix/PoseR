@@ -27,6 +27,7 @@ from typing import Dict, Optional, Union
 import h5py
 import numpy as np
 import pandas as pd
+import tables as tb
 
 PathLike = Union[str, Path]
 
@@ -125,13 +126,13 @@ def read_sleap(h5_file: PathLike) -> Dict:
 
 
 def read_poser_coords(h5_file: PathLike) -> Dict:
-    """Read a PoseR-native coords .h5 file (PyTables).
+    """Read a PoseR-native coords .h5 file, one group per individual.
 
-    Expects groups keyed by individual with an array named ``"coords"``
-    of shape ``(3, n_nodes, n_frames)`` corresponding to [x, y, ci].
+    Each group holds a coords array of shape (3, V, T) ordered x, y, ci.
+
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}, each a (V, T) array.
     """
-    import tables as tb
-
     coords_data: Dict = {}
     with tb.open_file(str(h5_file), mode="r") as f:
         for ind in f.list_nodes("/"):
@@ -196,8 +197,6 @@ def read_classification_h5(filepath: PathLike) -> Dict:
         ``{ind_int: {behaviour_int: {"classification": str, "coords": ndarray,
                                       "ci": ndarray, "start": int, "stop": int}}}``
     """
-    import tables as tb
-
     classification_data: Dict = {}
     with tb.open_file(str(filepath), mode="r") as f:
         for group_name in f.root.__getattr__("_v_groups"):
@@ -257,8 +256,6 @@ def save_to_h5(
     str
         Absolute path to the written file.
     """
-    import tables as tb
-
     filename = str(video_file) + "_classification.h5"
     mode = "a" if os.path.exists(filename) else "w"
     with tb.open_file(filename, mode=mode, title="classification") as f:
@@ -303,8 +300,6 @@ def save_coords_to_h5(coords_data: Dict, video_file: PathLike) -> str:
     str
         Absolute path to the written file.
     """
-    import tables as tb
-
     filename = str(video_file) + "_poser_coords.h5"
     mode = "a" if os.path.exists(filename) else "w"
     with tb.open_file(filename, mode=mode, title="coords") as f:
