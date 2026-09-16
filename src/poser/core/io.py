@@ -30,10 +30,6 @@ import pandas as pd
 PathLike = Union[str, Path]
 
 
-# ---------------------------------------------------------------------------
-# Readers
-# ---------------------------------------------------------------------------
-
 def read_dlc(
     h5_file: PathLike,
     *,
@@ -43,21 +39,17 @@ def read_dlc(
 ) -> Dict:
     """Read a DeepLabCut .h5 or .csv pose file.
 
-    Parameters
-    ----------
-    h5_file:
-        Path to DLC output file (.h5 or .csv).
-    clean:
-        If True, NaN-interpolate low-confidence frames (ci < *confidence_threshold*).
-    confidence_threshold:
-        Threshold below which keypoints are masked when *clean* is True.
-    bodypoints:
-        Optional subset of bodypart names to keep (e.g. for OFT mouse datasets).
+    Args:
+        clean: Mask x and y below confidence_threshold, then interpolate
+            across the gaps. ci is returned unmodified.
+        bodypoints: Bodypart names to keep. None keeps all.
 
-    Returns
-    -------
-    dict
-        ``{individual: {"x": DataFrame, "y": DataFrame, "ci": DataFrame}}``
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}, each a (V, T) DataFrame
+        of nodes by frames.
+
+    Raises:
+        ValueError: If the file extension is neither .h5 nor .csv.
     """
     h5_file = str(h5_file)
     if h5_file.endswith(".h5"):
@@ -114,10 +106,10 @@ def read_dlc(
 
 
 def read_sleap(h5_file: PathLike) -> Dict:
-    """Read a SLEAP pose-estimation .h5 file.
+    """Read a SLEAP .h5 file: one group per individual, each with x, y and ci.
 
-    Expects groups keyed by individual, each containing datasets ``"x"``,
-    ``"y"``, ``"ci"``.
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}, each a (V, T) array.
     """
     import h5py
 
