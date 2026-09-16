@@ -6,7 +6,7 @@ Supports:
   * SLEAP       (.h5)
   * PoseR-native (.h5 via PyTables)
 
-All readers return a ``coords_data`` dict::
+All readers return a coords_data dict::
 
     {
         individual_key: {
@@ -20,7 +20,9 @@ All readers return a ``coords_data`` dict::
 
 from __future__ import annotations
 
+import logging
 import os
+from functools import partial
 from pathlib import Path
 from typing import Dict, Optional, Union
 
@@ -28,7 +30,11 @@ import numpy as np
 import pandas as pd
 import tables as tb
 
+from .exceptions import PoseFormatError
+
 PathLike = Union[str, Path]
+
+log = logging.getLogger(__name__)
 
 
 def read_dlc(
@@ -150,36 +156,55 @@ def read_coords(
     confidence_threshold: float = 0.8,
     bodypoints: Optional[list[str]] = None,
 ) -> Dict:
-    """Auto-detect format and read a pose file.
+    """Read a pose file, detecting its format.
 
-    Tries DLC → SLEAP → PoseR-native in order.
+    A name containing poser_coords goes straight to the PoseR-native reader.
+    Anything else is tried as DeepLabCut, then SLEAP, then PoseR-native.
 
-    Returns
-    -------
-    dict
-        coords_data compatible with the rest of the pipeline.
+    Args:
+        clean, confidence_threshold, bodypoints: Forwarded to read_dlc and
+            ignored by the other two readers.
+
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}.
+
+    Raises:
+        PoseFormatError: If no reader recognises the file. The message names
+            what each reader rejected it for.
     """
-    h5_file_str = str(h5_file)
-
-    if "poser_coords" in h5_file_str:
+    if "poser_coords" in str(h5_file):
         return read_poser_coords(h5_file)
 
-    try:
-        return read_dlc(
-            h5_file,
-            clean=clean,
-            confidence_threshold=confidence_threshold,
-            bodypoints=bodypoints,
-        )
-    except Exception:
-        pass
+    attempts = (
+        (
+            "DeepLabCut",
+            partial(
+                read_dlc,
+                h5_file,
+                clean=clean,
+                confidence_threshold=confidence_threshold,
+                bodypoints=bodypoints,
+            ),
+        ),
+        ("SLEAP", partial(read_sleap, h5_file)),
+        ("PoseR-native", partial(read_poser_coords, h5_file)),
+    )
 
-    try:
-        return read_sleap(h5_file)
-    except Exception:
-        pass
+    failures: list[str] = []
+    last_exc: Optional[Exception] = None
+    for fmt, reader in attempts:
+        try:
+            return reader()
+        except Exception as exc:
+            # Format probe: any parse failure just means "not this format".
+            last_exc = exc
+            log.debug("%s reader rejected %s: %s", fmt, h5_file, exc)
+            failures.append(f"{fmt}: {type(exc).__name__}: {exc}")
 
-    return read_poser_coords(h5_file)
+    raise PoseFormatError(
+        f"{h5_file} is not a readable pose file. Tried:\n  "
+        + "\n  ".join(failures)
+    ) from last_exc
 
 
 # ---------------------------------------------------------------------------
