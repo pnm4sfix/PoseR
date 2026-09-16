@@ -12,24 +12,23 @@ from __future__ import annotations
 import numpy as np
 
 
-# ---------------------------------------------------------------------------
-# Individual transforms — return (num_aug, C, T, V, M)
-# ---------------------------------------------------------------------------
-
 def rotate_transform(behaviour: np.ndarray, num_angles: int) -> np.ndarray:
-    """Randomly rotate a pose by ±30 degrees.
+    """Rotate a pose by a random angle in [-30, 30) degrees.
 
-    Parameters
-    ----------
-    behaviour:
-        Single pose sample, shape ``(C, T, V, M)``.
-    num_angles:
-        Number of rotated copies to produce.
+    Training augmentation: each copy gets its own independent angle. Only x and
+    y are rotated, the confidence channel is carried through untouched.
 
-    Returns
-    -------
-    np.ndarray
-        Shape ``(num_angles, C, T, V, M)``.
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_angles: How many rotated copies to produce.
+
+    Returns:
+        Shape (num_angles, C, T, V, M).
+
+    Note:
+        Rotation is about the origin, so centre the pose first or it will be
+        translated as well. Draws from the global numpy random state, so seed
+        np.random to make a run reproducible.
     """
     rotated = np.zeros((num_angles, *behaviour.shape))
     for i in range(num_angles):
