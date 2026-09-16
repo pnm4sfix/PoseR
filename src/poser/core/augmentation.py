@@ -70,14 +70,22 @@ def jitter_transform(behaviour: np.ndarray, num_jitter: int) -> np.ndarray:
 
 
 def scale_transform(behaviour: np.ndarray, num_scales: int) -> np.ndarray:
-    """Randomly scale pose coordinates by 0–3×.
+    """Scale the x and y coordinates by a random factor in [0, 3).
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_scales:
-        Number of scaled copies to produce.
+    Training augmentation: one factor per copy, applied to every coordinate.
+    The confidence channel is carried through untouched.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_scales: How many scaled copies to produce.
+
+    Returns:
+        Shape (num_scales, C, T, V, M).
+
+    Note:
+        The range reaches down to zero, so some copies collapse the pose
+        towards a point. Draws from the global numpy random state, so seed
+        np.random to make a run reproducible.
     """
     scaled = np.zeros((num_scales, *behaviour.shape))
     for i in range(num_scales):

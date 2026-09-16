@@ -35,21 +35,6 @@ def plotting_palette():
     return palette
 
 
-def scale_transform(behaviour, numScales):
-    """Randomly scales poses"""
-
-    scaled = np.zeros((numScales, *behaviour.shape))
-
-    for scale_no in range(numScales):
-        # create random scales between 0 and 3
-        scale = np.random.random(1) * 3
-
-        scaled[scale_no] = behaviour.copy()
-        scaled[scale_no, :2] = behaviour[:2] * scale
-
-    return scaled
-
-
 def shear_transform(behaviour, numShears):
     sheared = np.zeros((numShears, *behaviour.shape))
 

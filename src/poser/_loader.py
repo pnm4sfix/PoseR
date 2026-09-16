@@ -6,7 +6,11 @@ from sklearn.utils import class_weight
 import psutil
 import os
 
-from .core.augmentation import jitter_transform, rotate_transform
+from .core.augmentation import (
+    jitter_transform,
+    rotate_transform,
+    scale_transform,
+)
 
 try:
     import cupy as cp
@@ -552,18 +556,16 @@ class ZebData(torch.utils.data.Dataset):
         return jitter_transform(behaviour, numJitter)
 
     def scale_transform(self, behaviour, numScales):
-        """Randomly scales poses"""
+        """Scale the x and y coordinates by a random factor in [0, 3).
 
-        scaled = np.zeros((numScales, *behaviour.shape))
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numScales: How many scaled copies to produce.
 
-        for scale_no in range(numScales):
-            # create random scales between 0 and 3
-            scale = np.random.random(1) * 3
-
-            scaled[scale_no] = behaviour.copy()
-            scaled[scale_no, :2] = behaviour[:2] * scale
-
-        return scaled
+        Returns:
+            Shape (numScales, C, T, V, M).
+        """
+        return scale_transform(behaviour, numScales)
 
     def shear_transform(self, behaviour, numShears):
         sheared = np.zeros((numShears, *behaviour.shape))
