@@ -29,7 +29,7 @@ import numpy as np
 import pandas as pd
 import tables as tb
 
-from .exceptions import PoseFormatError
+from .exceptions import PoseFormatError, UnsupportedFormatError
 
 PathLike = Union[str, Path]
 
@@ -320,14 +320,16 @@ def save_coords_to_h5(coords_data: Dict, video_file: PathLike) -> str:
     return filename
 
 
-# ---------------------------------------------------------------------------
-# Numpy convenience
-# ---------------------------------------------------------------------------
-
 def convert_dlc_to_ctvm(dlc_file: PathLike) -> np.ndarray:
-    """Convert a DLC .h5/.csv file directly to a ``(C, T, V, M)`` numpy array.
+    """Convert a DeepLabCut .h5 or .csv file to a (C, T, V, M) array.
 
-    C=3 (x, y, ci), T=frames, V=bodyparts, M=individuals.
+    C is 3 (x, y, ci), T frames, V bodyparts, M individuals.
+
+    Note:
+        M is always 1. Multi-animal files are flattened into one individual.
+
+    Raises:
+        UnsupportedFormatError: If the extension is neither .h5 nor .csv.
     """
     dlc_file = str(dlc_file)
     if dlc_file.endswith(".h5"):
@@ -335,7 +337,7 @@ def convert_dlc_to_ctvm(dlc_file: PathLike) -> np.ndarray:
     elif dlc_file.endswith(".csv"):
         dlc_data = pd.read_csv(dlc_file, header=[0, 1, 2], index_col=0)
     else:
-        raise ValueError(f"Unsupported file format: {dlc_file}")
+        raise UnsupportedFormatError(f"Unsupported file format: {dlc_file}")
 
     data_t = dlc_data.transpose()
     data_t["individuals"] = ["individual1"] * data_t.shape[0]
@@ -345,7 +347,6 @@ def convert_dlc_to_ctvm(dlc_file: PathLike) -> np.ndarray:
         .reset_index()
     )
 
-    ctvms = []
     bodyparts = data_t.bodyparts.unique()
 
     x = data_t[data_t.coords == "x"].loc[:, 0:].to_numpy()

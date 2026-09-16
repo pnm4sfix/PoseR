@@ -15,3 +15,11 @@ class PoseRError(Exception):
 
 class PoseFormatError(PoseRError):
     """A pose file could not be read as any supported format."""
+
+
+class UnsupportedFormatError(PoseFormatError):
+    """A file extension is not one PoseR knows how to read.
+
+    Narrower than PoseFormatError: the file was rejected on its name, before
+    anything tried to parse it.
+    """
