@@ -24,6 +24,7 @@ import os
 from pathlib import Path
 from typing import Dict, Optional, Union
 
+import h5py
 import numpy as np
 import pandas as pd
 
@@ -111,8 +112,6 @@ def read_sleap(h5_file: PathLike) -> Dict:
     Returns:
         Mapping of individual to {"x", "y", "ci"}, each a (V, T) array.
     """
-    import h5py
-
     coords_data: Dict = {}
     with h5py.File(str(h5_file), "r") as f:
         for individual in f.keys():
