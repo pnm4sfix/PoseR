@@ -35,32 +35,6 @@ def plotting_palette():
     return palette
 
 
-def rotate_transform(behaviour, numAngles):
-    """Rotates poses returning a set number of rotated poses.
-
-    # N, C, T, V, M"""
-
-    rotated = np.zeros((numAngles, *behaviour.shape))
-
-    for angle_no in range(numAngles):
-        # random angle between -30 and + 30
-        angle = (np.random.random(1) * 60) - 30
-        angle = np.radians(angle[0])
-
-        # rotation matrix to use to transform coordinate space
-        c, s = np.cos(angle), np.sin(angle)
-        R = np.array([[c, s], [-s, c]])  # clockwise
-
-        # rotate all time points in behaviour by multiplying rotation matrix with behaviour X, Y
-        transformed = np.dot(R, behaviour[:2].reshape(2, -1)).reshape(
-            behaviour[0:2, :].shape
-        )
-        rotated[angle_no] = behaviour.copy()
-        rotated[angle_no, :2] = transformed
-
-    return rotated
-
-
 def jitter_transform(behaviour, numJitter):
     """Adds noise to poses returning a set number of rotated poses.
 

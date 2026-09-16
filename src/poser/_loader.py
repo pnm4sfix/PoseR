@@ -6,6 +6,8 @@ from sklearn.utils import class_weight
 import psutil
 import os
 
+from .core.augmentation import rotate_transform
+
 try:
     import cupy as cp
 except:
@@ -526,29 +528,16 @@ class ZebData(torch.utils.data.Dataset):
         )
 
     def rotate_transform(self, behaviour, numAngles):
-        """Rotates poses returning a set number of rotated poses.
+        """Rotate a pose by a random angle in [-30, 30) degrees.
 
-        # N, C, T, V, M"""
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numAngles: How many rotated copies to produce.
 
-        rotated = np.zeros((numAngles, *behaviour.shape))
-
-        for angle_no in range(numAngles):
-            # random angle between -50 and + 50
-            angle = (np.random.random(1) * 60) - 30
-            angle = np.radians(angle[0])
-
-            # rotation matrix to use to transform coordinate space
-            c, s = np.cos(angle), np.sin(angle)
-            R = np.array([[c, s], [-s, c]])  # clockwise
-
-            # rotate all time points in behaviour by multiplying rotation matrix with behaviour X, Y
-            transformed = np.dot(R, behaviour[:2].reshape(2, -1)).reshape(
-                behaviour[0:2, :].shape
-            )
-            rotated[angle_no] = behaviour.copy()
-            rotated[angle_no, :2] = transformed
-
-        return rotated
+        Returns:
+            Shape (numAngles, C, T, V, M).
+        """
+        return rotate_transform(behaviour, numAngles)
 
     def jitter_transform(self, behaviour, numJitter):
         """Adds noise to poses returning a set number of rotated poses.
