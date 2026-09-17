@@ -254,10 +254,6 @@ def read_classification_h5(filepath: PathLike) -> Dict:
     return classification_data
 
 
-# ---------------------------------------------------------------------------
-# Writers
-# ---------------------------------------------------------------------------
-
 def save_to_h5(
     classification_data: Dict,
     video_file: PathLike,

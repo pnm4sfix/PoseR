@@ -127,14 +127,23 @@ def shear_transform(behaviour: np.ndarray, num_shears: int) -> np.ndarray:
 
 
 def roll_transform(behaviour: np.ndarray, num_rolls: int) -> np.ndarray:
-    """Temporally roll (shift) the pose sequence by a random amount.
+    """Shift the pose sequence in time by a random number of frames.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_rolls:
-        Number of rolled copies.
+    Training augmentation: the shift is drawn from [-20, 20] frames and wraps
+    around, so frames pushed off one end reappear at the other. All three
+    channels move together.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_rolls: How many rolled copies to produce.
+
+    Returns:
+        Shape (num_rolls, C, T, V, M).
+
+    Note:
+        Wrapping splices the end of the bout onto its start, so a rolled copy
+        is not a contiguous stretch of real movement. Draws from the global
+        numpy random state, so seed np.random to make a run reproducible.
     """
     rolled = np.zeros((num_rolls, *behaviour.shape))
     for i in range(num_rolls):
@@ -146,14 +155,23 @@ def roll_transform(behaviour: np.ndarray, num_rolls: int) -> np.ndarray:
 def fragment_transform(
     behaviour: np.ndarray, num_fragments: int
 ) -> np.ndarray:
-    """Extract a random sub-sequence and pad it back to the original length.
+    """Cut a random sub-sequence and tile it back to the original length.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_fragments:
-        Number of fragment copies.
+    Training augmentation: the start is drawn from [0, T-2] and the length
+    from [10, 60] frames, then _pad_to_length repeats the fragment until it
+    reaches T again.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_fragments: How many fragment copies to produce.
+
+    Returns:
+        Shape (num_fragments, C, T, V, M).
+
+    Note:
+        A fragment starting near the end is shorter than the requested length,
+        since the slice is not clamped. Draws from the global numpy random
+        state, so seed np.random to make a run reproducible.
     """
     T = behaviour.shape[1]
     fragments = np.zeros((num_fragments, *behaviour.shape))
@@ -166,25 +184,16 @@ def fragment_transform(
     return fragments
 
 
-# ---------------------------------------------------------------------------
-# Composite — apply all transforms once (used inline during __getitem__)
-# ---------------------------------------------------------------------------
-
 def random_augmentation(bhv: np.ndarray, num_aug: int = 1) -> np.ndarray:
-    """Apply rotate → jitter → scale → shear sequentially, once.
+    """Apply rotate, then jitter, then scale, then shear, once each.
 
-    Parameters
-    ----------
-    bhv:
-        Shape ``(C, T, V, M)``.
-    num_aug:
-        Kept for API compatibility; always produces exactly 1 output (the
-        first element of each transform chain).
+    Args:
+        bhv: One pose sample, shape (C, T, V, M).
+        num_aug: How many copies each transform generates internally. Only the
+            first is kept, so any value produces one output.
 
-    Returns
-    -------
-    np.ndarray
-        Shape ``(C, T, V, M)`` — same as input.
+    Returns:
+        Shape (C, T, V, M), the same as the input.
     """
     bhv = rotate_transform(bhv, num_aug)[0]
     bhv = jitter_transform(bhv, num_aug)[0]
