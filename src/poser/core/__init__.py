@@ -9,6 +9,12 @@ from .augmentation import (
     fragment_transform,
     random_augmentation,
 )
+from .exceptions import (
+    BehaviourWriteError,
+    PoseRError,
+    PoseFormatError,
+    UnsupportedFormatError,
+)
 from .io import (
     read_dlc,
     read_sleap,
@@ -36,6 +42,8 @@ from .frame_export import save_frame_as_yolo, save_frame_as_classification
 from .metrics import benchmark_model_performance
 
 __all__ = [
+    "PoseRError", "PoseFormatError", "UnsupportedFormatError",
+    "BehaviourWriteError",
     "rotate_transform", "jitter_transform", "scale_transform",
     "shear_transform", "roll_transform", "fragment_transform",
     "random_augmentation",

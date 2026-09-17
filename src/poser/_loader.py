@@ -6,6 +6,13 @@ from sklearn.utils import class_weight
 import psutil
 import os
 
+from .core.augmentation import (
+    jitter_transform,
+    rotate_transform,
+    scale_transform,
+    shear_transform,
+)
+
 try:
     import cupy as cp
 except:
@@ -526,77 +533,52 @@ class ZebData(torch.utils.data.Dataset):
         )
 
     def rotate_transform(self, behaviour, numAngles):
-        """Rotates poses returning a set number of rotated poses.
+        """Rotate a pose by a random angle in [-30, 30) degrees.
 
-        # N, C, T, V, M"""
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numAngles: How many rotated copies to produce.
 
-        rotated = np.zeros((numAngles, *behaviour.shape))
-
-        for angle_no in range(numAngles):
-            # random angle between -50 and + 50
-            angle = (np.random.random(1) * 60) - 30
-            angle = np.radians(angle[0])
-
-            # rotation matrix to use to transform coordinate space
-            c, s = np.cos(angle), np.sin(angle)
-            R = np.array([[c, s], [-s, c]])  # clockwise
-
-            # rotate all time points in behaviour by multiplying rotation matrix with behaviour X, Y
-            transformed = np.dot(R, behaviour[:2].reshape(2, -1)).reshape(
-                behaviour[0:2, :].shape
-            )
-            rotated[angle_no] = behaviour.copy()
-            rotated[angle_no, :2] = transformed
-
-        return rotated
+        Returns:
+            Shape (numAngles, C, T, V, M).
+        """
+        return rotate_transform(behaviour, numAngles)
 
     def jitter_transform(self, behaviour, numJitter):
-        """Adds noise to poses returning a set number of rotated poses.
+        """Add uniform noise in [-2, 2) pixels to the x and y coordinates.
 
-        # N, C, T, V, M"""
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numJitter: How many jittered copies to produce.
 
-        jittered = np.zeros((numJitter, *behaviour.shape))
-
-        for jitter_no in range(numJitter):
-            # random jitter between -5 and +5 pixels
-            jitter = (np.random.random(behaviour[:2].shape) * 4) - 2
-
-            jittered[jitter_no] = behaviour.copy()
-            jittered[jitter_no, :2] = behaviour[:2] + jitter
-
-        return jittered
+        Returns:
+            Shape (numJitter, C, T, V, M).
+        """
+        return jitter_transform(behaviour, numJitter)
 
     def scale_transform(self, behaviour, numScales):
-        """Randomly scales poses"""
+        """Scale the x and y coordinates by a random factor in [0, 3).
 
-        scaled = np.zeros((numScales, *behaviour.shape))
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numScales: How many scaled copies to produce.
 
-        for scale_no in range(numScales):
-            # create random scales between 0 and 3
-            scale = np.random.random(1) * 3
-
-            scaled[scale_no] = behaviour.copy()
-            scaled[scale_no, :2] = behaviour[:2] * scale
-
-        return scaled
+        Returns:
+            Shape (numScales, C, T, V, M).
+        """
+        return scale_transform(behaviour, numScales)
 
     def shear_transform(self, behaviour, numShears):
-        sheared = np.zeros((numShears, *behaviour.shape))
+        """Shear the x and y coordinates by random factors.
 
-        for shear_no in range(numShears):
-            # create random scales between -1.5 and 1.5
-            shear_x = (np.random.random(1) * 2) - 1
-            shear_y = np.random.random(1) * 1
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numShears: How many sheared copies to produce.
 
-            shear_matrix = np.array([[1, shear_x[0]], [shear_y[0], 1]])
-
-            transformed = np.dot(
-                shear_matrix, behaviour[:2].reshape(2, -1)
-            ).reshape(behaviour[0:2, :].shape)
-            sheared[shear_no] = behaviour.copy()
-            sheared[shear_no, :2] = transformed
-
-        return sheared
+        Returns:
+            Shape (numShears, C, T, V, M).
+        """
+        return shear_transform(behaviour, numShears)
 
     def roll_transform(self, behaviour, numRolls):
         rolled = np.zeros((numRolls, *behaviour.shape))
