@@ -96,14 +96,22 @@ def scale_transform(behaviour: np.ndarray, num_scales: int) -> np.ndarray:
 
 
 def shear_transform(behaviour: np.ndarray, num_shears: int) -> np.ndarray:
-    """Apply random shear transform to pose coordinates.
+    """Shear the x and y coordinates by random factors.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_shears:
-        Number of sheared copies to produce.
+    Training augmentation: the x factor is drawn from [-1, 1) and the y factor
+    from [0, 1), so the shear is asymmetric. The confidence channel is carried
+    through untouched.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_shears: How many sheared copies to produce.
+
+    Returns:
+        Shape (num_shears, C, T, V, M).
+
+    Note:
+        Draws from the global numpy random state, so seed np.random to make a
+        run reproducible.
     """
     sheared = np.zeros((num_shears, *behaviour.shape))
     for i in range(num_shears):

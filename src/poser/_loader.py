@@ -10,6 +10,7 @@ from .core.augmentation import (
     jitter_transform,
     rotate_transform,
     scale_transform,
+    shear_transform,
 )
 
 try:
@@ -568,22 +569,16 @@ class ZebData(torch.utils.data.Dataset):
         return scale_transform(behaviour, numScales)
 
     def shear_transform(self, behaviour, numShears):
-        sheared = np.zeros((numShears, *behaviour.shape))
+        """Shear the x and y coordinates by random factors.
 
-        for shear_no in range(numShears):
-            # create random scales between -1.5 and 1.5
-            shear_x = (np.random.random(1) * 2) - 1
-            shear_y = np.random.random(1) * 1
+        Args:
+            behaviour: One pose sample, shape (C, T, V, M).
+            numShears: How many sheared copies to produce.
 
-            shear_matrix = np.array([[1, shear_x[0]], [shear_y[0], 1]])
-
-            transformed = np.dot(
-                shear_matrix, behaviour[:2].reshape(2, -1)
-            ).reshape(behaviour[0:2, :].shape)
-            sheared[shear_no] = behaviour.copy()
-            sheared[shear_no, :2] = transformed
-
-        return sheared
+        Returns:
+            Shape (numShears, C, T, V, M).
+        """
+        return shear_transform(behaviour, numShears)
 
     def roll_transform(self, behaviour, numRolls):
         rolled = np.zeros((numRolls, *behaviour.shape))

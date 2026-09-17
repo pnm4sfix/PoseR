@@ -35,25 +35,6 @@ def plotting_palette():
     return palette
 
 
-def shear_transform(behaviour, numShears):
-    sheared = np.zeros((numShears, *behaviour.shape))
-
-    for shear_no in range(numShears):
-        # create random scales between -1.5 and 1.5
-        shear_x = (np.random.random(1) * 2) - 1
-        shear_y = np.random.random(1) * 1
-
-        shear_matrix = np.array([[1, shear_x[0]], [shear_y[0], 1]])
-
-        transformed = np.dot(
-            shear_matrix, behaviour[:2].reshape(2, -1)
-        ).reshape(behaviour[0:2, :].shape)
-        sheared[shear_no] = behaviour.copy()
-        sheared[shear_no, :2] = transformed
-
-    return sheared
-
-
 def create_graph(behaviour):
     G = nx.Graph()
     G.add_node(0, x=behaviour[0, 0][0], y=behaviour[1, 0][0])
