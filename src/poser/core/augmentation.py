@@ -207,23 +207,25 @@ def dynamic_augmentation(
     labels: np.ndarray,
     ideal_sample_no: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Oversample minority classes up to *ideal_sample_no* using 5 augmentation types.
+    """Oversample minority classes towards ideal_sample_no.
 
-    Parameters
-    ----------
-    data:
-        Shape ``(N, C, T, V, M)``.
-    labels:
-        Shape ``(N,)`` — integer class labels.
-    ideal_sample_no:
-        Target number of samples per class.
+    Classes already at or above the target are truncated to it exactly.
+    Smaller classes are topped up with rotate, jitter, scale, shear and roll
+    copies of every sample they hold. Labels below zero are dropped.
 
-    Returns
-    -------
-    (augmented_data, augmented_labels)
+    Args:
+        data: Pose samples, shape (N, C, T, V, M).
+        labels: Integer class labels, shape (N,).
+        ideal_sample_no: Target number of samples per class.
+
+    Returns:
+        The augmented samples and their labels.
+
+    Note:
+        Undersized classes overshoot the target rather than meeting it, because
+        every sample contributes a whole set of copies: 10 samples aiming at
+        100 yield 110, and 50 yield 150.
     """
-    import pandas as pd  # local to avoid top-level pandas dep in augmentation
-
     aug_data: list[np.ndarray] = []
     aug_labels: list[np.ndarray] = []
 
@@ -263,16 +265,16 @@ def dynamic_augmentation(
 
     final_data = np.concatenate(aug_data)
     final_labels = np.concatenate(aug_labels)
-    print(f"Augmented dataset: {pd.Series(final_labels).value_counts().to_dict()}")
+    values, counts = np.unique(final_labels, return_counts=True)
+    print(f"Augmented dataset: {dict(zip(values.tolist(), counts.tolist()))}")
     return final_data, final_labels
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 def _pad_to_length(pose: np.ndarray, new_t: int) -> np.ndarray:
-    """Tile a (C, T, V, M) array along the time axis to reach *new_t* frames."""
+    """Tile or truncate a (C, T, V, M) array along time to exactly new_t frames.
+
+    An empty time axis returns zeros rather than raising.
+    """
     t = pose.shape[1]
     if t == 0:
         return np.zeros((pose.shape[0], new_t, *pose.shape[2:]))
