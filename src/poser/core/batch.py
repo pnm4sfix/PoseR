@@ -18,7 +18,7 @@ from .io import read_coords
 from .pose_estimation import estimate_poses_from_video
 from .preprocessing import preprocess_bouts
 from .schemas.batch import BatchMode, BatchResult
-from .schemas.training import DataConfig, TrainingConfig
+from .schemas.training import DataConfig, ModelConfig, TrainingConfig
 
 log = logging.getLogger(__name__)
 
@@ -194,11 +194,17 @@ class BatchJob(BaseModel):
             head_node=data_cfg.head_node,
         )
 
-        # Inference
-        from ..models.registry import ModelRegistry  # noqa: F401  broken, fixed in D6
+        # circular: poser.models imports _loader, which imports core.augmentation,
+        # so core.batch cannot reach the registry at module level
+        from ..models.registry import load_model
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = ModelRegistry.load(self.checkpoint)
+        model_cfg = self.config.model if self.config else ModelConfig()
+        model = load_model(
+            model_cfg.architecture,
+            self.checkpoint or None,
+            map_location=str(device),
+        )
         model.eval().to(device)
 
         tensor_data = torch.tensor(padded, dtype=torch.float32)
