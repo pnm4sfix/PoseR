@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import csv
 import logging
-from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List, Optional
+from typing import Any, Callable, List, Optional
 
 import numpy as np
 import pandas as pd
 import torch
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from torch.utils.data import DataLoader, TensorDataset
 
 from .bout_detection import orthogonal_variance
@@ -23,15 +23,17 @@ from .schemas.batch import BatchMode, BatchResult
 log = logging.getLogger(__name__)
 
 
-@dataclass
-class BatchJob:
+class BatchJob(BaseModel):
     """Configuration for a multi-file batch analysis run.
+
+    Built from CLI arguments and from user code, so the fields are validated
+    on construction rather than part way through a long run.
 
     Attributes:
         video_files: Paired with pose_files by position. Shorter lists are
             padded with empty strings.
-        mode: A BatchMode value. "behaviour" detects and classifies bouts in
-            each pose file; "pose_estimation" runs YOLO-pose over each video.
+        mode: "behaviour" detects and classifies bouts in each pose file;
+            "pose_estimation" runs YOLO-pose over each video.
         checkpoint: Model to run. A YOLO pose model under "pose_estimation",
             an ST-GCN classifier under "behaviour".
         config: A TrainingConfig, or a path to a config.yaml.
@@ -41,14 +43,30 @@ class BatchJob:
         progress_callback: Called as (completed, total) before each file.
     """
 
-    pose_files: List[str] = field(default_factory=list)
-    video_files: List[str] = field(default_factory=list)
-    mode: str = BatchMode.BEHAVIOUR.value
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    pose_files: List[str] = Field(default_factory=list)
+    video_files: List[str] = Field(default_factory=list)
+    mode: BatchMode = BatchMode.BEHAVIOUR
     checkpoint: str = ""
-    config = None           # TrainingConfig or path string
+    config: Any = None
     output_dir: str = ""
     n_individuals: int = 1
     progress_callback: Optional[Callable[[int, int], None]] = None
+
+    @field_validator("pose_files", "video_files", mode="before")
+    @classmethod
+    def _stringify_path_list(cls, value):
+        """Accept Path entries, which both callers build with pathlib."""
+        if isinstance(value, (list, tuple)):
+            return [str(item) for item in value]
+        return value
+
+    @field_validator("checkpoint", "output_dir", mode="before")
+    @classmethod
+    def _stringify_path(cls, value):
+        """Accept None and Path where a plain string is expected."""
+        return "" if value is None else str(value)
 
 
     def run(self) -> List[BatchResult]:
@@ -59,13 +77,8 @@ class BatchJob:
 
         Returns:
             One BatchResult per input, in input order.
-
-        Raises:
-            ValueError: If mode is not a BatchMode value. Raised before any
-                file is processed.
         """
         Path(self.output_dir or ".").mkdir(parents=True, exist_ok=True)
-        mode = BatchMode(self.mode)
         total = len(self.pose_files)
         results: List[BatchResult] = []
 
@@ -79,7 +92,7 @@ class BatchJob:
                 self.progress_callback(i, total)
 
             try:
-                if mode is BatchMode.POSE_ESTIMATION:
+                if self.mode is BatchMode.POSE_ESTIMATION:
                     out = estimate_poses_from_video(
                         video_path, self.checkpoint, self.n_individuals
                     )
