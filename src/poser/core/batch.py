@@ -10,7 +10,7 @@ import csv
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -19,7 +19,8 @@ import yaml
 from torch.utils.data import DataLoader, TensorDataset
 
 from .bout_detection import orthogonal_variance
-from .io import read_coords, save_coords_to_h5
+from .io import read_coords
+from .pose_estimation import estimate_poses_from_video
 from .preprocessing import preprocess_bouts
 from .schemas.batch import BatchMode, BatchResult
 
@@ -93,7 +94,9 @@ class BatchJob:
 
             try:
                 if mode is BatchMode.POSE_ESTIMATION:
-                    out = self._run_pose_estimation(pose_path, video_path, i)
+                    out = estimate_poses_from_video(
+                        video_path, self.checkpoint, self.n_individuals
+                    )
                 else:
                     out = self._run_behaviour_decode(pose_path, video_path, i)
 
@@ -122,83 +125,6 @@ class BatchJob:
 
         self._write_manifest(results)
         return results
-
-    def _run_pose_estimation(self, pose_path: str, video_path: str, idx: int) -> str:
-        """Run YOLO-pose on *video_path* and save a coords .h5 file."""
-        if not video_path or not Path(video_path).exists():
-            raise FileNotFoundError(f"Video not found: {video_path!r}")
-
-        # lazy: 490ms, and keeping it here is what lets the rest of this
-        # module be tested without a GPU or model weights
-        from ultralytics import YOLO
-
-        model = YOLO(self.checkpoint) if self.checkpoint else YOLO("yolo11n-pose.pt")
-
-        results = model.track(
-            source=video_path,
-            stream=True,
-            max_det=self.n_individuals,
-        )
-
-        video_buffers: Dict = {}
-        for result in results:
-            vid = result.path
-            frame = result.frame
-            if vid not in video_buffers:
-                video_buffers[vid] = {"pts": [], "conf": [], "ind": [], "node": []}
-            buf = video_buffers[vid]
-
-            kp = result.keypoints
-            if kp is None:
-                continue
-            xy = kp.xy
-            conf = kp.conf if kp.conf is not None else torch.ones(xy.shape[:2], device=xy.device)
-            if result.boxes is not None and result.boxes.id is not None:
-                track_ids = result.boxes.id.int()
-            else:
-                track_ids = torch.arange(xy.shape[0], device=xy.device)
-
-            P, K, _ = xy.shape
-            xy_flat = xy.reshape(-1, 2)
-            conf_flat = conf.reshape(-1)
-            node_flat = torch.tile(torch.arange(K, device=xy.device), (P,))
-            ind_flat = torch.repeat_interleave(track_ids, K)
-            frame_col = torch.full((P * K,), frame, device=xy.device)
-            pts = torch.stack((frame_col, xy_flat[:, 1], xy_flat[:, 0]), dim=1)
-
-            buf["pts"].append(pts)
-            buf["conf"].append(conf_flat)
-            buf["ind"].append(ind_flat)
-            buf["node"].append(node_flat)
-
-        # Convert to coords_data and save
-        coords_data: Dict = {}
-        for vid_path, buf in video_buffers.items():
-            if not buf["pts"]:
-                continue
-            pts_np = torch.cat(buf["pts"]).cpu().numpy()
-            conf_np = torch.cat(buf["conf"]).cpu().numpy()
-            ind_np = torch.cat(buf["ind"]).cpu().numpy()
-            node_np = torch.cat(buf["node"]).cpu().numpy()
-            df = pd.DataFrame({"frame": pts_np[:, 0].astype(int), "y": pts_np[:, 1],
-                                "x": pts_np[:, 2], "ci": conf_np,
-                                "ind": ind_np, "node": node_np})
-            n_nodes = int(node_np.max()) + 1
-            n_frames = int(pts_np[:, 0].max()) + 1
-            for ind_id in df.ind.unique():
-                sub = df[df.ind == ind_id]
-                empty = np.full((n_nodes, n_frames), np.nan)
-                for datum in ["x", "y", "ci"]:
-                    arr = empty.copy()
-                    pivot = sub.pivot(columns="frame", values=datum, index="node")
-                    arr_df = pd.DataFrame(arr)
-                    arr_df.loc[:, pivot.columns] = pivot
-                    if ind_id not in coords_data:
-                        coords_data[ind_id] = {}
-                    coords_data[ind_id][datum] = arr_df
-
-        out_path = save_coords_to_h5(coords_data, video_path)
-        return out_path
 
     def _run_behaviour_decode(self, pose_path: str, video_path: str, idx: int) -> str:
         """Run behaviour decoding on *pose_path* and save classification .h5."""
