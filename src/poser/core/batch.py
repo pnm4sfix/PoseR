@@ -7,10 +7,21 @@ Feature 1: load and analyse multiple files at once.
 from __future__ import annotations
 
 import csv
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional
+
+import numpy as np
+import pandas as pd
+import yaml
+
+from .bout_detection import orthogonal_variance
+from .io import read_coords, save_coords_to_h5
+from .preprocessing import preprocess_bouts
+
+log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -64,9 +75,6 @@ class BatchJob:
     n_individuals: int = 1
     progress_callback: Optional[Callable[[int, int], None]] = None
 
-    # ------------------------------------------------------------------
-    # Run
-    # ------------------------------------------------------------------
 
     def run(self) -> List[BatchResult]:
         """Execute the batch job.
@@ -118,7 +126,7 @@ class BatchJob:
                         error=str(exc),
                     )
                 )
-                print(f"  [BatchJob] Error processing {pose_path}: {exc}")
+                log.error("Error processing %s: %s", pose_path, exc)
 
         if self.progress_callback:
             self.progress_callback(total, total)
@@ -126,19 +134,13 @@ class BatchJob:
         self._write_manifest(results)
         return results
 
-    # ------------------------------------------------------------------
-    # Mode-specific helpers
-    # ------------------------------------------------------------------
-
     def _run_pose_estimation(self, pose_path: str, video_path: str, idx: int) -> str:
         """Run YOLO-pose on *video_path* and save a coords .h5 file."""
         if not video_path or not os.path.exists(video_path):
             raise FileNotFoundError(f"Video not found: {video_path!r}")
 
-        from ultralytics import YOLO
-        import torch
-        import numpy as np
-        from .io import save_coords_to_h5
+        from ultralytics import YOLO  # lazy: heavy optional dependency
+        import torch  # lazy: ~730ms import
 
         model = YOLO(self.checkpoint) if self.checkpoint else YOLO("yolo11n-pose.pt")
 
@@ -180,7 +182,6 @@ class BatchJob:
             buf["node"].append(node_flat)
 
         # Convert to coords_data and save
-        import pandas as pd
         coords_data: Dict = {}
         for vid_path, buf in video_buffers.items():
             if not buf["pts"]:
@@ -211,18 +212,11 @@ class BatchJob:
 
     def _run_behaviour_decode(self, pose_path: str, video_path: str, idx: int) -> str:
         """Run behaviour decoding on *pose_path* and save classification .h5."""
-        from .io import read_coords
-        from .bout_detection import orthogonal_variance, egocentric_variance
-        from .preprocessing import preprocess_bouts
-
         coords_data = read_coords(pose_path)
 
         # Use first individual
         ind_key = next(iter(coords_data))
         data = coords_data[ind_key]
-
-        import numpy as np
-        import pandas as pd
 
         x = np.array(data["x"]) if hasattr(data["x"], "__array__") else data["x"]
         y = np.array(data["y"]) if hasattr(data["y"], "__array__") else data["y"]
@@ -231,7 +225,6 @@ class BatchJob:
         # Resolve config
         cfg = self.config
         if isinstance(cfg, str):
-            import yaml
             with open(cfg) as f:
                 cfg_dict = yaml.safe_load(f)
         elif cfg is not None:
@@ -259,7 +252,6 @@ class BatchJob:
             return ""
 
         # Preprocess bouts
-        import pandas as pd
         egocentric_nd = np.zeros((n_nodes, n_frames, 3))
         egocentric_nd[:, :, 0] = np.arange(n_frames)
         egocentric_nd[:, :, 1] = y if y.ndim == 2 else y.reshape(n_nodes, n_frames)
@@ -274,9 +266,9 @@ class BatchJob:
         )
 
         # Inference
-        import torch
+        import torch  # lazy: ~730ms import
         from torch.utils.data import DataLoader, TensorDataset
-        from ..models.registry import ModelRegistry
+        from ..models.registry import ModelRegistry  # noqa: F401  broken, fixed in D6
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = ModelRegistry.load(self.checkpoint)
@@ -299,10 +291,6 @@ class BatchJob:
         np.save(out_path, predictions)
         return out_path
 
-    # ------------------------------------------------------------------
-    # Manifest
-    # ------------------------------------------------------------------
-
     def _write_manifest(self, results: List[BatchResult]) -> None:
         if not self.output_dir:
             return
@@ -322,4 +310,4 @@ class BatchJob:
                         "error": r.error,
                     }
                 )
-        print(f"[BatchJob] Manifest written to {path}")
+        log.info("Manifest written to %s", path)
