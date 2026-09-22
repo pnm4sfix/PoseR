@@ -20,20 +20,9 @@ import yaml
 from .bout_detection import orthogonal_variance
 from .io import read_coords, save_coords_to_h5
 from .preprocessing import preprocess_bouts
+from .schemas.batch import BatchResult
 
 log = logging.getLogger(__name__)
-
-
-@dataclass
-class BatchResult:
-    """Result from processing one (pose_file, video_file) pair."""
-
-    pose_path: str
-    video_path: str
-    output_path: str
-    status: str       # "ok" | "error"
-    error: str = ""
-    metadata: Dict = field(default_factory=dict)
 
 
 @dataclass
