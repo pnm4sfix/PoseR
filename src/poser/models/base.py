@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import abc
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional
 
 import torch
 import lightning.pytorch as pl
