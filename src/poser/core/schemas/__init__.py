@@ -6,6 +6,6 @@ nothing else, so they stay free of cycles as the rest of core grows models.
 
 from __future__ import annotations
 
-from .batch import BatchResult
+from .batch import BatchMode, BatchResult
 
-__all__ = ["BatchResult"]
+__all__ = ["BatchMode", "BatchResult"]

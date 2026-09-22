@@ -8,19 +8,20 @@ from __future__ import annotations
 
 import csv
 import logging
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import torch
 import yaml
+from torch.utils.data import DataLoader, TensorDataset
 
 from .bout_detection import orthogonal_variance
 from .io import read_coords, save_coords_to_h5
 from .preprocessing import preprocess_bouts
-from .schemas.batch import BatchResult
+from .schemas.batch import BatchMode, BatchResult
 
 log = logging.getLogger(__name__)
 
@@ -57,7 +58,7 @@ class BatchJob:
 
     pose_files: List[str] = field(default_factory=list)
     video_files: List[str] = field(default_factory=list)
-    mode: str = "behaviour_decode"
+    mode: str = BatchMode.BEHAVIOUR.value
     checkpoint: str = ""
     config = None           # TrainingConfig or path string
     output_dir: str = ""
@@ -76,7 +77,8 @@ class BatchJob:
         -------
         list of :class:`BatchResult`
         """
-        os.makedirs(self.output_dir or ".", exist_ok=True)
+        Path(self.output_dir or ".").mkdir(parents=True, exist_ok=True)
+        mode = BatchMode(self.mode)
         total = len(self.pose_files)
         results: List[BatchResult] = []
 
@@ -90,12 +92,10 @@ class BatchJob:
                 self.progress_callback(i, total)
 
             try:
-                if self.mode == "pose_estimation":
+                if mode is BatchMode.POSE_ESTIMATION:
                     out = self._run_pose_estimation(pose_path, video_path, i)
-                elif self.mode == "behaviour_decode":
-                    out = self._run_behaviour_decode(pose_path, video_path, i)
                 else:
-                    raise ValueError(f"Unknown mode: {self.mode!r}")
+                    out = self._run_behaviour_decode(pose_path, video_path, i)
 
                 results.append(
                     BatchResult(
@@ -125,11 +125,12 @@ class BatchJob:
 
     def _run_pose_estimation(self, pose_path: str, video_path: str, idx: int) -> str:
         """Run YOLO-pose on *video_path* and save a coords .h5 file."""
-        if not video_path or not os.path.exists(video_path):
+        if not video_path or not Path(video_path).exists():
             raise FileNotFoundError(f"Video not found: {video_path!r}")
 
-        from ultralytics import YOLO  # lazy: heavy optional dependency
-        import torch  # lazy: ~730ms import
+        # lazy: 490ms, and keeping it here is what lets the rest of this
+        # module be tested without a GPU or model weights
+        from ultralytics import YOLO
 
         model = YOLO(self.checkpoint) if self.checkpoint else YOLO("yolo11n-pose.pt")
 
@@ -255,8 +256,6 @@ class BatchJob:
         )
 
         # Inference
-        import torch  # lazy: ~730ms import
-        from torch.utils.data import DataLoader, TensorDataset
         from ..models.registry import ModelRegistry  # noqa: F401  broken, fixed in D6
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -274,16 +273,16 @@ class BatchJob:
         predictions = np.concatenate(preds)
 
         # Save outputs
-        out_dir = self.output_dir or os.path.dirname(pose_path)
-        stem = Path(pose_path).stem
-        out_path = os.path.join(out_dir, f"{stem}_predictions.npy")
+        pose_file = Path(pose_path)
+        out_dir = Path(self.output_dir) if self.output_dir else pose_file.parent
+        out_path = out_dir / f"{pose_file.stem}_predictions.npy"
         np.save(out_path, predictions)
-        return out_path
+        return str(out_path)
 
     def _write_manifest(self, results: List[BatchResult]) -> None:
         if not self.output_dir:
             return
-        path = os.path.join(self.output_dir, "batch_manifest.csv")
+        path = Path(self.output_dir) / "batch_manifest.csv"
         with open(path, "w", newline="") as f:
             writer = csv.DictWriter(
                 f, fieldnames=["pose_file", "video_file", "output", "status", "error"]
