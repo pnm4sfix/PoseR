@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from torch.utils.data import DataLoader, TensorDataset
 
 from .bout_detection import orthogonal_variance
+from .exceptions import CheckpointError
 from .io import read_coords
 from .pose_estimation import estimate_poses_from_video
 from .preprocessing import preprocess_bouts
@@ -198,11 +199,17 @@ class BatchJob(BaseModel):
         # so core.batch cannot reach the registry at module level
         from ..models.registry import load_model
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model_cfg = self.config.model if self.config else ModelConfig()
+        if not self.checkpoint:
+            raise CheckpointError(
+                f"Decoding behaviour needs a trained {model_cfg.architecture} "
+                "checkpoint. Pass one as BatchJob(checkpoint=...)."
+            )
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         model = load_model(
             model_cfg.architecture,
-            self.checkpoint or None,
+            self.checkpoint,
             map_location=str(device),
         )
         model.eval().to(device)

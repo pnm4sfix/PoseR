@@ -27,3 +27,7 @@ class UnsupportedFormatError(PoseFormatError):
 
 class BehaviourWriteError(PoseRError):
     """A behaviour could not be written to a classification file."""
+
+
+class CheckpointError(PoseRError):
+    """A trained model checkpoint is required but missing or unusable."""

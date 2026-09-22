@@ -11,6 +11,7 @@ from .augmentation import (
 )
 from .exceptions import (
     BehaviourWriteError,
+    CheckpointError,
     PoseRError,
     PoseFormatError,
     UnsupportedFormatError,
@@ -44,7 +45,7 @@ from .metrics import benchmark_model_performance
 
 __all__ = [
     "PoseRError", "PoseFormatError", "UnsupportedFormatError",
-    "BehaviourWriteError",
+    "BehaviourWriteError", "CheckpointError",
     "rotate_transform", "jitter_transform", "scale_transform",
     "shear_transform", "roll_transform", "fragment_transform",
     "random_augmentation",
