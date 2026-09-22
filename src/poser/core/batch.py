@@ -133,9 +133,11 @@ class BatchJob(BaseModel):
         ind_key = next(iter(coords_data))
         data = coords_data[ind_key]
 
-        x = np.array(data["x"]) if hasattr(data["x"], "__array__") else data["x"]
-        y = np.array(data["y"]) if hasattr(data["y"], "__array__") else data["y"]
-        ci_arr = np.array(data["ci"]) if hasattr(data["ci"], "__array__") else data["ci"]
+        # np.array handles both shapes core.io returns: DataFrames from
+        # read_dlc, ndarrays from read_sleap and read_poser_coords.
+        x = np.array(data["x"])
+        y = np.array(data["y"])
+        ci_arr = np.array(data["ci"])
 
         # Resolve config
         cfg = self.config
