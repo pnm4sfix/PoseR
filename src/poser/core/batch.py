@@ -158,7 +158,7 @@ class BatchJob(BaseModel):
         x_flat = x.T.reshape(-1) if x.ndim == 2 else x.reshape(-1)
         points = np.stack([frame_idx, y_flat, x_flat], axis=1).astype(float)
 
-        bouts, gauss, threshold, _ = orthogonal_variance(
+        bouts, *_ = orthogonal_variance(
             points, center_node=center_node, fps=fps, n_nodes=n_nodes,
             amd_threshold=cfg_dict.get("amd_threshold", 2.0),
         )
