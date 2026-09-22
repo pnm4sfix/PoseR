@@ -5,12 +5,11 @@ from __future__ import annotations
 import csv
 import logging
 from pathlib import Path
-from typing import Any, Callable, List, Optional
+from typing import Callable, List, Optional
 
 import numpy as np
 import pandas as pd
 import torch
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -19,6 +18,7 @@ from .io import read_coords
 from .pose_estimation import estimate_poses_from_video
 from .preprocessing import preprocess_bouts
 from .schemas.batch import BatchMode, BatchResult
+from .schemas.training import TrainingConfig
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +49,7 @@ class BatchJob(BaseModel):
     video_files: List[str] = Field(default_factory=list)
     mode: BatchMode = BatchMode.BEHAVIOUR
     checkpoint: str = ""
-    config: Any = None
+    config: Optional[TrainingConfig] = None
     output_dir: str = ""
     n_individuals: int = 1
     progress_callback: Optional[Callable[[int, int], None]] = None
@@ -67,6 +67,14 @@ class BatchJob(BaseModel):
     def _stringify_path(cls, value):
         """Accept None and Path where a plain string is expected."""
         return "" if value is None else str(value)
+
+    @field_validator("config", mode="before")
+    @classmethod
+    def _load_config(cls, value):
+        """Accept a path to a config.yaml as well as a TrainingConfig."""
+        if isinstance(value, (str, Path)):
+            return TrainingConfig.from_yaml(value)
+        return value
 
 
     def run(self) -> List[BatchResult]:
@@ -139,15 +147,7 @@ class BatchJob(BaseModel):
         y = np.array(data["y"])
         ci_arr = np.array(data["ci"])
 
-        # Resolve config
-        cfg = self.config
-        if isinstance(cfg, str):
-            with open(cfg) as f:
-                cfg_dict = yaml.safe_load(f)
-        elif cfg is not None:
-            cfg_dict = cfg.model_dump() if hasattr(cfg, "model_dump") else vars(cfg)
-        else:
-            cfg_dict = {}
+        cfg_dict = self.config.model_dump() if self.config else {}
 
         fps = cfg_dict.get("fps", 30.0)
         n_nodes = x.shape[0] if x.ndim >= 1 else 9
