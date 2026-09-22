@@ -18,7 +18,7 @@ from .io import read_coords
 from .pose_estimation import estimate_poses_from_video
 from .preprocessing import preprocess_bouts
 from .schemas.batch import BatchMode, BatchResult
-from .schemas.training import TrainingConfig
+from .schemas.training import DataConfig, TrainingConfig
 
 log = logging.getLogger(__name__)
 
@@ -147,11 +147,9 @@ class BatchJob(BaseModel):
         y = np.array(data["y"])
         ci_arr = np.array(data["ci"])
 
-        cfg_dict = self.config.model_dump() if self.config else {}
+        data_cfg = self.config.data if self.config else DataConfig()
 
-        fps = cfg_dict.get("fps", 30.0)
         n_nodes = x.shape[0] if x.ndim >= 1 else 9
-        center_node = cfg_dict.get("center_node", 0)
 
         # Build points array (n_nodes * n_frames, 3)
         n_frames = x.shape[1] if x.ndim == 2 else x.shape[0]
@@ -161,8 +159,13 @@ class BatchJob(BaseModel):
         points = np.stack([frame_idx, y_flat, x_flat], axis=1).astype(float)
 
         bouts, *_ = orthogonal_variance(
-            points, center_node=center_node, fps=fps, n_nodes=n_nodes,
-            amd_threshold=cfg_dict.get("amd_threshold", 2.0),
+            points,
+            center_node=data_cfg.center_node,
+            fps=data_cfg.fps,
+            n_nodes=n_nodes,
+            # TrainingConfig has no amd_threshold field, so this stays the
+            # orthogonal_variance default rather than becoming configurable.
+            amd_threshold=2.0,
         )
 
         if not bouts:
@@ -176,10 +179,19 @@ class BatchJob(BaseModel):
         ci_df = pd.DataFrame(ci_arr)
 
         padded, _ = preprocess_bouts(
-            egocentric_nd, ci_df, bouts,
-            fps=fps,
-            T2=cfg_dict.get("T2", 50),
-            denominator=cfg_dict.get("denominator", 8),
+            egocentric_nd,
+            ci_df,
+            bouts,
+            C=data_cfg.C,
+            T=data_cfg.T,
+            T2=data_cfg.T2,
+            fps=data_cfg.fps,
+            denominator=data_cfg.denominator,
+            # T_method decides how T is derived. Passing it matters: the
+            # preprocess_bouts default of "window" computes 2*int(fps/
+            # denominator), which is 0 for the DataConfig defaults.
+            T_method=data_cfg.T_method,
+            head_node=data_cfg.head_node,
         )
 
         # Inference
