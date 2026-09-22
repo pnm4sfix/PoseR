@@ -1,8 +1,4 @@
-"""
-Batch pipeline — run pose estimation or behaviour decoding over many files.
-
-Feature 1: load and analyse multiple files at once.
-"""
+"""Run pose estimation or behaviour decoding over many files."""
 
 from __future__ import annotations
 
@@ -31,30 +27,18 @@ log = logging.getLogger(__name__)
 class BatchJob:
     """Configuration for a multi-file batch analysis run.
 
-    Parameters
-    ----------
-    pose_files:
-        List of paths to pose estimation files.
-    video_files:
-        List of paths to paired video files (must match length of
-        *pose_files*, or be empty to skip video loading).
-    mode:
-        ``"pose_estimation"`` — run YOLO-pose on each video and save
-        ``_poser_coords.h5`` output.
-        ``"behaviour_decode"`` — run ST-GCN/C3D inference on loaded pose
-        files and save ``_classification.h5`` output.
-    checkpoint:
-        Path to the model checkpoint to use for inference.
-    config:
-        :class:`poser.training.config.TrainingConfig` instance (or the path
-        to a ``config.yaml`` file).
-    output_dir:
-        Directory to write per-file outputs and the batch manifest.
-    n_individuals:
-        Expected number of individuals per frame (for YOLO ``max_det``).
-    progress_callback:
-        Optional callable ``(completed: int, total: int)`` for UI progress
-        reporting.
+    Attributes:
+        video_files: Paired with pose_files by position. Shorter lists are
+            padded with empty strings.
+        mode: A BatchMode value. "behaviour" detects and classifies bouts in
+            each pose file; "pose_estimation" runs YOLO-pose over each video.
+        checkpoint: Model to run. A YOLO pose model under "pose_estimation",
+            an ST-GCN classifier under "behaviour".
+        config: A TrainingConfig, or a path to a config.yaml.
+        output_dir: Where per-file outputs and batch_manifest.csv are written.
+        n_individuals: Upper bound on detections per frame, passed to YOLO as
+            max_det.
+        progress_callback: Called as (completed, total) before each file.
     """
 
     pose_files: List[str] = field(default_factory=list)
@@ -68,15 +52,17 @@ class BatchJob:
 
 
     def run(self) -> List[BatchResult]:
-        """Execute the batch job.
+        """Process every input and write batch_manifest.csv beside the outputs.
 
-        Iterates through *pose_files* / *video_files*, dispatches to the
-        appropriate inference function, writes per-file outputs, and
-        generates a ``batch_manifest.csv``.
+        A file that fails is recorded as an error result and does not stop the
+        rest of the run.
 
-        Returns
-        -------
-        list of :class:`BatchResult`
+        Returns:
+            One BatchResult per input, in input order.
+
+        Raises:
+            ValueError: If mode is not a BatchMode value. Raised before any
+                file is processed.
         """
         Path(self.output_dir or ".").mkdir(parents=True, exist_ok=True)
         mode = BatchMode(self.mode)
@@ -127,7 +113,7 @@ class BatchJob:
         return results
 
     def _run_behaviour_decode(self, pose_path: str, video_path: str, idx: int) -> str:
-        """Run behaviour decoding on *pose_path* and save classification .h5."""
+        """Detect bouts in one pose file, classify them, and save the result."""
         coords_data = read_coords(pose_path)
 
         # Use first individual
