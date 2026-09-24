@@ -7,19 +7,12 @@ import logging
 from pathlib import Path
 from typing import Callable, List, Optional
 
-import numpy as np
-import pandas as pd
-import torch
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from torch.utils.data import DataLoader, TensorDataset
 
-from .bout_detection import orthogonal_variance
-from .exceptions import CheckpointError
-from .io import read_coords
+from .behaviour_decode import decode_behaviours
 from .pose_estimation import estimate_poses_from_video
-from .preprocessing import preprocess_bouts
 from .schemas.batch import BatchMode, BatchResult
-from .schemas.training import DataConfig, ModelConfig, TrainingConfig
+from .schemas.training import TrainingConfig
 
 log = logging.getLogger(__name__)
 
@@ -101,7 +94,12 @@ class BatchJob(BaseModel):
                         video_path, self.checkpoint, self.n_individuals
                     )
                 else:
-                    out = self._run_behaviour_decode(pose_path)
+                    out = decode_behaviours(
+                        pose_path,
+                        self.checkpoint,
+                        self.config,
+                        self.output_dir,
+                    )
 
                 results.append(
                     BatchResult(
@@ -150,103 +148,6 @@ class BatchJob(BaseModel):
             videos += [""] * (len(poses) - len(videos))
 
         return list(zip(poses, videos))
-
-    def _run_behaviour_decode(self, pose_path: str) -> str:
-        """Detect bouts in one pose file, classify them, and save the result."""
-        coords_data = read_coords(pose_path)
-
-        # Use first individual
-        ind_key = next(iter(coords_data))
-        data = coords_data[ind_key]
-
-        # np.array handles both shapes core.io returns: DataFrames from
-        # read_dlc, ndarrays from read_sleap and read_poser_coords.
-        x = np.array(data["x"])
-        y = np.array(data["y"])
-        ci_arr = np.array(data["ci"])
-
-        data_cfg = self.config.data if self.config else DataConfig()
-
-        n_nodes = x.shape[0] if x.ndim >= 1 else 9
-
-        # Build points array (n_nodes * n_frames, 3)
-        n_frames = x.shape[1] if x.ndim == 2 else x.shape[0]
-        frame_idx = np.tile(np.arange(n_frames), n_nodes)
-        y_flat = y.T.reshape(-1) if y.ndim == 2 else y.reshape(-1)
-        x_flat = x.T.reshape(-1) if x.ndim == 2 else x.reshape(-1)
-        points = np.stack([frame_idx, y_flat, x_flat], axis=1).astype(float)
-
-        bouts, *_ = orthogonal_variance(
-            points,
-            center_node=data_cfg.center_node,
-            fps=data_cfg.fps,
-            n_nodes=n_nodes,
-            # TrainingConfig has no amd_threshold field, so this stays the
-            # orthogonal_variance default rather than becoming configurable.
-            amd_threshold=2.0,
-        )
-
-        if not bouts:
-            return ""
-
-        # Preprocess bouts
-        egocentric_nd = np.zeros((n_nodes, n_frames, 3))
-        egocentric_nd[:, :, 0] = np.arange(n_frames)
-        egocentric_nd[:, :, 1] = y if y.ndim == 2 else y.reshape(n_nodes, n_frames)
-        egocentric_nd[:, :, 2] = x if x.ndim == 2 else x.reshape(n_nodes, n_frames)
-        ci_df = pd.DataFrame(ci_arr)
-
-        padded, _ = preprocess_bouts(
-            egocentric_nd,
-            ci_df,
-            bouts,
-            C=data_cfg.C,
-            T=data_cfg.T,
-            T2=data_cfg.T2,
-            fps=data_cfg.fps,
-            denominator=data_cfg.denominator,
-            # T_method decides how T is derived. Passing it matters: the
-            # preprocess_bouts default of "window" computes 2*int(fps/
-            # denominator), which is 0 for the DataConfig defaults.
-            T_method=data_cfg.T_method,
-            head_node=data_cfg.head_node,
-        )
-
-        # circular: poser.models imports _loader, which imports core.augmentation,
-        # so core.batch cannot reach the registry at module level
-        from ..models.registry import load_model
-
-        model_cfg = self.config.model if self.config else ModelConfig()
-        if not self.checkpoint:
-            raise CheckpointError(
-                f"Decoding behaviour needs a trained {model_cfg.architecture} "
-                "checkpoint. Pass one as BatchJob(checkpoint=...)."
-            )
-
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        model = load_model(
-            model_cfg.architecture,
-            self.checkpoint,
-            map_location=str(device),
-        )
-        model.eval().to(device)
-
-        tensor_data = torch.tensor(padded, dtype=torch.float32)
-        loader = DataLoader(TensorDataset(tensor_data), batch_size=16)
-        preds = []
-        with torch.no_grad():
-            for (batch,) in loader:
-                out = model(batch.to(device))
-                preds.append(out.argmax(dim=1).cpu().numpy())
-
-        predictions = np.concatenate(preds)
-
-        # Save outputs
-        pose_file = Path(pose_path)
-        out_dir = Path(self.output_dir) if self.output_dir else pose_file.parent
-        out_path = out_dir / f"{pose_file.stem}_predictions.npy"
-        np.save(out_path, predictions)
-        return str(out_path)
 
     def _write_manifest(self, results: List[BatchResult]) -> None:
         if not self.output_dir:
