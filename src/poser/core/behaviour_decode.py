@@ -21,10 +21,9 @@ from .exceptions import CheckpointError
 from .io import read_coords
 from .preprocessing import preprocess_bouts
 from .schemas.training import DataConfig, ModelConfig, TrainingConfig
+from .settings import settings
 
 log = logging.getLogger(__name__)
-
-BATCH_SIZE = 16
 
 
 def decode_behaviours(
@@ -139,7 +138,7 @@ def _predict(padded: np.ndarray, architecture: str, checkpoint: str) -> np.ndarr
 
     loader = DataLoader(
         TensorDataset(torch.tensor(padded, dtype=torch.float32)),
-        batch_size=BATCH_SIZE,
+        batch_size=settings.inference_batch_size,
     )
     preds = []
     with torch.no_grad():
