@@ -1,22 +1,17 @@
-"""
-training/config.py
-~~~~~~~~~~~~~~~~~~
-Pydantic v2 model replacing the scattered ``decoder_config.yml`` parsing
-in ``_widget.py::initialise_params``.
+"""Experiment parameters for training and decoding.
 
-A :class:`TrainingConfig` can be created from:
-
-* A YAML file: ``TrainingConfig.from_yaml("decoder_config.yml")``
-* Keyword arguments: ``TrainingConfig(num_class=5, layout="zebrafish", ...)``
-* Environment variables with the ``POSER_`` prefix.
+A TrainingConfig comes either from a YAML file, via
+TrainingConfig.from_yaml("decoder_config.yml"), or from keyword arguments.
+Machine-level runtime knobs live in core.settings instead, which is where the
+POSER_ environment prefix applies.
 """
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 # ---------------------------------------------------------------------------
