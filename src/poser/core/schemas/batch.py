@@ -39,3 +39,12 @@ class BatchResult:
     status: str
     error: str = ""
     metadata: Dict = field(default_factory=dict)
+
+    @property
+    def success(self) -> bool:
+        """True when the file was processed without raising.
+
+        A run that produced nothing to write still counts as a success, so
+        check output_path as well when that distinction matters.
+        """
+        return self.status == "ok"
