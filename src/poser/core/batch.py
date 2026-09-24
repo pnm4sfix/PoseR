@@ -89,15 +89,12 @@ class BatchJob(BaseModel):
             One BatchResult per input, in input order.
         """
         Path(self.output_dir or ".").mkdir(parents=True, exist_ok=True)
-        total = len(self.pose_files)
         results: List[BatchResult] = []
 
-        # Pad video list if shorter
-        video_files = list(self.video_files)
-        while len(video_files) < total:
-            video_files.append("")
+        pairs = self._input_pairs()
+        total = len(pairs)
 
-        for pose_path, video_path in zip(self.pose_files, video_files):
+        for pose_path, video_path in pairs:
             try:
                 if self.mode is BatchMode.POSE_ESTIMATION:
                     out = estimate_poses_from_video(
@@ -135,6 +132,24 @@ class BatchJob(BaseModel):
 
         self._write_manifest(results)
         return results
+
+    def _input_pairs(self) -> List[tuple[str, str]]:
+        """Pair each input with its counterpart, padding the shorter list.
+
+        Behaviour decoding is driven by pose_files, pose estimation by
+        video_files. Pose estimation falls back to pose_files when no videos
+        were given, because the CLI's only positional argument is pose_files.
+        """
+        poses = list(self.pose_files)
+        videos = list(self.video_files)
+
+        if self.mode is BatchMode.POSE_ESTIMATION:
+            videos = videos or poses
+            poses += [""] * (len(videos) - len(poses))
+        else:
+            videos += [""] * (len(poses) - len(videos))
+
+        return list(zip(poses, videos))
 
     def _run_behaviour_decode(self, pose_path: str) -> str:
         """Detect bouts in one pose file, classify them, and save the result."""

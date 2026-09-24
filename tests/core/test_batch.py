@@ -89,6 +89,46 @@ def test_decode_path_does_not_import_ultralytics(tmp_path):
     assert "ultralytics" not in sys.modules
 
 
+def test_pose_estimation_is_driven_by_the_video_list(tmp_path):
+    # Before this was fixed, total came from pose_files, so a job with only
+    # videos produced no results at all.
+    videos = [str(tmp_path / f"v{i}.mp4") for i in range(2)]
+    results = BatchJob(
+        video_files=videos, mode="pose_estimation", output_dir=str(tmp_path)
+    ).run()
+    assert len(results) == 2
+    assert [r.video_path for r in results] == videos
+
+
+def test_pose_estimation_falls_back_to_pose_files(tmp_path):
+    # The CLI's only positional argument is pose_files, so videos arrive there.
+    videos = [str(tmp_path / f"v{i}.mp4") for i in range(2)]
+    results = BatchJob(
+        pose_files=videos, mode="pose_estimation", output_dir=str(tmp_path)
+    ).run()
+    assert len(results) == 2
+    assert [r.video_path for r in results] == videos
+
+
+def test_pose_estimation_reports_the_missing_video(tmp_path):
+    results = BatchJob(
+        video_files=[str(tmp_path / "gone.mp4")],
+        mode="pose_estimation",
+        output_dir=str(tmp_path),
+    ).run()
+    assert results[0].status == "error"
+    assert "Video not found" in results[0].error
+
+
+def test_behaviour_mode_still_pads_the_video_list(tmp_path):
+    results = BatchJob(
+        pose_files=[str(tmp_path / "a.h5"), str(tmp_path / "b.h5")],
+        output_dir=str(tmp_path),
+    ).run()
+    assert len(results) == 2
+    assert all(r.video_path == "" for r in results)
+
+
 def test_results_carry_the_input_paths(tmp_path):
     pose = str(tmp_path / "missing.h5")
     results = BatchJob(pose_files=[pose], output_dir=str(tmp_path)).run()
