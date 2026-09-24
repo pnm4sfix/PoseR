@@ -41,7 +41,8 @@ class BatchJob(BaseModel):
         output_dir: Where per-file outputs and batch_manifest.csv are written.
         n_individuals: Upper bound on detections per frame, passed to YOLO as
             max_det.
-        progress_callback: Called as (completed, total) before each file.
+        progress_callback: Called as (completed, total, pose_path) after each
+            file. Exceptions it raises are logged, not propagated.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -53,7 +54,7 @@ class BatchJob(BaseModel):
     config: Optional[TrainingConfig] = None
     output_dir: str = ""
     n_individuals: int = 1
-    progress_callback: Optional[Callable[[int, int], None]] = None
+    progress_callback: Optional[Callable[[int, int, str], None]] = None
 
     @field_validator("pose_files", "video_files", mode="before")
     @classmethod
@@ -96,17 +97,14 @@ class BatchJob(BaseModel):
         while len(video_files) < total:
             video_files.append("")
 
-        for i, (pose_path, video_path) in enumerate(zip(self.pose_files, video_files)):
-            if self.progress_callback:
-                self.progress_callback(i, total)
-
+        for pose_path, video_path in zip(self.pose_files, video_files):
             try:
                 if self.mode is BatchMode.POSE_ESTIMATION:
                     out = estimate_poses_from_video(
                         video_path, self.checkpoint, self.n_individuals
                     )
                 else:
-                    out = self._run_behaviour_decode(pose_path, video_path, i)
+                    out = self._run_behaviour_decode(pose_path)
 
                 results.append(
                     BatchResult(
@@ -128,13 +126,17 @@ class BatchJob(BaseModel):
                 )
                 log.error("Error processing %s: %s", pose_path, exc)
 
-        if self.progress_callback:
-            self.progress_callback(total, total)
+            if self.progress_callback:
+                try:
+                    self.progress_callback(len(results), total, pose_path)
+                except Exception as exc:
+                    # A broken callback must not discard work already done.
+                    log.warning("progress_callback raised: %s", exc)
 
         self._write_manifest(results)
         return results
 
-    def _run_behaviour_decode(self, pose_path: str, video_path: str, idx: int) -> str:
+    def _run_behaviour_decode(self, pose_path: str) -> str:
         """Detect bouts in one pose file, classify them, and save the result."""
         coords_data = read_coords(pose_path)
 

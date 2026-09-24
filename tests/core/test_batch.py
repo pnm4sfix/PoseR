@@ -49,6 +49,19 @@ def test_unreadable_file_is_captured_not_raised(tmp_path):
     assert results[0].output_path == ""
 
 
+def test_failure_is_about_the_file_not_a_programming_error(tmp_path):
+    # The per-file except catches everything, so a NameError or TypeError in
+    # the decode path would be recorded as an ordinary file failure. Assert on
+    # the cause, not just that something failed.
+    results = BatchJob(
+        pose_files=[str(tmp_path / "missing.h5")], output_dir=str(tmp_path)
+    ).run()
+    error = results[0].error
+    assert "not defined" not in error
+    assert "positional argument" not in error
+    assert "missing.h5" in error or "no such file" in error.lower()
+
+
 def test_each_input_produces_one_manifest_row(tmp_path):
     pose_files = [str(tmp_path / f"missing{i}.h5") for i in range(3)]
     results = BatchJob(pose_files=pose_files, output_dir=str(tmp_path)).run()
