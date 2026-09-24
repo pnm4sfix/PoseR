@@ -9,7 +9,7 @@ there is no duplicated code.
 from __future__ import annotations
 
 import os
-from typing import List, Optional, Union
+from typing import Optional
 
 import numpy as np
 import pandas as pd
