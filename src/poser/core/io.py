@@ -6,7 +6,7 @@ Supports:
   * SLEAP       (.h5)
   * PoseR-native (.h5 via PyTables)
 
-All readers return a ``coords_data`` dict::
+All readers return a coords_data dict::
 
     {
         individual_key: {
@@ -20,19 +20,25 @@ All readers return a ``coords_data`` dict::
 
 from __future__ import annotations
 
-import os
+import logging
+from functools import partial
 from pathlib import Path
 from typing import Dict, Optional, Union
 
 import numpy as np
 import pandas as pd
+import tables as tb
+
+from .exceptions import (
+    BehaviourWriteError,
+    PoseFormatError,
+    UnsupportedFormatError,
+)
 
 PathLike = Union[str, Path]
 
+log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Readers
-# ---------------------------------------------------------------------------
 
 def read_dlc(
     h5_file: PathLike,
@@ -43,21 +49,17 @@ def read_dlc(
 ) -> Dict:
     """Read a DeepLabCut .h5 or .csv pose file.
 
-    Parameters
-    ----------
-    h5_file:
-        Path to DLC output file (.h5 or .csv).
-    clean:
-        If True, NaN-interpolate low-confidence frames (ci < *confidence_threshold*).
-    confidence_threshold:
-        Threshold below which keypoints are masked when *clean* is True.
-    bodypoints:
-        Optional subset of bodypart names to keep (e.g. for OFT mouse datasets).
+    Args:
+        clean: Mask x and y below confidence_threshold, then interpolate
+            across the gaps. ci is returned unmodified.
+        bodypoints: Bodypart names to keep. None keeps all.
 
-    Returns
-    -------
-    dict
-        ``{individual: {"x": DataFrame, "y": DataFrame, "ci": DataFrame}}``
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}, each a (V, T) DataFrame
+        of nodes by frames.
+
+    Raises:
+        ValueError: If the file extension is neither .h5 nor .csv.
     """
     h5_file = str(h5_file)
     if h5_file.endswith(".h5"):
@@ -114,33 +116,30 @@ def read_dlc(
 
 
 def read_sleap(h5_file: PathLike) -> Dict:
-    """Read a SLEAP pose-estimation .h5 file.
+    """Read a SLEAP .h5 file: one group per individual, each with x, y and ci.
 
-    Expects groups keyed by individual, each containing datasets ``"x"``,
-    ``"y"``, ``"ci"``.
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}, each a (V, T) array.
     """
-    import h5py
-
     coords_data: Dict = {}
-    with h5py.File(str(h5_file), "r") as f:
-        for individual in f.keys():
-            g = f[individual]
-            coords_data[individual] = {
-                "x": g["x"][:],
-                "y": g["y"][:],
-                "ci": g["ci"][:],
+    with tb.open_file(str(h5_file), mode="r") as f:
+        for ind in f.list_nodes("/", classname="Group"):
+            coords_data[ind._v_name] = {
+                "x": ind.x[:],
+                "y": ind.y[:],
+                "ci": ind.ci[:],
             }
     return coords_data
 
 
 def read_poser_coords(h5_file: PathLike) -> Dict:
-    """Read a PoseR-native coords .h5 file (PyTables).
+    """Read a PoseR-native coords .h5 file, one group per individual.
 
-    Expects groups keyed by individual with an array named ``"coords"``
-    of shape ``(3, n_nodes, n_frames)`` corresponding to [x, y, ci].
+    Each group holds a coords array of shape (3, V, T) ordered x, y, ci.
+
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}, each a (V, T) array.
     """
-    import tables as tb
-
     coords_data: Dict = {}
     with tb.open_file(str(h5_file), mode="r") as f:
         for ind in f.list_nodes("/"):
@@ -160,53 +159,71 @@ def read_coords(
     confidence_threshold: float = 0.8,
     bodypoints: Optional[list[str]] = None,
 ) -> Dict:
-    """Auto-detect format and read a pose file.
+    """Read a pose file, detecting its format.
 
-    Tries DLC → SLEAP → PoseR-native in order.
+    A name containing poser_coords goes straight to the PoseR-native reader.
+    Anything else is tried as DeepLabCut, then SLEAP, then PoseR-native.
 
-    Returns
-    -------
-    dict
-        coords_data compatible with the rest of the pipeline.
+    Args:
+        clean, confidence_threshold, bodypoints: Forwarded to read_dlc and
+            ignored by the other two readers.
+
+    Returns:
+        Mapping of individual to {"x", "y", "ci"}.
+
+    Raises:
+        PoseFormatError: If no reader recognises the file. The message names
+            what each reader rejected it for.
     """
-    h5_file_str = str(h5_file)
-
-    if "poser_coords" in h5_file_str:
+    if "poser_coords" in str(h5_file):
         return read_poser_coords(h5_file)
 
-    try:
-        return read_dlc(
-            h5_file,
-            clean=clean,
-            confidence_threshold=confidence_threshold,
-            bodypoints=bodypoints,
-        )
-    except Exception:
-        pass
+    attempts = (
+        (
+            "DeepLabCut",
+            partial(
+                read_dlc,
+                h5_file,
+                clean=clean,
+                confidence_threshold=confidence_threshold,
+                bodypoints=bodypoints,
+            ),
+        ),
+        ("SLEAP", partial(read_sleap, h5_file)),
+        ("PoseR-native", partial(read_poser_coords, h5_file)),
+    )
 
-    try:
-        return read_sleap(h5_file)
-    except Exception:
-        pass
+    failures: list[str] = []
+    last_exc: Optional[Exception] = None
+    for fmt, reader in attempts:
+        try:
+            return reader()
+        except Exception as exc:
+            # Format probe: any parse failure just means "not this format".
+            last_exc = exc
+            log.debug("%s reader rejected %s: %s", fmt, h5_file, exc)
+            failures.append(f"{fmt}: {type(exc).__name__}: {exc}")
 
-    return read_poser_coords(h5_file)
+    raise PoseFormatError(
+        f"{h5_file} is not a readable pose file. Tried:\n  "
+        + "\n  ".join(failures)
+    ) from last_exc
 
 
-# ---------------------------------------------------------------------------
-# Classification h5 (PyTables)
-# ---------------------------------------------------------------------------
 
 def read_classification_h5(filepath: PathLike) -> Dict:
     """Read a PoseR classification .h5 file.
 
-    Returns
-    -------
-    dict
-        ``{ind_int: {behaviour_int: {"classification": str, "coords": ndarray,
-                                      "ci": ndarray, "start": int, "stop": int}}}``
-    """
-    import tables as tb
+    Returns:
+        {individual: {behaviour: bout}}, where bout has keys classification,
+        coords, ci, start and stop. coords is (n, 3) and ci is (n,), with n
+        the number of nodes times frames in that bout.
 
+    Note:
+        Behaviour keys are 1-based. The on-disk table numbers behaviours from
+        zero and this adds one, so they do not match the array names in the
+        file.
+    """
     classification_data: Dict = {}
     with tb.open_file(str(filepath), mode="r") as f:
         for group_name in f.root.__getattr__("_v_groups"):
@@ -237,10 +254,6 @@ def read_classification_h5(filepath: PathLike) -> Dict:
     return classification_data
 
 
-# ---------------------------------------------------------------------------
-# Writers
-# ---------------------------------------------------------------------------
-
 def save_to_h5(
     classification_data: Dict,
     video_file: PathLike,
@@ -249,28 +262,18 @@ def save_to_h5(
 ) -> str:
     """Write classification_data to a PoseR .h5 file.
 
-    Parameters
-    ----------
-    classification_data:
-        ``{ind: {behaviour: {"classification": str, "coords": ndarray,
-                              "ci": ndarray, "start": int, "stop": int}}}``
-    video_file:
-        Used to derive the output filename (``<video_file>_classification.h5``).
-    n_nodes:
-        Number of skeleton nodes.
-    behaviour_schema:
-        PyTables ``IsDescription`` subclass defining the label table schema.
+    Args:
+        classification_data: {individual: {behaviour: bout}}, where bout has
+            keys classification, coords, ci, start and stop.
+        video_file: Names the output, which is <video_file>_classification.h5.
+        behaviour_schema: PyTables IsDescription subclass defining the label
+            table schema.
 
-    Returns
-    -------
-    str
-        Absolute path to the written file.
+    Returns:
+        Path to the written file, relative if video_file was relative.
     """
-    import tables as tb
-
     filename = str(video_file) + "_classification.h5"
-    mode = "a" if os.path.exists(filename) else "w"
-    with tb.open_file(filename, mode=mode, title="classification") as f:
+    with tb.open_file(filename, mode="a", title="classification") as f:
         for ind, ind_subset in classification_data.items():
             ind_group = f.create_group("/", str(ind), f"Individual{ind}")
             ind_table = f.create_table(
@@ -292,7 +295,10 @@ def save_to_h5(
                     row.append()
                     ind_table.flush()
                 except Exception as exc:
-                    print(f"  Warning: could not save behaviour {behaviour}: {exc}")
+                    raise BehaviourWriteError(
+                        f"Could not write behaviour {behaviour} for "
+                        f"individual {ind} to {filename}: {exc}"
+                    ) from exc
 
     return filename
 
@@ -300,23 +306,15 @@ def save_to_h5(
 def save_coords_to_h5(coords_data: Dict, video_file: PathLike) -> str:
     """Write coords_data to a PoseR-native coords .h5 file.
 
-    Parameters
-    ----------
-    coords_data:
-        ``{individual: {"x": array, "y": array, "ci": array}}``.
-    video_file:
-        Used to derive output filename (``<video_file>_poser_coords.h5``).
+    Args:
+        coords_data: {individual: {"x", "y", "ci"}}, each (V, T).
+        video_file: Names the output, which is <video_file>_poser_coords.h5.
 
-    Returns
-    -------
-    str
-        Absolute path to the written file.
+    Returns:
+        Path to the written file, relative if video_file was relative.
     """
-    import tables as tb
-
     filename = str(video_file) + "_poser_coords.h5"
-    mode = "a" if os.path.exists(filename) else "w"
-    with tb.open_file(filename, mode=mode, title="coords") as f:
+    with tb.open_file(filename, mode="a", title="coords") as f:
         for ind, data in coords_data.items():
             ind_group = f.create_group("/", str(ind), f"Individual{ind}")
             coords_array = np.array([data["x"], data["y"], data["ci"]])
@@ -325,14 +323,16 @@ def save_coords_to_h5(coords_data: Dict, video_file: PathLike) -> str:
     return filename
 
 
-# ---------------------------------------------------------------------------
-# Numpy convenience
-# ---------------------------------------------------------------------------
-
 def convert_dlc_to_ctvm(dlc_file: PathLike) -> np.ndarray:
-    """Convert a DLC .h5/.csv file directly to a ``(C, T, V, M)`` numpy array.
+    """Convert a DeepLabCut .h5 or .csv file to a (C, T, V, M) array.
 
-    C=3 (x, y, ci), T=frames, V=bodyparts, M=individuals.
+    C is 3 (x, y, ci), T frames, V bodyparts, M individuals.
+
+    Note:
+        M is always 1. Multi-animal files are flattened into one individual.
+
+    Raises:
+        UnsupportedFormatError: If the extension is neither .h5 nor .csv.
     """
     dlc_file = str(dlc_file)
     if dlc_file.endswith(".h5"):
@@ -340,7 +340,7 @@ def convert_dlc_to_ctvm(dlc_file: PathLike) -> np.ndarray:
     elif dlc_file.endswith(".csv"):
         dlc_data = pd.read_csv(dlc_file, header=[0, 1, 2], index_col=0)
     else:
-        raise ValueError(f"Unsupported file format: {dlc_file}")
+        raise UnsupportedFormatError(f"Unsupported file format: {dlc_file}")
 
     data_t = dlc_data.transpose()
     data_t["individuals"] = ["individual1"] * data_t.shape[0]
@@ -350,7 +350,6 @@ def convert_dlc_to_ctvm(dlc_file: PathLike) -> np.ndarray:
         .reset_index()
     )
 
-    ctvms = []
     bodyparts = data_t.bodyparts.unique()
 
     x = data_t[data_t.coords == "x"].loc[:, 0:].to_numpy()
