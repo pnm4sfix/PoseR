@@ -256,45 +256,37 @@ def manual_bout(
     coords_data: dict,
     individual_key,
 ) -> dict:
-    """Create a bout dict from a user-defined start/stop pair.
+    """Build a bout from boundaries the user picked by hand.
 
-    Parameters
-    ----------
-    start, end:
-        Frame indices.
-    coords_data:
-        ``{individual: {"x": array, "y": array, "ci": array}}``.
-    individual_key:
-        Which individual to extract from ``coords_data``.
+    Args:
+        start: First frame of the bout.
+        end: One past the last frame.
+        coords_data: Mapping of individual to {"x", "y", "ci"}, each (V, T).
+        individual_key: Which individual to slice.
 
-    Returns
-    -------
-    dict
-        ``{"start": int, "stop": int, "coords": ndarray, "ci": ndarray,
-           "classification": "", "bout_method": "manual"}``
+    Returns:
+        Keys start, end, coords, ci, classification and bout_method. coords is
+        (V * T_window, 3) holding x, y and ci, which is the layout save_to_h5
+        writes; ci is repeated there and also given separately as (V * T).
+
+    Note:
+        The end frame is under the key "end", matching what the panels read.
+        save_to_h5 reads "stop", so a bout from here cannot be saved without
+        translating the key first.
     """
     data = coords_data[individual_key]
+    # np.array covers both shapes core.io returns: DataFrames from read_dlc,
+    # ndarrays from read_sleap and read_poser_coords.
     x = np.array(data["x"])
     y = np.array(data["y"])
     ci = np.array(data["ci"])
 
-    # Handle DataFrame vs ndarray
-    if hasattr(x, "values"):
-        x = x.values
-    if hasattr(y, "values"):
-        y = y.values
-    if hasattr(ci, "values"):
-        ci = ci.values
-
-    # Slice window: shape (n_nodes, n_frames_in_window)
     x_win = x[:, start:end]
     y_win = y[:, start:end]
     ci_win = ci[:, start:end]
 
-    # Stack to (T_window, n_nodes, 3) for storage — same as classification h5
-    n_nodes, T = x_win.shape
-    coords = np.stack([x_win, y_win, ci_win], axis=-1)  # (n_nodes, T, 3)
-    coords_flat = coords.reshape(-1, 3)  # (n_nodes * T, 3) — matches save_to_h5 format
+    coords = np.stack([x_win, y_win, ci_win], axis=-1)  # (V, T_window, 3)
+    coords_flat = coords.reshape(-1, 3)
     ci_flat = ci_win.reshape(-1)
 
     return {
@@ -308,7 +300,11 @@ def manual_bout(
 
 
 def _remove_overlaps(bouts: BoutList, gap: int = 10) -> BoutList:
-    """Resolve overlapping bout boundaries by shrinking them."""
+    """Pull overlapping bouts apart, dropping any that collapse to nothing.
+
+    The detectors pad each bout outwards, so neighbours can overlap even when
+    the movements they came from did not.
+    """
     if len(bouts) < 2:
         return bouts
     b = np.array(bouts)
