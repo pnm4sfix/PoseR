@@ -1,9 +1,4 @@
-"""Detect bouts in a pose file and classify them with a trained model.
-
-Extracted from BatchJob._run_behaviour_decode. The points-array layout below
-is preserved verbatim from that method and is known to disagree with itself;
-see the Tier-2 notes in REFACTOR_PLAN Phase 3.2.
-"""
+"""Detect bouts in a pose file and classify them with a trained model."""
 
 from __future__ import annotations
 
@@ -113,11 +108,18 @@ def _first_individual(coords_data: dict) -> Tuple[np.ndarray, np.ndarray, np.nda
 def _points_from_coords(
     x: np.ndarray, y: np.ndarray, n_nodes: int, n_frames: int
 ) -> np.ndarray:
-    """Build the (n_nodes * n_frames, 3) frame/y/x array bout detection wants."""
+    """Build the (n_nodes * n_frames, 3) frame/y/x array bout detection wants.
+
+    Rows are node-major: every frame of node 0, then every frame of node 1.
+    np.tile lays the frame column out that way and orthogonal_variance relies
+    on it when it does points.reshape(n_nodes, -1, 3), so x and y must be
+    flattened in the same order. Transposing first interleaves the nodes and
+    silently detaches every coordinate from its frame label.
+    """
     frame_idx = np.tile(np.arange(n_frames), n_nodes)
-    y_flat = y.T.reshape(-1) if y.ndim == 2 else y.reshape(-1)
-    x_flat = x.T.reshape(-1) if x.ndim == 2 else x.reshape(-1)
-    return np.stack([frame_idx, y_flat, x_flat], axis=1).astype(float)
+    return np.stack(
+        [frame_idx, y.reshape(-1), x.reshape(-1)], axis=1
+    ).astype(float)
 
 
 def _predict(padded: np.ndarray, architecture: str, checkpoint: str) -> np.ndarray:
