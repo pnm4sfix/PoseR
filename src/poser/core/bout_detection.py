@@ -10,7 +10,7 @@ Three strategies are available:
 
 from __future__ import annotations
 
-from typing import List, Tuple, Union
+from typing import List, Optional, Tuple
 
 import numpy as np
 from scipy.ndimage import gaussian_filter1d
@@ -20,33 +20,37 @@ import scipy.stats as st
 BoutList = List[Tuple[int, int]]
 
 
-# ---------------------------------------------------------------------------
-# Confidence helper
-# ---------------------------------------------------------------------------
-
 def check_behaviour_confidence(
-    ci: np.ndarray,
+    ci: Optional[np.ndarray],
     start: int,
     end: int,
     confidence_threshold: float = 0.8,
 ) -> bool:
-    """Return True if the median confidence in [start, end] is above threshold.
+    """Report whether tracking was confident enough across one bout.
 
-    Parameters
-    ----------
-    ci:
-        Confidence array, shape ``(n_nodes, n_frames)`` or ``(n_frames,)``.
-    start, end:
-        Frame indices.
-    confidence_threshold:
-        Minimum required median confidence.
+    Args:
+        ci: Confidence values, shape (V, T) or (T,). None accepts the bout
+            without checking.
+        start: First frame of the bout. Clamped to 0, because the detectors
+            pad bouts outwards and so can start before frame 0.
+        end: One past the last frame. Clamped to the length of ci.
+
+    Returns:
+        True when the median confidence over the window is at least
+        confidence_threshold. False for an empty window, and for one holding
+        no usable values.
     """
     if ci is None:
         return True
-    end_clipped = min(end, ci.shape[-1])
-    if start >= end_clipped:
+
+    first = max(0, start)
+    last = min(end, ci.shape[-1])
+    if first >= last:
         return False
-    window = ci[..., start:end_clipped]
+
+    window = ci[..., first:last]
+    if np.all(np.isnan(window)):
+        return False
     return float(np.nanmedian(window)) >= confidence_threshold
 
 
