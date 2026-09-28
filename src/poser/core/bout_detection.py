@@ -1,11 +1,15 @@
-"""
-Locomotion / bout detection — pure numpy functions, no napari dependency.
+"""Segment a recording into bouts: contiguous stretches of one behaviour.
 
-Three strategies are available:
+Three strategies, all napari-free:
 
-* ``orthogonal_variance``  — orthogonal-projection peak finding (best for fish)
-* ``egocentric_variance``  — Euclidean median peak finding (simpler)
-* ``manual_bout``          — user-defined start/stop pair (all species)
+orthogonal_variance
+    Projects movement orthogonally to the current heading. Best for species
+    with directed locomotion, such as zebrafish.
+egocentric_variance
+    Peak-finds on Euclidean movement relative to a centre node. Simpler, and
+    not specific to directed locomotion.
+manual_bout
+    Takes a start and end the user picked by hand.
 """
 
 from __future__ import annotations
@@ -18,6 +22,27 @@ from scipy.signal import find_peaks
 import scipy.stats as st
 
 BoutList = List[Tuple[int, int]]
+
+
+EGOCENTRIC_PROMINENCE_FACTOR = 7.0
+
+
+def _smoothing_sigma(fps: float) -> int:
+    """Gaussian width in frames, never below 1.
+
+    gaussian_filter1d divides by sigma squared, so a sigma of 0 raises
+    ZeroDivisionError. int(fps / 10) reaches 0 for anything under 10 fps.
+    """
+    return max(1, int(fps / 10))
+
+
+def _peak_distance(fps: float) -> int:
+    """Minimum frames between bouts, never below 1.
+
+    find_peaks rejects a distance under 1, and int(fps / 2) reaches 0 below
+    2 fps.
+    """
+    return max(1, int(fps / 2))
 
 
 def check_behaviour_confidence(
@@ -54,45 +79,39 @@ def check_behaviour_confidence(
     return float(np.nanmedian(window)) >= confidence_threshold
 
 
-# ---------------------------------------------------------------------------
-# Egocentric (Euclidean median)
-# ---------------------------------------------------------------------------
-
 def egocentric_variance(
     points: np.ndarray,
     center_node: int,
     fps: float,
     n_nodes: int = 0,
     *,
-    amd_threshold: float = 2.0,
     confidence_threshold: float = 0.8,
-    ci: np.ndarray = None,
+    ci: Optional[np.ndarray] = None,
 ) -> Tuple[BoutList, np.ndarray, np.ndarray]:
-    """Detect locomotion bouts using egocentric Euclidean variance.
+    """Detect locomotion bouts from egocentric Euclidean movement.
 
-    Parameters
-    ----------
-    points:
-        Shape ``(n_nodes * n_frames, 3)`` — columns ``(frame, y, x)`` ordered
-        node-major (all frames for node 0, then all frames for node 1, …).
-    center_node:
-        Index of the reference/center node.
-    fps:
-        Frames per second.
-    n_nodes:
-        Number of skeleton nodes.  If 0 (default), inferred from
-        ``points`` (legacy behaviour, may be inaccurate).
-    amd_threshold:
-        Prominence multiplier relative to the MAD of the smoothed signal.
-    confidence_threshold:
-        Minimum median CI to accept a bout.
-    ci:
-        Optional confidence array, shape ``(n_nodes, n_frames)``.
+    Movement is measured relative to center_node, smoothed, then peak-found.
+    Simpler than orthogonal_variance and not specific to directed locomotion.
 
-    Returns
-    -------
-    (bouts, gauss_filtered, euclidean)
-        *bouts* is a list of ``(start, end)`` tuples.
+    Args:
+        points: Shape (n_nodes * n_frames, 3), columns (frame, y, x), ordered
+            node-major: every frame of node 0, then every frame of node 1.
+        center_node: Node the other nodes are measured relative to.
+        fps: Frames per second, which sets the smoothing width and the minimum
+            spacing between bouts.
+        n_nodes: Number of skeleton nodes. Zero infers it from points, which
+            is legacy behaviour and often wrong; pass the real value.
+        confidence_threshold: Minimum median confidence to keep a bout.
+        ci: Confidence values, shape (V, T). None keeps every bout.
+
+    Returns:
+        The bouts as (start, end) frame pairs, the smoothed movement signal,
+        and the raw per-node Euclidean movement.
+
+    Note:
+        Bouts are padded 20 frames either side of the detected peak, so start
+        can be negative and end can exceed the recording. Consumers clamp.
+        Unlike orthogonal_variance the prominence is not configurable.
     """
     if n_nodes <= 0:
         # Legacy fallback — unreliable if frame count > 1
@@ -106,16 +125,16 @@ def egocentric_variance(
     egocentric[:, :, 1:] = reshap[:, :, 1:] - center[None, :, :]
 
     absol_traj = egocentric[:, 1:, 1:] - egocentric[:, :-1, 1:]
-    euclidean = np.sqrt(np.abs(absol_traj[:, :, 0] ** 2 + absol_traj[:, :, 1] ** 2))
+    euclidean = np.sqrt(absol_traj[:, :, 0] ** 2 + absol_traj[:, :, 1] ** 2)
     var = np.median(euclidean, axis=0)
 
-    gauss_filtered = gaussian_filter1d(var, int(fps / 10))
+    gauss_filtered = gaussian_filter1d(var, _smoothing_sigma(fps))
     amd = np.median(gauss_filtered - gauss_filtered[0]) / 0.6745
 
     peaks = find_peaks(
         gauss_filtered,
-        prominence=amd * 7,
-        distance=int(fps / 2),
+        prominence=amd * EGOCENTRIC_PROMINENCE_FACTOR,
+        distance=_peak_distance(fps),
         width=5,
         rel_height=0.6,
     )
@@ -137,10 +156,6 @@ def egocentric_variance(
     return bouts, gauss_filtered, euclidean
 
 
-# ---------------------------------------------------------------------------
-# Orthogonal projection
-# ---------------------------------------------------------------------------
-
 def orthogonal_variance(
     points: np.ndarray,
     center_node: int,
@@ -149,32 +164,34 @@ def orthogonal_variance(
     *,
     amd_threshold: float = 2.0,
     confidence_threshold: float = 0.8,
-    ci: np.ndarray = None,
+    ci: Optional[np.ndarray] = None,
 ) -> Tuple[BoutList, np.ndarray, float, np.ndarray]:
-    """Detect locomotion bouts using orthogonal-projection peak detection.
+    """Detect locomotion bouts by projecting movement orthogonally to heading.
 
-    Best suited for zebrafish and other species with directed locomotion.
+    Suits zebrafish and other species with directed locomotion, where turning
+    away from the current heading marks the start of a bout.
 
-    Parameters
-    ----------
-    points:
-        Shape ``(n_frames * n_nodes, 3)`` (frame index, y, x).
-    center_node:
-        Index of reference node.
-    fps:
-        Frames per second.
-    n_nodes:
-        Total number of skeleton nodes.
-    amd_threshold:
-        Threshold multiplier on the MAD-based noise estimate.
-    confidence_threshold:
-        Minimum median CI to accept a bout.
-    ci:
-        Optional confidence array, shape ``(n_nodes, n_frames)``.
+    Args:
+        points: Shape (n_nodes * n_frames, 3), columns (frame, y, x), ordered
+            node-major: every frame of node 0, then every frame of node 1.
+        center_node: Node the other nodes are measured relative to.
+        fps: Frames per second, which sets the smoothing width and the minimum
+            spacing between bouts.
+        n_nodes: Number of skeleton nodes.
+        amd_threshold: Multiplier on the median absolute deviation of the
+            smoothed signal, giving the peak prominence. Raise it to detect
+            fewer, stronger bouts.
+        confidence_threshold: Minimum median confidence to keep a bout.
+        ci: Confidence values, shape (V, T). None keeps every bout.
 
-    Returns
-    -------
-    (bouts, gauss_filtered, threshold, euclidean)
+    Returns:
+        The bouts as (start, end) frame pairs, the smoothed movement signal,
+        the prominence threshold that was used, and the raw per-node Euclidean
+        movement.
+
+    Note:
+        End can exceed the recording, so consumers clamp. Unlike
+        egocentric_variance this pads only at the end, not the start.
     """
     reshap = points.reshape(n_nodes, -1, 3)
     reshap = np.nan_to_num(reshap)
@@ -184,9 +201,7 @@ def orthogonal_variance(
     egocentric[:, :, 1:] = reshap[:, :, 1:] - center[None, :, :]
 
     absol_traj = egocentric[:, 1:, 1:] - egocentric[:, :-1, 1:]
-    euclidean = np.sqrt(
-        np.abs(absol_traj[:, :, 0] ** 2 + absol_traj[:, :, 1] ** 2)
-    )
+    euclidean = np.sqrt(absol_traj[:, :, 0] ** 2 + absol_traj[:, :, 1] ** 2)
 
     projections = []
     for n in range(n_nodes):
@@ -206,14 +221,14 @@ def orthogonal_variance(
     proj_arr = np.array(projections)
     var = np.median(proj_arr, axis=0)
 
-    gauss_filtered = gaussian_filter1d(var, int(fps / 10))
+    gauss_filtered = gaussian_filter1d(var, _smoothing_sigma(fps))
     amd = st.median_abs_deviation(gauss_filtered)
     threshold = amd * amd_threshold
 
     peaks = find_peaks(
         gauss_filtered,
         prominence=threshold,
-        distance=int(fps / 2),
+        distance=_peak_distance(fps),
         width=5,
         rel_height=0.6,
     )
@@ -234,10 +249,6 @@ def orthogonal_variance(
     bouts = _remove_overlaps(bouts)
     return bouts, gauss_filtered, threshold, euclidean
 
-
-# ---------------------------------------------------------------------------
-# Manual bout
-# ---------------------------------------------------------------------------
 
 def manual_bout(
     start: int,
@@ -295,10 +306,6 @@ def manual_bout(
         "bout_method": "manual",
     }
 
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 def _remove_overlaps(bouts: BoutList, gap: int = 10) -> BoutList:
     """Resolve overlapping bout boundaries by shrinking them."""
