@@ -301,7 +301,9 @@ def predict_npy(
 
     # ── Resolve device ──────────────────────────────────────────────────
     if device == "auto":
-        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        from poser.core.settings import resolve_device
+
+        dev = resolve_device()
     else:
         dev = torch.device(device)
     console.print(f"Device: [cyan]{dev}[/cyan]")

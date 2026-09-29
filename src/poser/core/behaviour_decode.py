@@ -16,7 +16,7 @@ from .exceptions import CheckpointError
 from .io import read_coords
 from .preprocessing import preprocess_bouts
 from .schemas.training import DataConfig, ModelConfig, TrainingConfig
-from .settings import settings
+from .settings import resolve_device, settings
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ def _predict(padded: np.ndarray, architecture: str, checkpoint: str) -> np.ndarr
     # so this module cannot reach the registry at import time
     from ..models.registry import load_model
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device()
     model = load_model(architecture, checkpoint, map_location=str(device))
     model.eval().to(device)
 

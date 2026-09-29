@@ -41,6 +41,7 @@ from qtpy.QtWidgets import (
 )
 
 from poser.core.session import SessionManager
+from poser.core.settings import resolve_device
 import torch
 
 # ---------------------------------------------------------------------------
@@ -67,10 +68,10 @@ POSER_PRETRAINED = {"zeb.pt", "fly3.pt", "mouse7.pt", "mouse13.pt"}
 def _resolve_model(name: str):
     """Return a YOLO model instance, downloading PoseR releases as needed."""
     from ultralytics import YOLO  # type: ignore
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device()
     if name in POSER_PRETRAINED:
         url = GITHUB_RELEASE_URL + name
-        return YOLO(url)
+        return YOLO(url).to(device)
     return YOLO(name).to(device)
 
 
@@ -872,7 +873,7 @@ class InferencePanel(QWidget):
                 )
 
                 # Read hparams from checkpoint
-                dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                dev = resolve_device()
                 raw_ckpt = torch.load(str(ckpt), map_location="cpu", weights_only=False)
                 hp = raw_ckpt.get("hyper_parameters", {})
                 data_cfg   = hp.get("data_cfg", {})
@@ -981,7 +982,7 @@ class InferencePanel(QWidget):
             from torch.utils.data import DataLoader
 
             try:
-                dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                dev = resolve_device()
                 raw_ckpt = torch.load(str(ckpt), map_location="cpu", weights_only=False)
                 hp = raw_ckpt.get("hyper_parameters", {})
                 data_cfg    = hp.get("data_cfg", {})
