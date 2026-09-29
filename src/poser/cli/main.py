@@ -361,6 +361,9 @@ def predict_npy(
             str(checkpoint),
             map_location=dev,
             hparams=_infer_hparams,
+            # torch 2.6 defaults weights_only=True, which rejects the pickled
+            # poser._loader.HyperParams inside these released checkpoints.
+            weights_only=False,
         )
         model.eval()
         model.to(dev)
