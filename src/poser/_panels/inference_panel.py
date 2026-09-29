@@ -65,6 +65,73 @@ POSE_MODELS = [
 POSER_PRETRAINED = {"zeb.pt", "fly3.pt", "mouse7.pt", "mouse13.pt"}
 
 
+# Graph layouts are named, but a checkpoint only records its node count, so
+# the layout is recovered from that. Ambiguous counts pick the species this
+# project targets first.
+_LAYOUT_BY_NODE_COUNT = {
+    9: "zebrafish",
+    12: "drosophila",
+    13: "mouse1",
+    17: "coco",
+    18: "mouse2",
+    19: "zebrafishlarvae",
+    23: "zeb60fps",
+    24: "ntu_edge",
+    25: "ntu-rgb+d",
+}
+
+
+def _decoder_kwargs(raw_ckpt: dict) -> dict:
+    """Build the ST_GCN_18 constructor arguments for a saved checkpoint.
+
+    Lightning only replays hyper_parameters that were saved, and the released
+    decoders store just "hparams". The weight shapes are authoritative, so the
+    architecture is read back from the state dict instead: A gives the node
+    count, the first graph convolution gives the input channels, and the
+    classifier head gives the class count.
+
+    ST_GCN_18.__init__ indexes most data_cfg keys without a default, so every
+    one it touches is supplied here.
+    """
+    sd = raw_ckpt["state_dict"]
+    hp = raw_ckpt.get("hyper_parameters", {})
+    stored = hp.get("data_cfg", {}) or {}
+    num_nodes = sd["A"].shape[-1]
+
+    data_cfg = {
+        "data_dir": ".",
+        "augment": False,
+        "ideal_sample_no": None,
+        "shift": False,
+        "regress": False,
+        "softmax": False,
+        "transform": None,
+        "labels_to_ignore": [],
+        "label_dict": None,
+        "calc_class_weights": False,
+        "T2": 100,
+        "head": 0,
+        "weighted_random_sampler": False,
+        "binary": False,
+        "binary_class": None,
+        "preprocess_frame": False,
+        "window_size": None,
+    }
+    data_cfg.update(stored)
+
+    return {
+        "in_channels": sd["st_gcn_networks.0.gcn.conv.weight"].shape[1],
+        "num_class": sd["fcn.weight"].shape[0],
+        "graph_cfg": {
+            "layout": _LAYOUT_BY_NODE_COUNT.get(num_nodes, "zebrafishlarvae"),
+            "strategy": "spatial",
+            "center_node": int(hp.get("graph_cfg", {}).get("center_node", 0)),
+            **(hp.get("graph_cfg", {}) or {}),
+        },
+        "data_cfg": data_cfg,
+    }
+
+
 def _resolve_model(name: str):
     """Return a YOLO model instance, downloading PoseR releases as needed."""
     from ultralytics import YOLO  # type: ignore
@@ -897,6 +964,7 @@ class InferencePanel(QWidget):
                     # checkpoints. The raw torch.load calls above already
                     # opt out the same way.
                     weights_only=False,
+                    **_decoder_kwargs(raw_ckpt),
                 )
                 model.eval()
                 model.to(dev)
@@ -1006,6 +1074,7 @@ class InferencePanel(QWidget):
                     # checkpoints. The raw torch.load calls above already
                     # opt out the same way.
                     weights_only=False,
+                    **_decoder_kwargs(raw_ckpt),
                 )
                 model.eval()
                 model.to(dev)
