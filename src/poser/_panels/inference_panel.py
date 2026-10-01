@@ -41,6 +41,7 @@ from qtpy.QtWidgets import (
 )
 
 from poser.core.session import SessionManager
+from poser.core.exceptions import CheckpointError
 from poser.core.settings import resolve_device
 import torch
 
@@ -97,6 +98,13 @@ def _decoder_kwargs(raw_ckpt: dict) -> dict:
     hp = raw_ckpt.get("hyper_parameters", {})
     stored = hp.get("data_cfg", {}) or {}
     num_nodes = sd["A"].shape[-1]
+    if num_nodes not in _LAYOUT_BY_NODE_COUNT:
+        raise CheckpointError(
+            f"This decoder was trained on a {num_nodes}-node skeleton, and no "
+            f"layout in poser.models.graph defines one. Known node counts: "
+            f"{sorted(_LAYOUT_BY_NODE_COUNT)}. Pick a checkpoint whose node "
+            f"count matches your pose data."
+        )
 
     data_cfg = {
         "data_dir": ".",
@@ -123,7 +131,7 @@ def _decoder_kwargs(raw_ckpt: dict) -> dict:
         "in_channels": sd["st_gcn_networks.0.gcn.conv.weight"].shape[1],
         "num_class": sd["fcn.weight"].shape[0],
         "graph_cfg": {
-            "layout": _LAYOUT_BY_NODE_COUNT.get(num_nodes, "zebrafishlarvae"),
+            "layout": _LAYOUT_BY_NODE_COUNT[num_nodes],
             "strategy": "spatial",
             "center_node": int(hp.get("graph_cfg", {}).get("center_node", 0)),
             **(hp.get("graph_cfg", {}) or {}),
