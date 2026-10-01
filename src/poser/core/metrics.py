@@ -35,13 +35,19 @@ def benchmark_model_performance(
     """
     accuracy = accuracy_score(targets, predictions)
     balanced_accuracy = balanced_accuracy_score(targets, predictions)
-    matrix = confusion_matrix(targets, predictions)
-    target_names = (
-        [label_dict[i] for i in sorted(label_dict.keys())]
-        if label_dict is not None
-        else None
+    # Name the labels explicitly. A label_dict usually covers every class the
+    # project defines, while a given run may only contain some of them, and
+    # sklearn rejects target_names that outnumber the classes it observes.
+    labels = sorted(label_dict) if label_dict is not None else None
+    target_names = [label_dict[i] for i in labels] if labels is not None else None
+    matrix = confusion_matrix(targets, predictions, labels=labels)
+    report = classification_report(
+        targets,
+        predictions,
+        labels=labels,
+        target_names=target_names,
+        zero_division=0,
     )
-    report = classification_report(targets, predictions, target_names=target_names)
 
     log.info(
         "Accuracy: %.4f | Balanced accuracy: %.4f", accuracy, balanced_accuracy

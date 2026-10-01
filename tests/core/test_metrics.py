@@ -81,3 +81,24 @@ def test_report_is_logged_not_printed(caplog, capsys):
         benchmark_model_performance(targets, targets)
     assert "Accuracy" in caplog.text
     assert capsys.readouterr().out == ""
+
+
+def test_label_dict_may_cover_classes_absent_from_this_run():
+    # A project's label_dict names every class it defines, but one recording
+    # need not contain them all. sklearn rejects target_names that outnumber
+    # the observed classes unless the labels are named explicitly.
+    targets = np.array([0, 0, 2, 2])
+    result = benchmark_model_performance(
+        targets, targets, label_dict={0: "forward", 1: "left", 2: "right", 3: "other"}
+    )
+    assert result["confusion_matrix"].shape == (4, 4)
+    assert "left" in result["classification_report"]
+
+
+def test_absent_class_scores_zero_rather_than_warning():
+    targets = np.array([0, 0, 1, 1])
+    predictions = np.array([0, 0, 0, 0])
+    result = benchmark_model_performance(
+        predictions, targets, label_dict={0: "a", 1: "b"}
+    )
+    assert result["accuracy"] == 0.5
