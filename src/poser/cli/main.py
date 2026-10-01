@@ -333,7 +333,7 @@ def predict_npy(
         hp = raw_ckpt.get("hyper_parameters", {})
         data_cfg = hp.get("data_cfg", {})
         T2        = int(data_cfg.get("T2", 100))
-        transform = data_cfg.get("transform", ["center", "align", "pad"])
+        transform = data_cfg.get("transform") or ["center", "align", "pad"]
         center_node = int(hp.get("graph_cfg", {}).get("center", 0))
         head_node = int(data_cfg.get("head", 0))
         num_class = int(hp.get("num_class", 2))
