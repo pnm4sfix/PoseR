@@ -609,6 +609,118 @@ def model_list() -> None:
             console.print(f"  {p}")
 
 
+@model_app.command("inspect")
+def model_inspect(
+    checkpoint: Path = typer.Argument(..., help="Path to a .ckpt decoder."),
+) -> None:
+    """Show a decoder's architecture and whether it describes itself."""
+    import torch
+
+    from poser.models.registry import describe_checkpoint
+
+    raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    arch = describe_checkpoint(raw)
+    stored = raw.get("hyper_parameters", {}) or {}
+
+    table = Table(title=checkpoint.name)
+    table.add_column("Property", style="cyan")
+    table.add_column("Value")
+    for key in ("num_nodes", "in_channels", "num_class", "layout"):
+        table.add_row(key, str(arch[key]))
+    table.add_row("hyper_parameters", ", ".join(sorted(stored)) or "(none)")
+    console.print(table)
+
+    if arch["layout"] is None:
+        console.print(
+            f"[red]No graph layout defines {arch['num_nodes']} nodes, so this "
+            "decoder cannot be rebuilt.[/red]"
+        )
+    if "data_cfg" not in stored:
+        console.print(
+            "[yellow]No data_cfg stored: preprocessing settings fall back to "
+            "defaults, which silently produces wrong predictions. Run "
+            "'poser model repair' to embed them.[/yellow]"
+        )
+
+
+@model_app.command("repair")
+def model_repair(
+    checkpoint: Path = typer.Argument(..., help="Decoder to repair."),
+    config: Path = typer.Option(..., "--config", "-c", help="decoder_config.yml."),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Defaults to <checkpoint>.repaired.ckpt."
+    ),
+) -> None:
+    """Embed a decoder's preprocessing settings into the checkpoint.
+
+    Several released decoders stored only "hparams", so loading them falls
+    back to defaults that do not match how they were trained. This writes a
+    copy carrying the architecture read from the weights plus the data_cfg
+    taken from decoder_config.yml, so it loads correctly with no outside
+    context.
+    """
+    import torch
+    import yaml
+
+    from poser.models.registry import describe_checkpoint
+
+    raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    arch = describe_checkpoint(raw)
+    if arch["layout"] is None:
+        console.print(
+            f"[red]No graph layout defines {arch['num_nodes']} nodes.[/red]"
+        )
+        raise typer.Exit(1)
+
+    cfg = yaml.safe_load(config.read_text())["data_cfg"]
+    if int(cfg["V"]) != arch["num_nodes"]:
+        console.print(
+            f"[red]Config says V={cfg['V']} but the weights have "
+            f"{arch['num_nodes']} nodes. Wrong config for this decoder.[/red]"
+        )
+        raise typer.Exit(1)
+
+    hp = dict(raw.get("hyper_parameters", {}) or {})
+    hp.update(
+        in_channels=arch["in_channels"],
+        num_class=arch["num_class"],
+        graph_cfg={
+            "layout": arch["layout"],
+            "strategy": "spatial",
+            "center_node": int(cfg["center"]),
+        },
+        data_cfg={
+            "data_dir": ".",
+            "augment": False,
+            "ideal_sample_no": None,
+            "shift": False,
+            "regress": False,
+            "softmax": False,
+            "transform": ["center", "align", "pad"],
+            "labels_to_ignore": cfg.get("labels_to_ignore", []),
+            "label_dict": cfg.get("classification_dict"),
+            "calc_class_weights": False,
+            "T2": int(cfg["T2"]),
+            "head": 0,
+            "weighted_random_sampler": False,
+            "binary": False,
+            "binary_class": None,
+            "preprocess_frame": False,
+            "window_size": None,
+        },
+    )
+    raw["hyper_parameters"] = hp
+
+    out = output or checkpoint.with_suffix(".repaired.ckpt")
+    torch.save(raw, str(out))
+    console.print(f"[green]Wrote {out}[/green]")
+    console.print(
+        f"  nodes={arch['num_nodes']} in_channels={arch['in_channels']} "
+        f"num_class={arch['num_class']} layout={arch['layout']} "
+        f"T2={cfg['T2']} center_node={cfg['center']}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # init
 # ---------------------------------------------------------------------------
