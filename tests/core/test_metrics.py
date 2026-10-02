@@ -102,3 +102,11 @@ def test_absent_class_scores_zero_rather_than_warning():
         predictions, targets, label_dict={0: "a", 1: "b"}
     )
     assert result["accuracy"] == 0.5
+
+
+def test_report_as_dict_gives_per_class_numbers():
+    targets = np.array([0, 1, 1])
+    result = benchmark_model_performance(
+        targets, targets, {0: "a", 1: "b"}, report_as_dict=True
+    )
+    assert result["classification_report"]["b"]["support"] == 2

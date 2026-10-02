@@ -5,6 +5,7 @@ from poser._panels.analysis_panel import AnalysisPanel
 from poser._panels.inference_panel_2 import InferencePanel
 from poser._panels.train_panel import TrainPanel
 from poser._panels.ethogram_panel import EthogramPanel
+from poser._panels.metrics_panel import MetricsPanel
 
 __all__ = [
     "DataPanel",
@@ -13,4 +14,5 @@ __all__ = [
     "InferencePanel",
     "TrainPanel",
     "EthogramPanel",
+    "MetricsPanel",
 ]

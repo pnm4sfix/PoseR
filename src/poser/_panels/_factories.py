@@ -13,6 +13,7 @@ from poser._panels.analysis_panel import AnalysisPanel
 from poser._panels.inference_panel_2 import InferencePanel
 from poser._panels.train_panel import TrainPanel
 from poser._panels.ethogram_panel import EthogramPanel
+from poser._panels.metrics_panel import MetricsPanel
 from poser.core.session import get_session
 
 # One instance of each wirable panel per viewer. Panels talk to each other
@@ -21,6 +22,7 @@ from poser.core.session import get_session
 _annotation_cache: dict = {}
 _ethogram_cache: dict = {}
 _inference_cache: dict = {}
+_metrics_cache: dict = {}
 
 # Pairs already connected, keyed by the two panel objects. Panels are rewired
 # on every factory call so open order cannot matter, and this stops a signal
@@ -59,6 +61,7 @@ def _wire_panels(viewer) -> None:
     annotation = _annotation_cache.get(key)
     ethogram = _ethogram_cache.get(key)
     inference = _inference_cache.get(key)
+    metrics = _metrics_cache.get(key)
 
     if annotation is not None and ethogram is not None:
         pair = (id(annotation), id(ethogram), "annotations")
@@ -70,6 +73,12 @@ def _wire_panels(viewer) -> None:
         pair = (id(inference), id(ethogram), "predictions")
         if pair not in _wired:
             inference.predictions_ready.connect(ethogram.load_predictions)
+            _wired.add(pair)
+
+    if inference is not None and metrics is not None:
+        pair = (id(inference), id(metrics), "metrics_predictions")
+        if pair not in _wired:
+            inference.predictions_ready.connect(metrics.load_predictions)
             _wired.add(pair)
 
 
@@ -114,5 +123,14 @@ def make_ethogram_panel() -> EthogramPanel:
     v = napari.current_viewer()
     panel = EthogramPanel(v)
     _ethogram_cache[id(v)] = panel
+    _wire_panels(v)
+    return panel
+
+
+def make_metrics_panel() -> MetricsPanel:
+    _enlarge_titlebar_buttons()
+    v = napari.current_viewer()
+    panel = MetricsPanel(v, session=get_session(v))
+    _metrics_cache[id(v)] = panel
     _wire_panels(v)
     return panel

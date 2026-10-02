@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from .batch import BatchMode, BatchResult
 from .pose_estimation import FrameKeypoints, InferenceMode
+from .scoring import ClassNames, DecoderScore, LabelledBout
 from .training import (
     AugmentationConfig,
     BehaviourSchema,
@@ -27,9 +28,12 @@ __all__ = [
     "BatchMode",
     "BatchResult",
     "BehaviourSchema",
+    "ClassNames",
     "DataConfig",
+    "DecoderScore",
     "FrameKeypoints",
     "InferenceMode",
+    "LabelledBout",
     "ModelConfig",
     "OptimiserConfig",
     "TrainerConfig",
