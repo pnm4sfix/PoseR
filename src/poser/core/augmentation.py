@@ -12,24 +12,23 @@ from __future__ import annotations
 import numpy as np
 
 
-# ---------------------------------------------------------------------------
-# Individual transforms — return (num_aug, C, T, V, M)
-# ---------------------------------------------------------------------------
-
 def rotate_transform(behaviour: np.ndarray, num_angles: int) -> np.ndarray:
-    """Randomly rotate a pose by ±30 degrees.
+    """Rotate a pose by a random angle in [-30, 30) degrees.
 
-    Parameters
-    ----------
-    behaviour:
-        Single pose sample, shape ``(C, T, V, M)``.
-    num_angles:
-        Number of rotated copies to produce.
+    Training augmentation: each copy gets its own independent angle. Only x and
+    y are rotated, the confidence channel is carried through untouched.
 
-    Returns
-    -------
-    np.ndarray
-        Shape ``(num_angles, C, T, V, M)``.
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_angles: How many rotated copies to produce.
+
+    Returns:
+        Shape (num_angles, C, T, V, M).
+
+    Note:
+        Rotation is about the origin, so centre the pose first or it will be
+        translated as well. Draws from the global numpy random state, so seed
+        np.random to make a run reproducible.
     """
     rotated = np.zeros((num_angles, *behaviour.shape))
     for i in range(num_angles):
@@ -45,14 +44,22 @@ def rotate_transform(behaviour: np.ndarray, num_angles: int) -> np.ndarray:
 
 
 def jitter_transform(behaviour: np.ndarray, num_jitter: int) -> np.ndarray:
-    """Add small random noise (±2 px) to x/y coordinates.
+    """Add uniform noise in [-2, 2) pixels to the x and y coordinates.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_jitter:
-        Number of jittered copies to produce.
+    Training augmentation: every coordinate gets its own independent offset,
+    and each copy its own noise field. The confidence channel is carried
+    through untouched.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_jitter: How many jittered copies to produce.
+
+    Returns:
+        Shape (num_jitter, C, T, V, M).
+
+    Note:
+        Draws from the global numpy random state, so seed np.random to make a
+        run reproducible.
     """
     jittered = np.zeros((num_jitter, *behaviour.shape))
     for i in range(num_jitter):
@@ -63,14 +70,22 @@ def jitter_transform(behaviour: np.ndarray, num_jitter: int) -> np.ndarray:
 
 
 def scale_transform(behaviour: np.ndarray, num_scales: int) -> np.ndarray:
-    """Randomly scale pose coordinates by 0–3×.
+    """Scale the x and y coordinates by a random factor in [0, 3).
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_scales:
-        Number of scaled copies to produce.
+    Training augmentation: one factor per copy, applied to every coordinate.
+    The confidence channel is carried through untouched.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_scales: How many scaled copies to produce.
+
+    Returns:
+        Shape (num_scales, C, T, V, M).
+
+    Note:
+        The range reaches down to zero, so some copies collapse the pose
+        towards a point. Draws from the global numpy random state, so seed
+        np.random to make a run reproducible.
     """
     scaled = np.zeros((num_scales, *behaviour.shape))
     for i in range(num_scales):
@@ -81,14 +96,22 @@ def scale_transform(behaviour: np.ndarray, num_scales: int) -> np.ndarray:
 
 
 def shear_transform(behaviour: np.ndarray, num_shears: int) -> np.ndarray:
-    """Apply random shear transform to pose coordinates.
+    """Shear the x and y coordinates by random factors.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_shears:
-        Number of sheared copies to produce.
+    Training augmentation: the x factor is drawn from [-1, 1) and the y factor
+    from [0, 1), so the shear is asymmetric. The confidence channel is carried
+    through untouched.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_shears: How many sheared copies to produce.
+
+    Returns:
+        Shape (num_shears, C, T, V, M).
+
+    Note:
+        Draws from the global numpy random state, so seed np.random to make a
+        run reproducible.
     """
     sheared = np.zeros((num_shears, *behaviour.shape))
     for i in range(num_shears):
@@ -104,14 +127,23 @@ def shear_transform(behaviour: np.ndarray, num_shears: int) -> np.ndarray:
 
 
 def roll_transform(behaviour: np.ndarray, num_rolls: int) -> np.ndarray:
-    """Temporally roll (shift) the pose sequence by a random amount.
+    """Shift the pose sequence in time by a random number of frames.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_rolls:
-        Number of rolled copies.
+    Training augmentation: the shift is drawn from [-20, 20] frames and wraps
+    around, so frames pushed off one end reappear at the other. All three
+    channels move together.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_rolls: How many rolled copies to produce.
+
+    Returns:
+        Shape (num_rolls, C, T, V, M).
+
+    Note:
+        Wrapping splices the end of the bout onto its start, so a rolled copy
+        is not a contiguous stretch of real movement. Draws from the global
+        numpy random state, so seed np.random to make a run reproducible.
     """
     rolled = np.zeros((num_rolls, *behaviour.shape))
     for i in range(num_rolls):
@@ -123,14 +155,23 @@ def roll_transform(behaviour: np.ndarray, num_rolls: int) -> np.ndarray:
 def fragment_transform(
     behaviour: np.ndarray, num_fragments: int
 ) -> np.ndarray:
-    """Extract a random sub-sequence and pad it back to the original length.
+    """Cut a random sub-sequence and tile it back to the original length.
 
-    Parameters
-    ----------
-    behaviour:
-        Shape ``(C, T, V, M)``.
-    num_fragments:
-        Number of fragment copies.
+    Training augmentation: the start is drawn from [0, T-2] and the length
+    from [10, 60] frames, then _pad_to_length repeats the fragment until it
+    reaches T again.
+
+    Args:
+        behaviour: One pose sample, shape (C, T, V, M).
+        num_fragments: How many fragment copies to produce.
+
+    Returns:
+        Shape (num_fragments, C, T, V, M).
+
+    Note:
+        A fragment starting near the end is shorter than the requested length,
+        since the slice is not clamped. Draws from the global numpy random
+        state, so seed np.random to make a run reproducible.
     """
     T = behaviour.shape[1]
     fragments = np.zeros((num_fragments, *behaviour.shape))
@@ -143,25 +184,16 @@ def fragment_transform(
     return fragments
 
 
-# ---------------------------------------------------------------------------
-# Composite — apply all transforms once (used inline during __getitem__)
-# ---------------------------------------------------------------------------
-
 def random_augmentation(bhv: np.ndarray, num_aug: int = 1) -> np.ndarray:
-    """Apply rotate → jitter → scale → shear sequentially, once.
+    """Apply rotate, then jitter, then scale, then shear, once each.
 
-    Parameters
-    ----------
-    bhv:
-        Shape ``(C, T, V, M)``.
-    num_aug:
-        Kept for API compatibility; always produces exactly 1 output (the
-        first element of each transform chain).
+    Args:
+        bhv: One pose sample, shape (C, T, V, M).
+        num_aug: How many copies each transform generates internally. Only the
+            first is kept, so any value produces one output.
 
-    Returns
-    -------
-    np.ndarray
-        Shape ``(C, T, V, M)`` — same as input.
+    Returns:
+        Shape (C, T, V, M), the same as the input.
     """
     bhv = rotate_transform(bhv, num_aug)[0]
     bhv = jitter_transform(bhv, num_aug)[0]
@@ -175,23 +207,25 @@ def dynamic_augmentation(
     labels: np.ndarray,
     ideal_sample_no: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Oversample minority classes up to *ideal_sample_no* using 5 augmentation types.
+    """Oversample minority classes towards ideal_sample_no.
 
-    Parameters
-    ----------
-    data:
-        Shape ``(N, C, T, V, M)``.
-    labels:
-        Shape ``(N,)`` — integer class labels.
-    ideal_sample_no:
-        Target number of samples per class.
+    Classes already at or above the target are truncated to it exactly.
+    Smaller classes are topped up with rotate, jitter, scale, shear and roll
+    copies of every sample they hold. Labels below zero are dropped.
 
-    Returns
-    -------
-    (augmented_data, augmented_labels)
+    Args:
+        data: Pose samples, shape (N, C, T, V, M).
+        labels: Integer class labels, shape (N,).
+        ideal_sample_no: Target number of samples per class.
+
+    Returns:
+        The augmented samples and their labels.
+
+    Note:
+        Undersized classes overshoot the target rather than meeting it, because
+        every sample contributes a whole set of copies: 10 samples aiming at
+        100 yield 110, and 50 yield 150.
     """
-    import pandas as pd  # local to avoid top-level pandas dep in augmentation
-
     aug_data: list[np.ndarray] = []
     aug_labels: list[np.ndarray] = []
 
@@ -231,16 +265,16 @@ def dynamic_augmentation(
 
     final_data = np.concatenate(aug_data)
     final_labels = np.concatenate(aug_labels)
-    print(f"Augmented dataset: {pd.Series(final_labels).value_counts().to_dict()}")
+    values, counts = np.unique(final_labels, return_counts=True)
+    print(f"Augmented dataset: {dict(zip(values.tolist(), counts.tolist()))}")
     return final_data, final_labels
 
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 def _pad_to_length(pose: np.ndarray, new_t: int) -> np.ndarray:
-    """Tile a (C, T, V, M) array along the time axis to reach *new_t* frames."""
+    """Tile or truncate a (C, T, V, M) array along time to exactly new_t frames.
+
+    An empty time axis returns zeros rather than raising.
+    """
     t = pose.shape[1]
     if t == 0:
         return np.zeros((pose.shape[0], new_t, *pose.shape[2:]))

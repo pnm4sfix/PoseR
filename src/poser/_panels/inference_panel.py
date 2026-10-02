@@ -31,6 +31,7 @@ from qtpy.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMessageBox,
+    QToolButton,
     QProgressBar,
     QPushButton,
     QSpinBox,
@@ -41,6 +42,8 @@ from qtpy.QtWidgets import (
 )
 
 from poser.core.session import SessionManager
+from poser.core.exceptions import CheckpointError
+from poser.core.settings import resolve_device
 import torch
 
 # ---------------------------------------------------------------------------
@@ -64,13 +67,175 @@ POSE_MODELS = [
 POSER_PRETRAINED = {"zeb.pt", "fly3.pt", "mouse7.pt", "mouse13.pt"}
 
 
+# Graph layouts are named, but a checkpoint only records its node count, so
+# the layout is recovered from that. Ambiguous counts pick the species this
+# project targets first.
+_LAYOUT_BY_NODE_COUNT = {
+    9: "zebrafish",
+    12: "drosophila",
+    13: "mouse1",
+    17: "coco",
+    18: "mouse2",
+    19: "zebrafishlarvae",
+    23: "zeb60fps",
+    24: "ntu_edge",
+    25: "ntu-rgb+d",
+}
+
+
+OPTION_HELP = {
+    "pretrained_model": (
+        "Pose model",
+        "The YOLO network that finds body parts in each video frame.\n\n"
+        "zeb.pt, fly3.pt, mouse7.pt and mouse13.pt are PoseR's own models, "
+        "downloaded from the project's GitHub release on first use. The "
+        "yolo11*-pose entries are generic COCO human-pose models and will "
+        "produce 17 human keypoints on an animal, which is almost never what "
+        "you want.\n\n"
+        "Sizes run n < s < m < l < x: larger is slower and more accurate.\n\n"
+        "Example: zebrafish footage -> zeb.pt.",
+    ),
+    "max_individuals": (
+        "Max individuals",
+        "The largest number of animals the detector may find in one frame, "
+        "passed to YOLO as max_det.\n\n"
+        "Set it to the number actually in the arena. Setting it higher invites "
+        "spurious detections; lower silently drops animals.\n\n"
+        "Example: one fish in a dish -> 1.",
+    ),
+    "inference_mode": (
+        "Inference mode",
+        "predict treats every frame independently. Faster, and fine when "
+        "there is one animal, because identity never has to be carried "
+        "forward.\n\n"
+        "track links detections between consecutive frames so each animal "
+        "keeps a stable identity. Needed for multiple animals; slower, and it "
+        "must run frames in order.\n\n"
+        "Example: one fish -> predict. Two fish you need to tell apart -> "
+        "track.",
+    ),
+    "batch_size": (
+        "Batch size",
+        "How many frames go through the network at once, in predict mode "
+        "only. track is sequential by nature and ignores this.\n\n"
+        "Higher is faster until the GPU runs out of memory. Lower it if "
+        "inference crashes with an out-of-memory error.\n\n"
+        "Example: 16 is a safe start; try 64 on a large GPU.",
+    ),
+    "image_size": (
+        "Image size",
+        "The square size each frame is resized to before detection, in "
+        "pixels. It must be a multiple of 32.\n\n"
+        "It need not match your video. Larger finds small body parts more "
+        "reliably and costs time; smaller is faster and may miss them. On "
+        "auto, the model's own training size is used.\n\n"
+        "Example: a 210x230 video at imgsz 256 is upscaled slightly, which is "
+        "fine.",
+    ),
+    "zarr_camera": (
+        "Zarr camera axis",
+        "Only relevant for multi-camera zarr arrays, which store every "
+        "camera's view in one array. This picks which camera to run on.\n\n"
+        "Ordinary video files ignore it.\n\n"
+        "Example: a (frames, 4, H, W, 3) array filmed from 4 angles -> 0 for "
+        "the first camera.",
+    ),
+    "checkpoint": (
+        "Decoder checkpoint",
+        "The trained classifier that turns pose into behaviour labels. A .ckpt "
+        "written by training, not a pose model.\n\n"
+        "It must match your data: same number of skeleton nodes and the same "
+        "input channels. Run 'poser model inspect <file>' to see what a "
+        "checkpoint expects before loading it.\n\n"
+        "Example: 19-node zebrafish pose -> a decoder reporting num_nodes 19.",
+    ),
+}
+
+
+def _help_button(key: str) -> QToolButton:
+    """A small ? that explains one option, on hover and on click."""
+    title, body = OPTION_HELP[key]
+    btn = QToolButton()
+    btn.setText("?")
+    btn.setToolTip(body)
+    btn.setAutoRaise(True)
+    btn.setFixedWidth(22)
+    btn.clicked.connect(
+        lambda: QMessageBox.information(btn, title, body)
+    )
+    return btn
+
+
+def _decoder_kwargs(raw_ckpt: dict) -> dict:
+    """Build the ST_GCN_18 constructor arguments for a saved checkpoint.
+
+    Lightning only replays hyper_parameters that were saved, and the released
+    decoders store just "hparams". The weight shapes are authoritative, so the
+    architecture is read back from the state dict instead: A gives the node
+    count, the first graph convolution gives the input channels, and the
+    classifier head gives the class count.
+
+    ST_GCN_18.__init__ indexes most data_cfg keys without a default, so every
+    one it touches is supplied here.
+    """
+    sd = raw_ckpt["state_dict"]
+    hp = raw_ckpt.get("hyper_parameters", {})
+    stored = hp.get("data_cfg", {}) or {}
+    num_nodes = sd["A"].shape[-1]
+    if num_nodes not in _LAYOUT_BY_NODE_COUNT:
+        raise CheckpointError(
+            f"This decoder was trained on a {num_nodes}-node skeleton, and no "
+            f"layout in poser.models.graph defines one. Known node counts: "
+            f"{sorted(_LAYOUT_BY_NODE_COUNT)}. Pick a checkpoint whose node "
+            f"count matches your pose data."
+        )
+
+    data_cfg = {
+        "data_dir": ".",
+        "augment": False,
+        "ideal_sample_no": None,
+        "shift": False,
+        "regress": False,
+        "softmax": False,
+        "transform": None,
+        "labels_to_ignore": [],
+        "label_dict": None,
+        "calc_class_weights": False,
+        "T2": 100,
+        "head": 0,
+        "weighted_random_sampler": False,
+        "binary": False,
+        "binary_class": None,
+        "preprocess_frame": False,
+        "window_size": None,
+    }
+    data_cfg.update(stored)
+
+    return {
+        "in_channels": sd["st_gcn_networks.0.gcn.conv.weight"].shape[1],
+        "num_class": sd["fcn.weight"].shape[0],
+        "graph_cfg": {
+            "layout": _LAYOUT_BY_NODE_COUNT[num_nodes],
+            "strategy": "spatial",
+            # Both key spellings, as above.
+            "center_node": int(
+                hp.get("graph_cfg", {}).get(
+                    "center_node", hp.get("graph_cfg", {}).get("center", 0)
+                )
+            ),
+            **(hp.get("graph_cfg", {}) or {}),
+        },
+        "data_cfg": data_cfg,
+    }
+
+
 def _resolve_model(name: str):
     """Return a YOLO model instance, downloading PoseR releases as needed."""
     from ultralytics import YOLO  # type: ignore
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device()
     if name in POSER_PRETRAINED:
         url = GITHUB_RELEASE_URL + name
-        return YOLO(url)
+        return YOLO(url).to(device)
     return YOLO(name).to(device)
 
 
@@ -229,7 +394,11 @@ class InferencePanel(QWidget):
 
         model_grp = QGroupBox("Pose Model")
         model_lay = QVBoxLayout(model_grp)
-        model_lay.addWidget(QLabel("Pretrained model:"))
+        model_hdr = QHBoxLayout()
+        model_hdr.addWidget(QLabel("Pretrained model:"))
+        model_hdr.addWidget(_help_button("pretrained_model"))
+        model_hdr.addStretch()
+        model_lay.addLayout(model_hdr)
         self._pose_model_combo = QComboBox()
         self._pose_model_combo.addItems(POSE_MODELS)
         self._pose_model_combo.currentTextChanged.connect(self._on_pose_model_selected)
@@ -255,6 +424,7 @@ class InferencePanel(QWidget):
         self._n_inds_spin.setRange(1, 100)
         self._n_inds_spin.setValue(1)
         inds_row.addWidget(self._n_inds_spin)
+        inds_row.addWidget(_help_button("max_individuals"))
         inds_row.addStretch()
         opts_lay.addLayout(inds_row)
 
@@ -265,6 +435,7 @@ class InferencePanel(QWidget):
                                          "track  (sequential / with tracking)"])
         self._infer_mode_combo.currentIndexChanged.connect(self._on_infer_mode_changed)
         mode_row.addWidget(self._infer_mode_combo)
+        mode_row.addWidget(_help_button("inference_mode"))
         opts_lay.addLayout(mode_row)
 
         self._infer_mode_desc = QLabel(
@@ -283,6 +454,7 @@ class InferencePanel(QWidget):
         self._batch_spin.setRange(1, 256)
         self._batch_spin.setValue(16)
         batch_row.addWidget(self._batch_spin)
+        batch_row.addWidget(_help_button("batch_size"))
         batch_row.addStretch()
         opts_lay.addLayout(batch_row)
 
@@ -301,6 +473,7 @@ class InferencePanel(QWidget):
         self._imgsz_auto_label = QLabel("(auto)")
         self._imgsz_auto_label.setStyleSheet("font-size: 10px; color: grey;")
         imgsz_row.addWidget(self._imgsz_auto_label)
+        imgsz_row.addWidget(_help_button("image_size"))
         imgsz_row.addStretch()
         opts_lay.addLayout(imgsz_row)
 
@@ -315,6 +488,7 @@ class InferencePanel(QWidget):
             "(frames, cameras, H, W, C).  Ignored for normal video files."
         )
         cam_row.addWidget(self._zarr_cam_spin)
+        cam_row.addWidget(_help_button("zarr_camera"))
         cam_row.addStretch()
         opts_lay.addLayout(cam_row)
 
@@ -356,9 +530,12 @@ class InferencePanel(QWidget):
         self._ckpt_label.setStyleSheet("font-size: 10px; color: grey;")
         self._ckpt_label.setWordWrap(True)
         ckpt_lay.addWidget(self._ckpt_label)
+        browse_row = QHBoxLayout()
         btn_browse = QPushButton("Browse for checkpoint (.ckpt)…")
         btn_browse.clicked.connect(self._on_browse_checkpoint)
-        ckpt_lay.addWidget(btn_browse)
+        browse_row.addWidget(btn_browse)
+        browse_row.addWidget(_help_button("checkpoint"))
+        ckpt_lay.addLayout(browse_row)
         lay.addWidget(ckpt_grp)
 
         single_grp = QGroupBox("Single File Inference")
@@ -872,13 +1049,26 @@ class InferencePanel(QWidget):
                 )
 
                 # Read hparams from checkpoint
-                dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                dev = resolve_device()
                 raw_ckpt = torch.load(str(ckpt), map_location="cpu", weights_only=False)
                 hp = raw_ckpt.get("hyper_parameters", {})
                 data_cfg   = hp.get("data_cfg", {})
                 T2         = int(data_cfg.get("T2", 100))
-                transform  = data_cfg.get("transform", ["center", "align", "pad"])
-                center_node = int(hp.get("graph_cfg", {}).get("center", 0))
+                # A stored None means "not recorded", not "skip it".
+                # PoseDataset applies no centring, alignment or padding
+                # for None, and the decoder then sees nothing like its
+                # training data and collapses to a single class.
+                transform  = data_cfg.get("transform") or ["center", "align", "pad"]
+                # Released checkpoints name the centre node "center";
+                # files written by "poser model repair" name it
+                # "center_node". Read both: centring a window on the
+                # wrong node is catastrophic, not merely degraded -
+                # measured 0.951 -> 0.000 accuracy on the test bouts.
+                center_node = int(
+                    hp.get("graph_cfg", {}).get(
+                        "center_node", hp.get("graph_cfg", {}).get("center", 0)
+                    )
+                )
                 head_node  = int(data_cfg.get("head", 0))
                 num_class  = int(hp.get("num_class", 2))
                 dropout    = float(hp.get("dropout", 0.5))
@@ -888,7 +1078,15 @@ class InferencePanel(QWidget):
                     learning_rate=1e-4, batch_size=64, dropout=dropout
                 )
                 model = ST_GCN_18.load_from_checkpoint(
-                    str(ckpt), map_location=dev, hparams=_hparams
+                    str(ckpt),
+                    map_location=dev,
+                    hparams=_hparams,
+                    # torch 2.6 defaults weights_only=True, which rejects the
+                    # pickled poser._loader.HyperParams inside these released
+                    # checkpoints. The raw torch.load calls above already
+                    # opt out the same way.
+                    weights_only=False,
+                    **_decoder_kwargs(raw_ckpt),
                 )
                 model.eval()
                 model.to(dev)
@@ -974,13 +1172,22 @@ class InferencePanel(QWidget):
             from torch.utils.data import DataLoader
 
             try:
-                dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+                dev = resolve_device()
                 raw_ckpt = torch.load(str(ckpt), map_location="cpu", weights_only=False)
                 hp = raw_ckpt.get("hyper_parameters", {})
                 data_cfg    = hp.get("data_cfg", {})
                 T2          = int(data_cfg.get("T2", 100))
-                transform   = data_cfg.get("transform", ["center", "align", "pad"])
-                center_node = int(hp.get("graph_cfg", {}).get("center", 0))
+                transform   = data_cfg.get("transform") or ["center", "align", "pad"]
+                # Released checkpoints name the centre node "center";
+                # files written by "poser model repair" name it
+                # "center_node". Read both: centring a window on the
+                # wrong node is catastrophic, not merely degraded -
+                # measured 0.951 -> 0.000 accuracy on the test bouts.
+                center_node = int(
+                    hp.get("graph_cfg", {}).get(
+                        "center_node", hp.get("graph_cfg", {}).get("center", 0)
+                    )
+                )
                 head_node   = int(data_cfg.get("head", 0))
                 num_class   = int(hp.get("num_class", 2))
                 dropout     = float(hp.get("dropout", 0.5))
@@ -990,7 +1197,15 @@ class InferencePanel(QWidget):
                     learning_rate=1e-4, batch_size=64, dropout=dropout
                 )
                 model = ST_GCN_18.load_from_checkpoint(
-                    str(ckpt), map_location=dev, hparams=_hparams
+                    str(ckpt),
+                    map_location=dev,
+                    hparams=_hparams,
+                    # torch 2.6 defaults weights_only=True, which rejects the
+                    # pickled poser._loader.HyperParams inside these released
+                    # checkpoints. The raw torch.load calls above already
+                    # opt out the same way.
+                    weights_only=False,
+                    **_decoder_kwargs(raw_ckpt),
                 )
                 model.eval()
                 model.to(dev)
