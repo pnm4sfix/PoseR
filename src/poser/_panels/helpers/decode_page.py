@@ -132,7 +132,10 @@ class DecodePage(QWidget):
         """
         form = self._inference.input_load(pose_path, coords_data)
         n_frames = self._inference.n_frames
-        yield f"Loaded pose as {form}, {n_frames:,} frames. Predicting …"
+        yield f"Loaded pose as {form}, {n_frames:,} frames."
+        for message in self._inference.input_adapt():
+            yield f"Warning: {message}"
+        yield "Predicting …"
 
         batches = []
         n_done = 0

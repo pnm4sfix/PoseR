@@ -20,6 +20,11 @@ from .preprocessing import mirror_y
 
 log = logging.getLogger(__name__)
 
+# Further than this from a decoder's training data, in the spreads its input
+# normalisation learned, and a channel is unreadable to it. Measured on the test
+# recording: DeepLabCut pose 0 to 1 spreads on every channel, YOLO confidence 120.
+_UNREADABLE_SDS = 10
+
 
 def decoder_settings(checkpoint: dict) -> dict:
     """Read a decoder's preprocessing settings, filling in what it did not store.
@@ -196,6 +201,69 @@ class Inference:
         """Frames in the loaded pose, for progress."""
         return self._pose.shape[1]
 
+    def input_adapt(self) -> list[str]:
+        """Compare the loaded pose with the decoder's training data, fixing confidence.
+
+        The decoder's input normalisation stores the mean and spread of every
+        channel it was trained on. A channel more than _UNREADABLE_SDS spreads
+        away is something it cannot read: YOLO confidences near 0.85 sat 120
+        spreads from the 1.00 a DeepLabCut-trained decoder saw, and decoded as
+        one class throughout (accuracy 0.000, against 0.935 once replaced).
+
+        Confidence that far off is replaced by the decoder's training value,
+        which tells it "detected" in the terms it learned; points never
+        detected keep 0. Body-point positions that far off cannot be repaired
+        here, so they are only reported.
+
+        Returns:
+            One message per channel that was off, for the panel to show. Empty
+            when the pose looks like the decoder's training data.
+
+        Raises:
+            RuntimeError: If model_load or input_load has not been called.
+        """
+        if self._model is None or not hasattr(self, "_pose"):
+            raise RuntimeError("Call model_load and input_load first.")
+        norm = self._model.data_bn
+        if not isinstance(norm, torch.nn.BatchNorm1d):
+            return []  # built without input normalisation: nothing to compare
+
+        n_channels = self._pose.shape[0]
+        # The decoder normalises its input laid out as (body point, channel).
+        trained_mean = norm.running_mean.view(-1, n_channels).cpu().numpy()
+        trained_std = norm.running_var.sqrt().view(-1, n_channels).cpu().numpy()
+        windows = self._windows()
+        picks = np.linspace(0, len(windows) - 1, min(len(windows), 256)).astype(int)
+        sample = np.stack([windows[i][0].numpy() for i in picks])  # (n, C, T, V, M)
+        seen_mean = sample.mean(axis=(0, 2, 4)).T  # (V, C)
+        # A floor on the spread: the centre node sits at exactly 0 after centring.
+        spreads_away = np.abs(seen_mean - trained_mean) / np.maximum(trained_std, 1e-3)
+        distance = np.median(spreads_away, axis=0)  # one value per channel
+
+        messages = []
+        # x and y are compared after the fish is rotated head-up, so a problem
+        # in either is reported as positions, not by an axis the user never sees.
+        positions = distance[:2].max()
+        if positions > _UNREADABLE_SDS:
+            messages.append(
+                f"Body-point positions sit {positions:.0f} spreads from what "
+                f"{self._checkpoint.name} was trained on, so its labels may be "
+                "wrong. Check it was trained on this skeleton and camera setup."
+            )
+        if n_channels > 2 and distance[2] > _UNREADABLE_SDS:
+            trained = trained_mean[:, 2]
+            detected = self._pose[2] > 0
+            self._pose[2] = np.where(detected, trained[None, :, None], 0)
+            messages.append(
+                f"Confidence values sit {distance[2]:.0f} spreads from what "
+                f"{self._checkpoint.name} was trained on (mean "
+                f"{seen_mean[:, 2].mean():.2f} against {trained.mean():.2f}), so "
+                f"they were set to {trained.mean():.2f}."
+            )
+        for message in messages:
+            log.warning(message)
+        return messages
+
     def iter_predictions(self, batch_size: int = 64) -> Iterator[np.ndarray]:
         """Yield predicted labels batch by batch, in frame order.
 
@@ -214,25 +282,10 @@ class Inference:
         """
         if self._model is None or not hasattr(self, "_pose"):
             raise RuntimeError("Call model_load and input_load first.")
-        n_channels, n_frames, n_nodes, _ = self._pose.shape
+        n_channels, _, n_nodes, _ = self._pose.shape
         self._check_pose_fits_decoder(n_channels, n_nodes)
 
-        settings = self._settings
-        pose = mirror_y(self._pose) if settings["mirror_y"] else self._pose
-        windows = PoseDataset(
-            data=pose,
-            labels=np.zeros(n_frames, dtype=np.int64),  # unused, but required
-            preprocess_frame=True,  # one window per frame, centred on it
-            window_size=settings["T2"],
-            T=settings["T2"],
-            transform=settings["transform"],
-            center_node=settings["center_node"],
-            head_node=settings["head_node"],
-            num_class=settings["num_class"],
-            C=n_channels,
-            augmentation=None,
-        )
-        loader = DataLoader(windows, batch_size=batch_size, shuffle=False)
+        loader = DataLoader(self._windows(), batch_size=batch_size, shuffle=False)
         for batch, _ in loader:
             with torch.no_grad():
                 scores = self._model(batch.to(self._device))
@@ -266,6 +319,24 @@ class Inference:
             writer.writerow(["frame", "predicted_label"])
             writer.writerows(enumerate(predictions.tolist()))
         return npy_path
+
+    def _windows(self) -> PoseDataset:
+        """One window per frame, prepared exactly as the decoder's training data."""
+        settings = self._settings
+        pose = mirror_y(self._pose) if settings["mirror_y"] else self._pose
+        return PoseDataset(
+            data=pose,
+            labels=np.zeros(pose.shape[1], dtype=np.int64),  # unused, but required
+            preprocess_frame=True,  # one window per frame, centred on it
+            window_size=settings["T2"],
+            T=settings["T2"],
+            transform=settings["transform"],
+            center_node=settings["center_node"],
+            head_node=settings["head_node"],
+            num_class=settings["num_class"],
+            C=pose.shape[0],
+            augmentation=None,
+        )
 
     def _check_pose_fits_decoder(self, n_channels: int, n_nodes: int) -> None:
         """Fail with a plain message, not a torch matrix-size error, on a mismatch."""
