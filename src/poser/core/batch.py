@@ -10,9 +10,12 @@ from typing import Callable, List, Optional, Tuple
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .behaviour_decode import decode_behaviours
-from .pose_estimation import estimate_poses_from_video
+from .io import save_coords_to_h5
+from .pose_estimation import PoseEstimator
 from .schemas.batch import BatchMode, BatchResult
+from .schemas.pose_estimation import InferenceMode
 from .schemas.training import TrainingConfig
+from .settings import resolve_device
 
 log = logging.getLogger(__name__)
 
@@ -132,9 +135,19 @@ class BatchRunner:
         job = self._job
         try:
             if job.mode is BatchMode.POSE_ESTIMATION:
-                output = estimate_poses_from_video(
-                    video_path, job.checkpoint, job.n_individuals
+                estimator = PoseEstimator()
+                # Open the video first, so a missing one fails before a model loads.
+                estimator.input_load(video_path)
+                estimator.model_load(
+                    job.checkpoint or "yolo11n-pose.pt", resolve_device()
                 )
+                records = list(
+                    estimator.iter_keypoints(
+                        InferenceMode.TRACK, max_individuals=job.n_individuals
+                    )
+                )
+                coords = estimator.coords_from_keypoints(records)
+                output = save_coords_to_h5(coords, video_path)
             else:
                 output = decode_behaviours(
                     pose_path, job.checkpoint, job.config, job.output_dir

@@ -306,6 +306,9 @@ def save_to_h5(
 def save_coords_to_h5(coords_data: Dict, video_file: PathLike) -> str:
     """Write coords_data to a PoseR-native coords .h5 file.
 
+    An existing file of that name is replaced, so pose estimation can be run
+    again on the same video.
+
     Args:
         coords_data: {individual: {"x", "y", "ci"}}, each (V, T).
         video_file: Names the output, which is <video_file>_poser_coords.h5.
@@ -314,7 +317,7 @@ def save_coords_to_h5(coords_data: Dict, video_file: PathLike) -> str:
         Path to the written file, relative if video_file was relative.
     """
     filename = str(video_file) + "_poser_coords.h5"
-    with tb.open_file(filename, mode="a", title="coords") as f:
+    with tb.open_file(filename, mode="w", title="coords") as f:
         for ind, data in coords_data.items():
             ind_group = f.create_group("/", str(ind), f"Individual{ind}")
             coords_array = np.array([data["x"], data["y"], data["ci"]])
