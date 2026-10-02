@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import csv
 import logging
 from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from ..models.registry import LAYOUT_BY_NODE_COUNT, describe_checkpoint
 from ..models.st_gcn_aaai18_pylightning_3block import ST_GCN_18
+from .dataset import PoseDataset
 from .exceptions import CheckpointError, PoseFormatError
 from .io import convert_dlc_to_ctvm, read_dlc, read_poser_coords, read_sleap
+from .preprocessing import mirror_y
 
 log = logging.getLogger(__name__)
 
@@ -27,12 +31,13 @@ def decoder_settings(checkpoint: dict) -> dict:
         T2           data_cfg["T2"], else 100
         head_node    data_cfg["head"], else 0
         num_class    hyper_parameters["num_class"], else from fcn.weight's shape
+        mirror_y     False if data_cfg["preprocess_frame"] is true, else True
 
     Args:
         checkpoint: A checkpoint dict, as torch.load returns it.
 
     Returns:
-        Keys transform, center_node, T2, head_node and num_class.
+        Keys transform, center_node, T2, head_node, num_class and mirror_y.
     """
     hp = checkpoint.get("hyper_parameters", {}) or {}
     data_cfg = hp.get("data_cfg", {}) or {}
@@ -51,6 +56,12 @@ def decoder_settings(checkpoint: dict) -> dict:
         "num_class": int(
             hp.get("num_class") or checkpoint["state_dict"]["fcn.weight"].shape[0]
         ),
+        # Decoders trained on bouts saw them with y flipped, because bout
+        # building flips image y, which points down (classification_data_to_bouts,
+        # preprocess_bouts). Decoders trained per frame on *_pose.npy saw raw
+        # image coordinates. Skipping the flip mirrored every fish, so left turns
+        # read as right: accuracy 0.081, against 0.935 with it.
+        "mirror_y": not data_cfg.get("preprocess_frame", False),
     }
 
 
@@ -60,6 +71,7 @@ class Inference:
     def __init__(self) -> None:
         self._model = None
         self._settings: dict  # from decoder_settings
+        self._architecture: dict  # from describe_checkpoint
         self._checkpoint: Path
         self._device: torch.device
         self._pose: np.ndarray # (C, T, V, M)
@@ -129,6 +141,7 @@ class Inference:
 
         self._model = model.eval().to(device)
         self._settings = settings
+        self._architecture = architecture
         self._checkpoint = path
         self._device = device
         return settings
@@ -178,27 +191,97 @@ class Inference:
         self._pose_path = pose_path
         return form
 
-    def iter_predictions(self) -> Iterator[np.ndarray]:
+    @property
+    def n_frames(self) -> int:
+        """Frames in the loaded pose, for progress."""
+        return self._pose.shape[1]
+
+    def iter_predictions(self, batch_size: int = 64) -> Iterator[np.ndarray]:
         """Yield predicted labels batch by batch, in frame order.
 
         Each frame is labelled from the T2-frame window centred on it,
         preprocessed as in training. Concatenated, the batches give one label
         per frame, and their running length is the progress.
 
+        Args:
+            batch_size: Windows per forward pass. Lower it if the GPU runs out
+                of memory; it does not change the labels.
+
         Raises:
             RuntimeError: If model_load or input_load has not been called.
+            ValueError: If the pose has a different number of body points or
+                channels from the decoder's training data.
         """
-        raise NotImplementedError
+        if self._model is None or not hasattr(self, "_pose"):
+            raise RuntimeError("Call model_load and input_load first.")
+        n_channels, n_frames, n_nodes, _ = self._pose.shape
+        self._check_pose_fits_decoder(n_channels, n_nodes)
+
+        settings = self._settings
+        pose = mirror_y(self._pose) if settings["mirror_y"] else self._pose
+        windows = PoseDataset(
+            data=pose,
+            labels=np.zeros(n_frames, dtype=np.int64),  # unused, but required
+            preprocess_frame=True,  # one window per frame, centred on it
+            window_size=settings["T2"],
+            T=settings["T2"],
+            transform=settings["transform"],
+            center_node=settings["center_node"],
+            head_node=settings["head_node"],
+            num_class=settings["num_class"],
+            C=n_channels,
+            augmentation=None,
+        )
+        loader = DataLoader(windows, batch_size=batch_size, shuffle=False)
+        for batch, _ in loader:
+            with torch.no_grad():
+                scores = self._model(batch.to(self._device))
+            yield scores.argmax(dim=-1).cpu().numpy()
 
     def predictions_save(self, predictions: np.ndarray) -> Path:
         """Write <stem>_predictions.npy and .csv beside the pose file (FR-B4).
 
-        The .csv has columns frame,predicted_label.
+        The .csv has columns frame,predicted_label. A *_pose.npy file loses its
+        "_pose", so rec_pose.npy gives rec_predictions.npy.
 
         Returns:
             Path to the .npy file.
+
+        Raises:
+            ValueError: If the pose came from memory, with no file to save beside.
         """
-        raise NotImplementedError
+        if self._pose_path is None:
+            raise ValueError(
+                "This pose came from the Data panel's memory, so there is no pose "
+                "file to save the predictions beside."
+            )
+        stem = self._pose_path.stem
+        if self._pose_path.name.endswith("_pose.npy"):
+            stem = stem[: -len("_pose")]
+        npy_path = self._pose_path.parent / f"{stem}_predictions.npy"
+        np.save(npy_path, predictions)
+
+        with open(npy_path.with_suffix(".csv"), "w", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(["frame", "predicted_label"])
+            writer.writerows(enumerate(predictions.tolist()))
+        return npy_path
+
+    def _check_pose_fits_decoder(self, n_channels: int, n_nodes: int) -> None:
+        """Fail with a plain message, not a torch matrix-size error, on a mismatch."""
+        expected_nodes = self._architecture["num_nodes"]
+        expected_channels = self._architecture["in_channels"]
+        if n_nodes != expected_nodes:
+            raise ValueError(
+                f"The pose has {n_nodes} body points, but {self._checkpoint.name} "
+                f"was trained on {expected_nodes}. Pick a decoder trained on this "
+                "skeleton."
+            )
+        if n_channels != expected_channels:
+            raise ValueError(
+                f"The pose has {n_channels} channels per body point, but "
+                f"{self._checkpoint.name} expects {expected_channels}."
+            )
 
     @staticmethod
     def _read_pose_file(path: Path) -> tuple[np.ndarray, str]:

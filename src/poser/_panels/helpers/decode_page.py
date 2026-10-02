@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 import traceback
+from collections.abc import Generator
 from pathlib import Path
 
-from napari.qt.threading import FunctionWorker, thread_worker
+import numpy as np
+from napari.qt.threading import FunctionWorker, GeneratorWorker, thread_worker
 from qtpy.QtCore import Signal
 from qtpy.QtGui import QFontDatabase
 from qtpy.QtWidgets import (
@@ -39,7 +41,8 @@ class DecodePage(QWidget):
         self._session = session
         self._inference = Inference()
         self._checkpoint: Path | None = None
-        self._worker: FunctionWorker | None = None  # the job running now, if any
+        # The job running now, if any.
+        self._worker: FunctionWorker | GeneratorWorker | None = None
         self._build_ui()
         self._connect()
 
@@ -114,17 +117,54 @@ class DecodePage(QWidget):
         if entry is None:
             self._status.append("No active file. Activate one in the Data panel first.")
             return
-        worker = thread_worker(self._inference.input_load)(
-            entry.pose_path, entry.coords_data
-        )
-        worker.returned.connect(self._on_pose_loaded)
+        worker = thread_worker(self._predict)(entry.pose_path, entry.coords_data)
+        worker.yielded.connect(self._on_worker_yielded)
+        worker.returned.connect(self._on_predictions_done)
         self._start(worker)
 
-    def _on_pose_loaded(self, form: str) -> None:
-        self._status.append(f"Loaded pose as {form}.")
-        self._status.append("Predicting is not wired up yet.")
+    def _predict(
+        self, pose_path: str, coords_data: dict
+    ) -> Generator[int | str, None, np.ndarray]:
+        """Run in the worker thread, so it reads and writes no widgets.
 
-    def _start(self, worker: FunctionWorker) -> None:
+        Yields status lines and the progress as a percentage, and returns the
+        predicted label of every frame.
+        """
+        form = self._inference.input_load(pose_path, coords_data)
+        n_frames = self._inference.n_frames
+        yield f"Loaded pose as {form}, {n_frames:,} frames. Predicting …"
+
+        batches = []
+        n_done = 0
+        for labels in self._inference.iter_predictions():
+            batches.append(labels)
+            n_done += len(labels)
+            yield int(100 * n_done / max(n_frames, 1))
+        predictions = np.concatenate(batches)
+
+        try:
+            saved = self._inference.predictions_save(predictions)
+            yield f"Saved {saved.name} and {saved.with_suffix('.csv').name}."
+        except ValueError as exc:  # the pose came from memory, with no file
+            yield f"Not saved: {exc}"
+        return predictions
+
+    def _on_worker_yielded(self, item: int | str) -> None:
+        if isinstance(item, str):
+            self._status.append(item)
+            return
+        self._progress.setRange(0, 100)  # from the "busy" pattern to real progress
+        self._progress.setValue(item)
+
+    def _on_predictions_done(self, predictions: np.ndarray) -> None:
+        labels, counts = np.unique(predictions, return_counts=True)
+        summary = ", ".join(
+            f"class {label}: {count:,}" for label, count in zip(labels, counts)
+        )
+        self._status.append(f"Done: {len(predictions):,} frames. {summary}.")
+        self.predictions_ready.emit(predictions, self._checkpoint)
+
+    def _start(self, worker: FunctionWorker | GeneratorWorker) -> None:
         """Run a background job, with the buttons off until it ends either way."""
         self._set_busy(True)
         worker.errored.connect(self._on_worker_errored)
