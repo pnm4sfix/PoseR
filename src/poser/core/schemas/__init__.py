@@ -11,6 +11,7 @@ modules can be typed against it without importing upward (STYLEGUIDE 1.1).
 from __future__ import annotations
 
 from .batch import BatchMode, BatchResult
+from .pose_estimation import FrameKeypoints, InferenceMode
 from .training import (
     AugmentationConfig,
     BehaviourSchema,
@@ -27,6 +28,8 @@ __all__ = [
     "BatchResult",
     "BehaviourSchema",
     "DataConfig",
+    "FrameKeypoints",
+    "InferenceMode",
     "ModelConfig",
     "OptimiserConfig",
     "TrainerConfig",
