@@ -2,7 +2,7 @@
 from poser._panels.data_panel import DataPanel
 from poser._panels.annotation_panel import AnnotationPanel
 from poser._panels.analysis_panel import AnalysisPanel
-from poser._panels.inference_panel import InferencePanel
+from poser._panels.inference_panel_2 import InferencePanel
 from poser._panels.train_panel import TrainPanel
 from poser._panels.ethogram_panel import EthogramPanel
 
