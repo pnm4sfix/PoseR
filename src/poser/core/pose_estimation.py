@@ -23,14 +23,15 @@ from .schemas.pose_estimation import FrameKeypoints, InferenceMode
 log = logging.getLogger(__name__)
 
 GITHUB_RELEASE_URL = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/"
-POSER_PRETRAINED = {"zeb.pt", "fly3.pt", "mouse7.pt", "mouse13.pt"}
-YOLO_PRETRAINED = {
+# Tuples, not sets: the Inference panel lists them in this order.
+POSER_PRETRAINED = ("zeb.pt", "fly3.pt", "mouse7.pt", "mouse13.pt")
+YOLO_PRETRAINED = (
     "yolo11n-pose.pt",
     "yolo11s-pose.pt",
     "yolo11m-pose.pt",
     "yolo11l-pose.pt",
     "yolo11x-pose.pt",
-}
+)
 
 
 class PoseEstimator:
@@ -64,7 +65,7 @@ class PoseEstimator:
         else:
             raise FileNotFoundError(
                 f"Pose model not found: {path}. Pick a .pt file or one of "
-                f"{sorted(POSER_PRETRAINED | YOLO_PRETRAINED)}."
+                f"{[*POSER_PRETRAINED, *YOLO_PRETRAINED]}."
             )
 
         # lazy: test_batch.py pins that the decode path never imports ultralytics
@@ -72,7 +73,7 @@ class PoseEstimator:
 
         self._model = YOLO(source).to(device)
 
-    def input_load(self, path: str | Path, camera: int = 0) -> None:
+    def input_load(self, path: str | Path, camera: int = 0) -> int:
         """Open a video file or zarr array without reading its frames.
 
         Frames are read later, one at a time, by iter_frames, so memory use
@@ -82,6 +83,10 @@ class PoseEstimator:
             path: A video file, or a zarr array store shaped (frames, H, W),
                 (frames, H, W, C) or (frames, cameras, H, W, C).
             camera: Which camera of a 5-D zarr array to use. Ignored otherwise.
+
+        Returns:
+            The number of frames, for progress. For a video file it is OpenCV's
+            count, which some formats only estimate.
 
         Raises:
             FileNotFoundError: If path does not exist.
@@ -118,6 +123,7 @@ class PoseEstimator:
         self._source = source
         self._camera = camera
         self._n_frames = n_frames
+        return n_frames
 
     # TODO: probably would be a good idea made a base iterator for this thing but not for now
     def iter_frames(self) -> Iterator[np.ndarray]:

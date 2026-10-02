@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 
 import numpy as np
 import torch
+
+from ..models.registry import LAYOUT_BY_NODE_COUNT, describe_checkpoint
+from ..models.st_gcn_aaai18_pylightning_3block import ST_GCN_18
+from .exceptions import CheckpointError, PoseFormatError
+from .io import convert_dlc_to_ctvm, read_dlc, read_poser_coords, read_sleap
+
+log = logging.getLogger(__name__)
 
 
 def decoder_settings(checkpoint: dict) -> dict:
@@ -26,7 +34,24 @@ def decoder_settings(checkpoint: dict) -> dict:
     Returns:
         Keys transform, center_node, T2, head_node and num_class.
     """
-    raise NotImplementedError
+    hp = checkpoint.get("hyper_parameters", {}) or {}
+    data_cfg = hp.get("data_cfg", {}) or {}
+    graph_cfg = hp.get("graph_cfg", {}) or {}
+    return {
+        # A stored None means "not recorded", not "skip". Skipping leaves the
+        # decoder with data unlike its training data, and every frame comes out
+        # as one class.
+        "transform": data_cfg.get("transform") or ["center", "align", "pad"],
+        # Released checkpoints name it "center", `poser model repair` writes
+        # "center_node". Centring on the wrong node took accuracy from 0.951 to
+        # 0.000 on the test bouts.
+        "center_node": int(graph_cfg.get("center_node", graph_cfg.get("center", 0))),
+        "T2": int(data_cfg.get("T2", 100)),
+        "head_node": int(data_cfg.get("head", 0)),
+        "num_class": int(
+            hp.get("num_class") or checkpoint["state_dict"]["fcn.weight"].shape[0]
+        ),
+    }
 
 
 class Inference:
@@ -36,30 +61,81 @@ class Inference:
         self._model = None
         self._settings: dict  # from decoder_settings
         self._checkpoint: Path
+        self._device: torch.device
         self._pose: np.ndarray # (C, T, V, M)
         self._pose_path: Path
 
-    def model_load(self, path: Path, device: torch.device) -> None:
+    def model_load(self, path: Path, device: torch.device) -> dict:
         """Load an ST-GCN decoder checkpoint onto device.
 
         The architecture is read from the weights, via
         models.registry.describe_checkpoint, not from stored metadata: four of
-        the eight published checkpoints saved none (FR-B7).
+        the eight published checkpoints saved none (FR-B7). A checkpoint with no
+        stored data_cfg still loads, with a warning, because its preprocessing
+        falls back to defaults that may not match its training.
 
         Args:
             path: A .ckpt file written by training.
             device: Where to run, normally core.settings.resolve_device().
+
+        Returns:
+            The decoder's preprocessing settings, from decoder_settings, for the
+            panel to show.
 
         Raises:
             FileNotFoundError: If path does not exist.
             CheckpointError: If the checkpoint cannot be rebuilt, for example
                 because it pickles a WindowsPath (FR-B9).
         """
-        raise NotImplementedError
+        path = Path(path)
+        if not path.exists():
+            raise FileNotFoundError(f"Decoder checkpoint not found: {path}")
+
+        try:
+            checkpoint = torch.load(str(path), map_location="cpu", weights_only=False)
+        except NotImplementedError as exc:
+            raise CheckpointError(
+                f"{path.name} was saved on Windows and stores a Windows file path, "
+                "which cannot be loaded on this system."
+            ) from exc
+
+        architecture = describe_checkpoint(checkpoint)
+        if architecture["layout"] is None:
+            raise CheckpointError(
+                f"{path.name} was trained on a {architecture['num_nodes']}-node "
+                "skeleton, and no layout in poser.models.graph defines one. Known "
+                f"node counts: {sorted(LAYOUT_BY_NODE_COUNT)}."
+            )
+
+        hp = checkpoint.get("hyper_parameters", {}) or {}
+        if "data_cfg" not in hp:
+            log.warning(
+                "%s stores no data_cfg, so its preprocessing falls back to defaults "
+                "and its labels may be wrong. Run 'poser model repair' to embed "
+                "the settings it was trained with.",
+                path.name,
+            )
+        settings = decoder_settings(checkpoint)
+
+        model = ST_GCN_18.load_from_checkpoint(
+            str(path),
+            map_location=device,
+            weights_only=False,
+            # The network's shape, read from the weights (FR-B7).
+            in_channels=architecture["in_channels"],
+            num_class=architecture["num_class"],
+            graph_cfg={"layout": architecture["layout"]},
+        )
+
+        self._model = model.eval().to(device)
+        self._settings = settings
+        self._checkpoint = path
+        self._device = device
+        return settings
 
     def input_load(
         self, path: Path | None = None, coords_data: dict | None = None
-    ) -> None:
+    ) -> str:
         """Load pose data as a (C, T, V, M) array.
 
         Tried in order (FR-B2): *_pose.npy, DeepLabCut .h5/.csv, SLEAP .h5,
@@ -70,10 +146,37 @@ class Inference:
             path: A pose file, or None to use coords_data alone.
             coords_data: {individual: {"x", "y", "ci"}}, each (V, T).
 
+        Returns:
+            Which form was used, for the panel to report.
+
         Raises:
             PoseFormatError: If no form gives a pose array.
         """
-        raise NotImplementedError
+        pose_path = Path(path) if path else None
+        pose, form, file_error = None, "", None
+
+        if pose_path is not None and pose_path.exists():
+            try:
+                pose, form = self._read_pose_file(pose_path)
+            except PoseFormatError as exc:
+                file_error = exc
+
+        if pose is None and coords_data:
+            pose = self._coords_to_ctvm(coords_data)
+            form = "coords loaded by the Data panel"
+
+        if pose is None:
+            raise PoseFormatError(
+                f"Could not build a pose array. Pose path: {path or '(none)'}\n"
+                "Supported inputs: *_pose.npy, DeepLabCut .h5 / .csv, SLEAP .h5, "
+                "PoseR-native coords .h5, or a file loaded in the Data panel."
+            ) from file_error
+
+        if pose.ndim == 3:  # (C, T, V) with no individual axis
+            pose = pose[..., np.newaxis]
+        self._pose = pose
+        self._pose_path = pose_path
+        return form
 
     def iter_predictions(self) -> Iterator[np.ndarray]:
         """Yield predicted labels batch by batch, in frame order.
@@ -96,3 +199,56 @@ class Inference:
             Path to the .npy file.
         """
         raise NotImplementedError
+
+    @staticmethod
+    def _read_pose_file(path: Path) -> tuple[np.ndarray, str]:
+        """Read a pose file as (C, T, V, M) or (C, T, V), with the form it was.
+
+        Raises:
+            PoseFormatError: If no reader recognises the file. The message
+                names what each reader rejected it for.
+        """
+        if path.name.endswith("_pose.npy"):
+            return np.load(path).astype(np.float32), "*_pose.npy"
+
+        to_ctvm = Inference._coords_to_ctvm
+        readers = (
+            ("DeepLabCut", lambda: convert_dlc_to_ctvm(path).astype(np.float32)),
+            ("DeepLabCut", lambda: to_ctvm(read_dlc(path))),
+            ("SLEAP", lambda: to_ctvm(read_sleap(path))),
+            ("PoseR-native", lambda: to_ctvm(read_poser_coords(path))),
+        )
+        failures = []
+        for form, read in readers:
+            try:
+                return read(), form
+            except Exception as exc:
+                # Format probe: any parse failure just means "not this format".
+                failures.append(f"{form}: {type(exc).__name__}: {exc}")
+        raise PoseFormatError(
+            f"{path.name} is not a readable pose file. Tried:\n  "
+            + "\n  ".join(failures)
+        )
+
+    @staticmethod
+    def _coords_to_ctvm(coords_data: dict) -> np.ndarray:
+        """Convert {individual: {"x", "y", "ci"}} into a (C=3, T, V, M) float32 array.
+
+        Values may be DataFrames or arrays, each (V, T); a 1-D array is a single
+        node. NaN becomes 0.
+        """
+        individuals = list(coords_data)
+        first = np.array(coords_data[individuals[0]]["x"], dtype=np.float32)
+        if first.ndim == 1:
+            first = first[np.newaxis, :]
+        n_nodes, n_frames = first.shape
+
+        ctvm = np.zeros((3, n_frames, n_nodes, len(individuals)), dtype=np.float32)
+        for m, individual in enumerate(individuals):
+            for c, key in enumerate(("x", "y", "ci")):
+                values = np.array(coords_data[individual][key], dtype=np.float32)
+                values = np.nan_to_num(values)
+                if values.ndim == 1:
+                    values = values[np.newaxis, :]
+                ctvm[c, :, :, m] = values.T  # (V, T) -> (T, V)
+        return ctvm
