@@ -197,46 +197,83 @@ class PoseEstimator:
                 # persist=False on a video's first frame starts a fresh tracker,
                 # so IDs carry from frame to frame but never between videos.
                 results = self._model.track(frame, persist=index > 0, **options)
-                yield _keypoints_from_result(results[0], index)
+                yield self._keypoints_from_result(results[0], index)
         
         if mode == InferenceMode.PREDICT:
             start = 0
             while batch := list(islice(frames, batch_size)):
                 for offset, result in enumerate(self._model.predict(batch, **options)):
-                    yield _keypoints_from_result(result, start + offset)
+                    yield self._keypoints_from_result(result, start + offset)
                 start += len(batch)
 
+    @staticmethod
+    def coords_from_keypoints(
+        records: list[FrameKeypoints],
+    ) -> dict[str, dict[str, np.ndarray]]:
+        """Gather per-frame keypoints into whole-video coords, one per animal.
 
-def _keypoints_from_result(result, frame: int) -> FrameKeypoints:
-    """Convert one frame's YOLO result into numpy keypoints.
+        Individuals are named ind1, ind2, … in the order they first appear,
+        since raw IDs count from 0 in predict mode and from 1 in track mode.
+        Frames where an animal was not found stay NaN.
 
-    Args:
-        result: One ultralytics Results object, covering a single frame.
-        frame: Index of that frame in the video. YOLO cannot know it, because
-            it is handed bare arrays.
-    """
-    # Using .cpu() for avoiding crashing program on gpu
-    result = result.cpu().numpy()
-    kp = result.keypoints
-    if kp is None:
-        return FrameKeypoints(
-            frame=frame,
-            xy=np.empty((0, 0, 2), dtype=np.float32),
-            conf=np.empty((0, 0), dtype=np.float32),
-            ids=np.empty(0, dtype=np.int64),
-        )
-    xy = kp.xy.astype(np.float32)
-    # A model trained without per-point visibility gives no confidence.
-    if kp.conf is not None:
-        conf = kp.conf.astype(np.float32)
-    else:
-        conf = np.ones(xy.shape[:2], dtype=np.float32)
-    # Only track mode assigns IDs, and not on every frame.
-    if result.boxes is not None and result.boxes.id is not None:
-        ids = result.boxes.id.astype(np.int64)
-    else:
-        ids = np.arange(xy.shape[0], dtype=np.int64)
-    return FrameKeypoints(frame=frame, xy=xy, conf=conf, ids=ids)
+        Args:
+            records: One per video frame, in frame order, as iter_keypoints
+                yields them. Their count sets the length, so frames with no
+                detection at the end of the video still count.
+
+        Returns:
+            {individual: {"x", "y", "ci"}}, each (V, T): the PoseR-native
+            coords that save_coords_to_h5 writes and read_coords returns.
+        """
+        n_frames = len(records)
+        n_nodes = max((record.xy.shape[1] for record in records), default=0)
+        coords: dict[str, dict[str, np.ndarray]] = {}
+        names: dict[int, str] = {}  # raw ID -> ind1, ind2, …
+        for record in records:
+            for p, raw_id in enumerate(record.ids.tolist()):
+                if raw_id not in names:
+                    names[raw_id] = f"ind{len(names) + 1}"
+                    coords[names[raw_id]] = {
+                        key: np.full((n_nodes, n_frames), np.nan, dtype=np.float32)
+                        for key in ("x", "y", "ci")
+                    }
+                animal = coords[names[raw_id]]
+                animal["x"][:, record.frame] = record.xy[p, :, 0]
+                animal["y"][:, record.frame] = record.xy[p, :, 1]
+                animal["ci"][:, record.frame] = record.conf[p]
+        return coords
+
+    @staticmethod
+    def _keypoints_from_result(result, frame: int) -> FrameKeypoints:
+        """Convert one frame's YOLO result into numpy keypoints.
+
+        Args:
+            result: One ultralytics Results object, covering a single frame.
+            frame: Index of that frame in the video. YOLO cannot know it,
+                because it is handed bare arrays.
+        """
+        # Using .cpu() for avoiding crashing program on gpu
+        result = result.cpu().numpy()
+        kp = result.keypoints
+        if kp is None:
+            return FrameKeypoints(
+                frame=frame,
+                xy=np.empty((0, 0, 2), dtype=np.float32),
+                conf=np.empty((0, 0), dtype=np.float32),
+                ids=np.empty(0, dtype=np.int64),
+            )
+        xy = kp.xy.astype(np.float32)
+        # A model trained without per-point visibility gives no confidence.
+        if kp.conf is not None:
+            conf = kp.conf.astype(np.float32)
+        else:
+            conf = np.ones(xy.shape[:2], dtype=np.float32)
+        # Only track mode assigns IDs, and not on every frame.
+        if result.boxes is not None and result.boxes.id is not None:
+            ids = result.boxes.id.astype(np.int64)
+        else:
+            ids = np.arange(xy.shape[0], dtype=np.int64)
+        return FrameKeypoints(frame=frame, xy=xy, conf=conf, ids=ids)
 
 
 def estimate_poses_from_video(
