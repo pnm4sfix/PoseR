@@ -1,10 +1,12 @@
-"""Behaviour Decoding page of the Inference panel: load a decoder, label a file."""
+"""Behaviour Decoding page of the Inference panel: load a decoder, label files."""
 
 from __future__ import annotations
 
+import json
 import logging
 import traceback
-from collections.abc import Generator
+from collections.abc import Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -25,14 +27,29 @@ from qtpy.QtWidgets import (
 
 from poser._panels.helpers.option_help import help_button
 from poser.core.inference import Inference
-from poser.core.session import SessionManager
+from poser.core.session import SessionEntry, SessionManager
 from poser.core.settings import resolve_device
 
 log = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True, slots=True)
+class _FileResult:
+    """What happened to one pose file, sent from the worker thread to the page."""
+
+    entry: SessionEntry
+    prefix: str  # how status lines name this file, e.g. "[2/3] rec.h5"
+    predictions: np.ndarray | None = None  # one label per frame
+    saved_path: Path | None = None  # the .npy written, None if not saved
+    error: Exception | None = None
+
+
+def _traceback_text(exc: Exception) -> str:
+    return "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+
+
 class DecodePage(QWidget):
-    """Behaviour Decoding: load a decoder checkpoint, then label the active file."""
+    """Behaviour Decoding: load a decoder checkpoint, then label pose files."""
 
     predictions_ready = Signal(object, object)  # (predictions, checkpoint)
 
@@ -43,6 +60,9 @@ class DecodePage(QWidget):
         self._checkpoint: Path | None = None
         # The job running now, if any.
         self._worker: FunctionWorker | GeneratorWorker | None = None
+        # The active file's latest predictions, which the Ethogram shows and
+        # Export writes.
+        self._shown: _FileResult | None = None
         self._build_ui()
         self._connect()
 
@@ -67,6 +87,10 @@ class DecodePage(QWidget):
 
         self._predict_button = QPushButton("▶  Predict behaviours (active file)")
         layout.addWidget(self._predict_button)
+        self._predict_all_button = QPushButton(
+            "▶▶  Predict behaviours (all session files)"
+        )
+        layout.addWidget(self._predict_all_button)
 
         self._progress = QProgressBar()
         self._progress.setRange(0, 100)
@@ -84,9 +108,15 @@ class DecodePage(QWidget):
         )
         layout.addWidget(self._status)
 
+        self._export_button = QPushButton("Export predictions (JSON)…")
+        self._export_button.setEnabled(False)
+        layout.addWidget(self._export_button)
+
     def _connect(self) -> None:
         self._browse_button.clicked.connect(self._on_browse_clicked)
         self._predict_button.clicked.connect(self._on_predict_clicked)
+        self._predict_all_button.clicked.connect(self._on_predict_all_clicked)
+        self._export_button.clicked.connect(self._on_export_clicked)
 
     def _on_browse_clicked(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -110,62 +140,120 @@ class DecodePage(QWidget):
         self._status.append(f"Loaded decoder {path.name}.")
 
     def _on_predict_clicked(self) -> None:
-        if self._checkpoint is None:
-            self._status.append("Load a decoder checkpoint first.")
-            return
         entry = self._session.active
         if entry is None:
             self._status.append("No active file. Activate one in the Data panel first.")
             return
-        worker = thread_worker(self._predict)(entry.pose_path, entry.coords_data)
+        self._run([entry])
+
+    def _on_predict_all_clicked(self) -> None:
+        entries = [e for e in self._session.entries if e.pose_path or e.coords_data]
+        if not entries:
+            self._status.append(
+                "No session file has pose data. Add some in the Data panel."
+            )
+            return
+        self._run(entries)
+
+    def _run(self, entries: list[SessionEntry]) -> None:
+        if self._checkpoint is None:
+            self._status.append("Load a decoder checkpoint first.")
+            return
+        worker = thread_worker(self._predict)(entries)
         worker.yielded.connect(self._on_worker_yielded)
-        worker.returned.connect(self._on_predictions_done)
         self._start(worker)
 
     def _predict(
-        self, pose_path: str, coords_data: dict
-    ) -> Generator[int | str, None, np.ndarray]:
+        self, entries: list[SessionEntry]
+    ) -> Iterator[int | str | _FileResult]:
         """Run in the worker thread, so it reads and writes no widgets.
 
-        Yields status lines and the progress as a percentage, and returns the
-        predicted label of every frame.
+        Yields status lines, the progress across all files as a percentage, and
+        one _FileResult per file. A file that fails does not stop the rest.
         """
-        form = self._inference.input_load(pose_path, coords_data)
-        n_frames = self._inference.n_frames
-        yield f"Loaded pose as {form}, {n_frames:,} frames."
-        for message in self._inference.input_adapt():
-            yield f"Warning: {message}"
-        yield "Predicting …"
+        n_failed = 0
+        for index, entry in enumerate(entries):
+            name = Path(entry.pose_path).name if entry.pose_path else "in-memory pose"
+            prefix = name
+            if len(entries) > 1:
+                prefix = f"[{index + 1}/{len(entries)}] {name}"
+            try:
+                form = self._inference.input_load(entry.pose_path, entry.coords_data)
+                n_frames = self._inference.n_frames
+                yield f"{prefix}: loaded as {form}, {n_frames:,} frames. Predicting …"
+                for message in self._inference.input_adapt():
+                    yield f"{prefix}: Warning: {message}"
 
-        batches = []
-        n_done = 0
-        for labels in self._inference.iter_predictions():
-            batches.append(labels)
-            n_done += len(labels)
-            yield int(100 * n_done / max(n_frames, 1))
-        predictions = np.concatenate(batches)
+                batches, n_done = [], 0
+                for labels in self._inference.iter_predictions():
+                    batches.append(labels)
+                    n_done += len(labels)
+                    files_done = index + n_done / max(n_frames, 1)
+                    yield int(100 * files_done / len(entries))
+                predictions = np.concatenate(batches)
 
-        try:
-            saved = self._inference.predictions_save(predictions)
-            yield f"Saved {saved.name} and {saved.with_suffix('.csv').name}."
-        except ValueError as exc:  # the pose came from memory, with no file
-            yield f"Not saved: {exc}"
-        return predictions
+                saved = None
+                try:
+                    saved = self._inference.predictions_save(predictions)
+                    yield f"{prefix}: saved {saved.name} and its .csv."
+                except ValueError as exc:  # the pose came from memory, with no file
+                    yield f"{prefix}: not saved: {exc}"
+                yield _FileResult(
+                    entry, prefix, predictions=predictions, saved_path=saved
+                )
+            except Exception as exc:
+                n_failed += 1
+                yield _FileResult(entry, prefix, error=exc)
+            # Step on even when a file failed part way, so the bar reaches 100.
+            yield int(100 * (index + 1) / len(entries))
+        if len(entries) > 1:
+            yield f"Finished {len(entries)} files, {n_failed} failed."
 
-    def _on_worker_yielded(self, item: int | str) -> None:
-        if isinstance(item, str):
+    def _on_worker_yielded(self, item: int | str | _FileResult) -> None:
+        if isinstance(item, int):
+            self._progress.setRange(0, 100)  # from the "busy" pattern to progress
+            self._progress.setValue(item)
+        elif isinstance(item, str):
             self._status.append(item)
-            return
-        self._progress.setRange(0, 100)  # from the "busy" pattern to real progress
-        self._progress.setValue(item)
+        else:
+            self._show_file_result(item)
 
-    def _on_predictions_done(self, predictions: np.ndarray) -> None:
-        labels, counts = np.unique(predictions, return_counts=True)
+    def _show_file_result(self, result: _FileResult) -> None:
+        if result.error is not None:
+            error = result.error
+            log.error("Behaviour decoding failed on %s", result.prefix, exc_info=error)
+            self._status.append(
+                f"{result.prefix}: ERROR {error}\n{_traceback_text(error)}"
+            )
+            return
+        labels, counts = np.unique(result.predictions, return_counts=True)
         summary = ", ".join(
             f"class {label}: {count:,}" for label, count in zip(labels, counts)
         )
-        self._status.append(f"Done: {len(predictions):,} frames. {summary}.")
-        self.predictions_ready.emit(predictions, self._checkpoint)
+        self._status.append(
+            f"{result.prefix}: done, {len(result.predictions):,} frames. {summary}."
+        )
+        # The Ethogram and Metrics follow the file on screen, so a batch run
+        # does not leave them showing whichever file happened to finish last.
+        if result.entry is self._session.active:
+            self._shown = result
+            self.predictions_ready.emit(result.predictions, self._checkpoint)
+
+    def _on_export_clicked(self) -> None:
+        saved = self._shown.saved_path
+        default = saved.with_suffix(".json") if saved else Path("predictions.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export predictions", str(default), "JSON (*.json)"
+        )
+        if not path:
+            return
+        frames = {str(f): int(label) for f, label in enumerate(self._shown.predictions)}
+        try:
+            Path(path).write_text(json.dumps(frames, indent=2))
+        except OSError as exc:
+            self._on_worker_errored(exc)
+            return
+        self._status.append(f"Exported {Path(path).name}.")
 
     def _start(self, worker: FunctionWorker | GeneratorWorker) -> None:
         """Run a background job, with the buttons off until it ends either way."""
@@ -178,10 +266,11 @@ class DecodePage(QWidget):
     def _set_busy(self, busy: bool) -> None:
         self._browse_button.setEnabled(not busy)
         self._predict_button.setEnabled(not busy)
+        self._predict_all_button.setEnabled(not busy)
+        self._export_button.setEnabled(not busy and self._shown is not None)
         # A range of 0 to 0 makes the bar show a moving "busy" pattern.
         self._progress.setRange(0, 0 if busy else 100)
 
     def _on_worker_errored(self, exc: Exception) -> None:
         log.error("Behaviour decoding failed", exc_info=exc)
-        details = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
-        self._status.append(f"ERROR: {exc}\n{details}")
+        self._status.append(f"ERROR: {exc}\n{_traceback_text(exc)}")
