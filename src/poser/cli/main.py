@@ -334,7 +334,7 @@ def predict_npy(
         data_cfg = hp.get("data_cfg", {})
         T2        = int(data_cfg.get("T2", 100))
         transform = data_cfg.get("transform") or ["center", "align", "pad"]
-        # Both key spellings; see _panels/inference_panel.py for why.
+        # Both key spellings; see core/inference.py decoder_settings for why.
         center_node = int(
             hp.get("graph_cfg", {}).get(
                 "center_node", hp.get("graph_cfg", {}).get("center", 0)
