@@ -146,11 +146,21 @@ def preprocess_bouts(
 
     y_mirror = np.array([[1, 0], [0, -1]])
 
+    n_frames = points.shape[1]
+
     for n, (bhv_start, bhv_end) in enumerate(bouts):
         bhv_mid = bhv_start + (bhv_end - bhv_start) / 2
         new_start = int(bhv_mid - T_effective / 2)
         new_end = int(bhv_mid + T_effective / 2)
         new_end = (T_effective - (new_end - new_start)) + new_end
+
+        # Clamp to the recording. A bout closer to either end than half a
+        # window cannot be centred; without this a negative start slices from
+        # the far end of the array and yields an empty window.
+        if new_start < 0:
+            new_start, new_end = 0, min(T_effective, n_frames)
+        elif new_end > n_frames:
+            new_start, new_end = max(0, n_frames - T_effective), n_frames
 
         if T_method == "window":
             refined_bouts[n] = (new_start, new_end)

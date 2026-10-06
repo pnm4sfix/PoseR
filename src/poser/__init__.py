@@ -26,7 +26,7 @@ except ImportError:
 # ---------------------------------------------------------------------------
 from poser._widget import PoserWidget
 from poser._loader import HyperParams, ZebData
-from poser.utils import Animation
+from poser.animation import Animation
 
 # ---------------------------------------------------------------------------
 # New public API

@@ -31,6 +31,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from poser.core.pose_estimation import PoseEstimator
 from poser.core.session import SessionManager, SessionEntry
 
 
@@ -73,46 +74,6 @@ def _parse_dlc_df(dlc_data):
     return coords_data
 
 
-def _coords_data_to_points(coords_data):
-    """Convert coords_data dict to (points, properties) for a napari Points layer.
-
-    Mirrors widget.get_points(): z = frame index tiled across body-part rows.
-    """
-    import pandas as pd
-
-    all_pts, all_conf, all_ind, all_node = [], [], [], []
-    for ind_i, (_, indv) in enumerate(coords_data.items()):
-        x = indv["x"]
-        y = indv["y"]
-        ci = indv["ci"]
-        if isinstance(x, np.ndarray):
-            x = pd.DataFrame(x)
-            y = pd.DataFrame(y)
-            ci = pd.DataFrame(ci)
-        x_flat = x.to_numpy().flatten().astype(float)
-        y_flat = y.to_numpy().flatten().astype(float)
-        ci_flat = ci.to_numpy().flatten().astype(float) if ci is not None else np.zeros_like(x_flat)
-        # Mirror get_points: frame numbers are column labels, tile across nodes
-        z_flat = np.tile(x.columns.to_numpy(), x.shape[0]).astype(float)
-        n_nodes, n_frames = x.shape
-        node_flat = np.repeat(np.arange(n_nodes), n_frames)
-        pts = np.column_stack([z_flat, y_flat, x_flat])
-        # Drop ghost slots: undetected frames have NaN or zero in all of x, y, ci
-        nan_mask = np.isnan(x_flat) | np.isnan(y_flat)
-        zero_mask = (x_flat == 0) & (y_flat == 0) & (ci_flat == 0)
-        keep = ~(nan_mask | zero_mask)
-        all_pts.append(pts[keep])
-        all_conf.append(ci_flat[keep])
-        all_ind.append(np.full(keep.sum(), ind_i, dtype=int))
-        all_node.append(node_flat[keep])
-    points = np.vstack(all_pts)
-    return points, {
-        "confidence": np.concatenate(all_conf).astype(float),
-        "ind": np.concatenate(all_ind),
-        "node": np.concatenate(all_node),
-    }
-
-
 def _load_pose_as_points(path: str):
     """Parse a DLC / SLEAP / PoseR pose file into napari-ready arrays.
 
@@ -139,7 +100,7 @@ def _load_pose_as_points(path: str):
                     "ci": pd.DataFrame(arr[2]),
                 }
         if coords_data:
-            points, props = _coords_data_to_points(coords_data)
+            points, props = PoseEstimator.points_from_coords(coords_data)
             return points, props, coords_data
     except Exception:
         pass
@@ -150,7 +111,7 @@ def _load_pose_as_points(path: str):
             dlc_data = pd.read_hdf(path)
             coords_data = _parse_dlc_df(dlc_data)
             if coords_data:
-                points, props = _coords_data_to_points(coords_data)
+                points, props = PoseEstimator.points_from_coords(coords_data)
                 return points, props, coords_data
         except Exception:
             pass
@@ -161,7 +122,7 @@ def _load_pose_as_points(path: str):
             dlc_data = pd.read_csv(path, header=[0, 1, 2], index_col=0)
             coords_data = _parse_dlc_df(dlc_data)
             if coords_data:
-                points, props = _coords_data_to_points(coords_data)
+                points, props = PoseEstimator.points_from_coords(coords_data)
                 return points, props, coords_data
         except Exception:
             pass
@@ -194,7 +155,7 @@ def _load_pose_as_points(path: str):
                             "ci": pd.DataFrame(ci_arr),
                         }
             if coords_data:
-                points, props = _coords_data_to_points(coords_data)
+                points, props = PoseEstimator.points_from_coords(coords_data)
                 return points, props, coords_data
         except Exception:
             pass

@@ -1,66 +1,66 @@
-"""
-Model evaluation metrics — napari-free.
-
-Extracted from ``PoserWidget.benchmark_model_performance()``.
-"""
+"""Classification metrics for behaviour decoding."""
 
 from __future__ import annotations
 
+import logging
 from typing import Dict, Optional
 
 import numpy as np
-import torch
+from sklearn.metrics import (
+    accuracy_score,
+    balanced_accuracy_score,
+    classification_report,
+    confusion_matrix,
+)
+
+log = logging.getLogger(__name__)
 
 
 def benchmark_model_performance(
-    model,
     predictions: np.ndarray,
     targets: np.ndarray,
     label_dict: Optional[Dict[int, str]] = None,
+    report_as_dict: bool = False,
 ) -> Dict:
-    """Compute classification metrics and optionally print a report.
+    """Score predictions against targets and log a classification report.
 
-    Parameters
-    ----------
-    model:
-        Not used directly but kept for API compatibility with widget call-site.
-    predictions:
-        Shape ``(N,)`` — integer class predictions.
-    targets:
-        Shape ``(N,)`` — integer class ground-truth labels.
-    label_dict:
-        Optional ``{int: str}`` mapping for human-readable class names.
+    Args:
+        predictions: Integer class predictions, shape (N,).
+        targets: Integer ground-truth labels, shape (N,).
+        label_dict: Maps class index to a readable name. None leaves the
+            classes numbered.
+        report_as_dict: Return the classification report as sklearn's nested
+            dict, for a table, instead of as text.
 
-    Returns
-    -------
-    dict
-        Keys: ``accuracy``, ``balanced_accuracy``, ``confusion_matrix``,
-        ``classification_report``.
+    Returns:
+        Keys accuracy, balanced_accuracy, confusion_matrix and
+        classification_report.
     """
-    from sklearn.metrics import (
-        accuracy_score,
-        balanced_accuracy_score,
-        confusion_matrix,
-        classification_report,
+    accuracy = accuracy_score(targets, predictions)
+    balanced_accuracy = balanced_accuracy_score(targets, predictions)
+    # Name the labels explicitly. A label_dict usually covers every class the
+    # project defines, while a given run may only contain some of them, and
+    # sklearn rejects target_names that outnumber the classes it observes.
+    labels = sorted(label_dict) if label_dict is not None else None
+    target_names = [label_dict[i] for i in labels] if labels is not None else None
+    matrix = confusion_matrix(targets, predictions, labels=labels)
+    report = classification_report(
+        targets,
+        predictions,
+        labels=labels,
+        target_names=target_names,
+        zero_division=0,
+        output_dict=report_as_dict,
     )
 
-    acc = accuracy_score(targets, predictions)
-    bal_acc = balanced_accuracy_score(targets, predictions)
-    cm = confusion_matrix(targets, predictions)
-    target_names = (
-        [label_dict[i] for i in sorted(label_dict.keys())]
-        if label_dict is not None
-        else None
+    log.info(
+        "Accuracy: %.4f | Balanced accuracy: %.4f", accuracy, balanced_accuracy
     )
-    report = classification_report(targets, predictions, target_names=target_names)
-
-    print(f"Accuracy:          {acc:.4f}")
-    print(f"Balanced accuracy: {bal_acc:.4f}")
-    print(report)
+    log.info("Classification report:\n%s", report)
 
     return {
-        "accuracy": acc,
-        "balanced_accuracy": bal_acc,
-        "confusion_matrix": cm,
+        "accuracy": accuracy,
+        "balanced_accuracy": balanced_accuracy,
+        "confusion_matrix": matrix,
         "classification_report": report,
     }
