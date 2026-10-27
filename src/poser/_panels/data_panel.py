@@ -35,10 +35,6 @@ from poser.core.pose_estimation import PoseEstimator
 from poser.core.session import SessionManager, SessionEntry
 
 
-# ---------------------------------------------------------------------------
-# Pose-file → napari points helpers  (mirrors original _widget.py logic)
-# ---------------------------------------------------------------------------
-
 def _parse_dlc_df(dlc_data):
     """Parse a DLC DataFrame (from pd.read_hdf / pd.read_csv) into coords_data.
 
@@ -187,10 +183,6 @@ class DataPanel(QWidget):
         self._build_ui()
         self._refresh_table()
 
-    # ------------------------------------------------------------------
-    # UI construction
-    # ------------------------------------------------------------------
-
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -273,10 +265,6 @@ class DataPanel(QWidget):
         root.addWidget(persist_grp)
 
         root.addStretch()
-
-    # ------------------------------------------------------------------
-    # Slots
-    # ------------------------------------------------------------------
 
     def _on_add_pose(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
@@ -558,10 +546,6 @@ class DataPanel(QWidget):
         if path:
             self._session.load(Path(path))
             self._refresh_table()
-
-    # ------------------------------------------------------------------
-    # Table refresh
-    # ------------------------------------------------------------------
 
     def _refresh_table(self) -> None:
         self._session_list.clear()

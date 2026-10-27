@@ -34,9 +34,6 @@ from poser.models.base import BasePoseModel
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Registry type aliases
-# ---------------------------------------------------------------------------
 _ArchClass = Type[BasePoseModel]
 _ModelEntry = Dict[str, Any]  # {"class": cls, "description": str}
 
@@ -54,9 +51,6 @@ class _ModelRegistry:
             cls._instance._loaded_entry_points = False
         return cls._instance
 
-    # ------------------------------------------------------------------
-    # Architecture registration
-    # ------------------------------------------------------------------
     def register(
         self,
         arch_class: _ArchClass,
@@ -112,9 +106,6 @@ class _ModelRegistry:
             "supported_input_shape": cls.SUPPORTED_INPUT_SHAPE,
         }
 
-    # ------------------------------------------------------------------
-    # Checkpoint discovery
-    # ------------------------------------------------------------------
     def scan_directory(self, directory: str | Path) -> List[Path]:
         """Scan *directory* for ``.ckpt`` and ``.pt`` weight files."""
         directory = Path(directory)
@@ -131,9 +122,6 @@ class _ModelRegistry:
         self.scan_directory(Path.home() / ".poser" / "models")
         return list(self._checkpoints)
 
-    # ------------------------------------------------------------------
-    # Model instantiation
-    # ------------------------------------------------------------------
     def load(
         self,
         arch: str,
@@ -160,9 +148,6 @@ class _ModelRegistry:
             model = cls(**model_kwargs)
         return model
 
-    # ------------------------------------------------------------------
-    # Entry-point discovery
-    # ------------------------------------------------------------------
     def _ensure_entry_points(self) -> None:
         if self._loaded_entry_points:
             return
@@ -181,9 +166,6 @@ class _ModelRegistry:
                 log.warning("Failed to load model entry-point '%s': %s", ep.name, exc)
 
 
-# ---------------------------------------------------------------------------
-# Module-level singleton + convenience decorators
-# ---------------------------------------------------------------------------
 _registry = _ModelRegistry()
 
 

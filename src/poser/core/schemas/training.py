@@ -14,10 +14,6 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 
-# ---------------------------------------------------------------------------
-# Sub-models
-# ---------------------------------------------------------------------------
-
 class DataConfig(BaseModel):
     """Parameters governing how raw pose data is pre-processed."""
 
@@ -143,10 +139,6 @@ class BehaviourSchema(BaseModel):
         return [self.labels[k] for k in sorted(self.labels)]
 
 
-# ---------------------------------------------------------------------------
-# Top-level config
-# ---------------------------------------------------------------------------
-
 class TrainingConfig(BaseModel):
     """Full PoseR training configuration.
 
@@ -215,10 +207,6 @@ class TrainingConfig(BaseModel):
     def label_dict(self) -> Dict[int, str]:
         return self.behaviour_schema.labels
 
-
-# ---------------------------------------------------------------------------
-# Legacy migration helper
-# ---------------------------------------------------------------------------
 
 def _migrate_legacy(raw: Dict[str, Any]) -> Dict[str, Any]:
     """Convert the old flat ``decoder_config.yml`` to the nested structure."""

@@ -50,11 +50,6 @@ app.add_typer(model_app, name="model")
 console = Console()
 log = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# install-torch
-# ---------------------------------------------------------------------------
-
 # CUDA version → PyTorch wheel index mapping (extend as new builds are released)
 _CUDA_INDEX: list[tuple[tuple[int, int], str]] = [
     ((12, 6), "https://download.pytorch.org/whl/cu126"),
@@ -127,10 +122,6 @@ def install_torch(
     console.print("\n[green]OK PyTorch installed successfully.[/green]")
     console.print("  Verify with:  python -c \"import torch; print(torch.__version__, torch.cuda.is_available())\"")
 
-
-# ---------------------------------------------------------------------------
-# train
-# ---------------------------------------------------------------------------
 
 @app.command()
 def train(
@@ -237,10 +228,6 @@ def train(
     console.print(f"\n[green]Training complete.[/green]  Best checkpoint: {best}")
 
 
-# ---------------------------------------------------------------------------
-# predict
-# ---------------------------------------------------------------------------
-
 @app.command()
 def predict(
     pose_file: Path = typer.Argument(..., help="Input pose HDF5 or CSV file."),
@@ -268,10 +255,6 @@ def predict(
         json.dump({str(k): int(v) for k, v in result.items()}, fh, indent=2)
     console.print(f"[green]Predictions saved to:[/green] {out_path}")
 
-
-# ---------------------------------------------------------------------------
-# predict-npy  (frame-by-frame inference on a *_pose.npy file)
-# ---------------------------------------------------------------------------
 
 @app.command(name="predict-npy")
 def predict_npy(
@@ -448,10 +431,6 @@ def predict_npy(
         console.print(f"  class {cls_id:3d}: {cnt:6d} frames  ({pct:.1f}%)")
 
 
-# ---------------------------------------------------------------------------
-# batch
-# ---------------------------------------------------------------------------
-
 @app.command()
 def batch(
     pose_files: List[Path] = typer.Argument(..., help="Pose files to process."),
@@ -490,10 +469,6 @@ def batch(
     console.print(f"Manifest: {output_dir / 'batch_manifest.csv'}")
 
 
-# ---------------------------------------------------------------------------
-# finetune
-# ---------------------------------------------------------------------------
-
 @app.command()
 def finetune(
     images_dir: Path = typer.Argument(..., help="YOLO-format training images directory."),
@@ -523,10 +498,6 @@ def finetune(
     )
     console.print(f"[green]Fine-tuning complete.[/green]  Outputs: {run_dir}")
 
-
-# ---------------------------------------------------------------------------
-# skeleton sub-commands
-# ---------------------------------------------------------------------------
 
 @skeleton_app.command("list")
 def skeleton_list() -> None:
@@ -589,10 +560,6 @@ def skeleton_validate(
         console.print(f"[red]Validation failed:[/red] {exc}")
         raise typer.Exit(1)
 
-
-# ---------------------------------------------------------------------------
-# model sub-commands
-# ---------------------------------------------------------------------------
 
 @model_app.command("list")
 def model_list() -> None:
@@ -720,10 +687,6 @@ def model_repair(
     )
 
 
-# ---------------------------------------------------------------------------
-# init
-# ---------------------------------------------------------------------------
-
 @app.command()
 def init(
     project_dir: Path = typer.Argument(Path("."), help="Project directory to initialise."),
@@ -750,10 +713,6 @@ def init(
     console.print(f"  Config: {config_path}")
     console.print(f"  Edit [cyan]decoder_config.yml[/cyan] to customise your training settings.")
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO

@@ -14,10 +14,6 @@ import numpy as np
 from .augmentation import _pad_to_length
 
 
-# ---------------------------------------------------------------------------
-# Bout-level transforms (operate on a single (C,T,V,M) bout)
-# ---------------------------------------------------------------------------
-
 def center_all(bout: np.ndarray, center_node: int) -> np.ndarray:
     """Subtract centre-node xy from all nodes at every frame."""
     ref = bout[0:2, :, center_node]
@@ -72,10 +68,6 @@ def mirror_y(bout: np.ndarray) -> np.ndarray:
     result[1] *= -1
     return result
 
-
-# ---------------------------------------------------------------------------
-# Main preprocess pipeline
-# ---------------------------------------------------------------------------
 
 def preprocess_bouts(
     egocentric: np.ndarray,
@@ -193,10 +185,6 @@ def preprocess_bouts(
         return padded, labels, bouts_raw, refined_bouts
     return padded, labels
 
-
-# ---------------------------------------------------------------------------
-# classification_data → (N, C, T, V, M) + labels
-# ---------------------------------------------------------------------------
 
 def classification_data_to_bouts(
     classification_data: Dict,
