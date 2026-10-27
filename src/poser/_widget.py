@@ -2089,22 +2089,16 @@ class PoserWidget(Container):
         self.ind_spinbox.max = int(data_t.individuals.unique().shape[0])
 
     def read_sleep_pose_estimation_h5(self, h5_file):
-        import h5py
         """Reads h5 files from sleep pose estimation. Assumes format of x,y,ci for each bodypart in groups for each individual."""
-        sleep_data = h5py.File(h5_file, "r")
+        import tables as tb
 
-        for individual in sleep_data.keys():
-            indv1 = sleep_data[individual]
-
-            x = indv1["x"][:]
-            y = indv1["y"][:]
-            ci = indv1["ci"][:]
-
-            self.coords_data[individual] = {
-                "x": x,
-                "y": y,
-                "ci": ci,
-            }
+        with tb.open_file(str(h5_file), mode="r") as sleep_data:
+            for individual in sleep_data.list_nodes("/", classname="Group"):
+                self.coords_data[individual._v_name] = {
+                    "x": individual.x[:],
+                    "y": individual.y[:],
+                    "ci": individual.ci[:],
+                }
          # set spinbox
         self.ind_spinbox.max = len(self.coords_data)
 

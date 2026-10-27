@@ -28,13 +28,12 @@ import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
 
+import torch
+
 from poser.models.base import BasePoseModel
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Registry type aliases
-# ---------------------------------------------------------------------------
 _ArchClass = Type[BasePoseModel]
 _ModelEntry = Dict[str, Any]  # {"class": cls, "description": str}
 
@@ -52,9 +51,6 @@ class _ModelRegistry:
             cls._instance._loaded_entry_points = False
         return cls._instance
 
-    # ------------------------------------------------------------------
-    # Architecture registration
-    # ------------------------------------------------------------------
     def register(
         self,
         arch_class: _ArchClass,
@@ -110,9 +106,6 @@ class _ModelRegistry:
             "supported_input_shape": cls.SUPPORTED_INPUT_SHAPE,
         }
 
-    # ------------------------------------------------------------------
-    # Checkpoint discovery
-    # ------------------------------------------------------------------
     def scan_directory(self, directory: str | Path) -> List[Path]:
         """Scan *directory* for ``.ckpt`` and ``.pt`` weight files."""
         directory = Path(directory)
@@ -129,9 +122,6 @@ class _ModelRegistry:
         self.scan_directory(Path.home() / ".poser" / "models")
         return list(self._checkpoints)
 
-    # ------------------------------------------------------------------
-    # Model instantiation
-    # ------------------------------------------------------------------
     def load(
         self,
         arch: str,
@@ -158,9 +148,6 @@ class _ModelRegistry:
             model = cls(**model_kwargs)
         return model
 
-    # ------------------------------------------------------------------
-    # Entry-point discovery
-    # ------------------------------------------------------------------
     def _ensure_entry_points(self) -> None:
         if self._loaded_entry_points:
             return
@@ -179,9 +166,6 @@ class _ModelRegistry:
                 log.warning("Failed to load model entry-point '%s': %s", ep.name, exc)
 
 
-# ---------------------------------------------------------------------------
-# Module-level singleton + convenience decorators
-# ---------------------------------------------------------------------------
 _registry = _ModelRegistry()
 
 
@@ -225,3 +209,43 @@ def load_model(
 def list_checkpoints() -> List[Path]:
     """Return all ``.ckpt``/``.pt`` files found in the project + user dirs."""
     return _registry.list_checkpoints()
+
+
+LAYOUT_BY_NODE_COUNT = {
+    9: "zebrafish",
+    12: "drosophila",
+    13: "mouse1",
+    17: "coco",
+    18: "mouse2",
+    19: "zebrafishlarvae",
+    23: "zeb60fps",
+    24: "ntu_edge",
+    25: "ntu-rgb+d",
+}
+
+
+def describe_checkpoint(ckpt: Any) -> Dict[str, Any]:
+    """Read a decoder's architecture back from its weights.
+
+    Lightning only replays hyper_parameters that were saved, and several
+    released decoders stored just "hparams". Tensor shapes cannot drift from
+    the weights they describe, so the architecture is recovered from the state
+    dict instead.
+
+    Args:
+        ckpt: A loaded checkpoint dict, or a path to one.
+
+    Returns:
+        Keys num_nodes, in_channels, num_class, and layout. layout is None
+        when no entry in poser.models.graph has that node count.
+    """
+    if not isinstance(ckpt, dict):
+        ckpt = torch.load(str(ckpt), map_location="cpu", weights_only=False)
+    sd = ckpt["state_dict"]
+    num_nodes = int(sd["A"].shape[-1])
+    return {
+        "num_nodes": num_nodes,
+        "in_channels": int(sd["st_gcn_networks.0.gcn.conv.weight"].shape[1]),
+        "num_class": int(sd["fcn.weight"].shape[0]),
+        "layout": LAYOUT_BY_NODE_COUNT.get(num_nodes),
+    }

@@ -74,6 +74,10 @@ class ST_GCN_18(LightningModule):
         in_channels (int): Number of channels in the input data
         num_class (int): Number of classes for the classification task
         graph_cfg (dict): The arguments for building the graph
+        data_cfg (dict, optional): Dataset settings, read only by training.
+            None when the model is loaded just to run inference.
+        hparams (optional): Learning rate, batch size and dropout, read only
+            by training. None when the model is loaded just to run inference.
         edge_importance_weighting (bool): If ``True``, adds a learnable
             importance weighting to the edges of the graph
         **kwargs (optional): Other parameters for graph convolution units
@@ -92,8 +96,8 @@ class ST_GCN_18(LightningModule):
         in_channels,
         num_class,
         graph_cfg,
-        data_cfg,
-        hparams,
+        data_cfg=None,
+        hparams=None,
         batch_size=0,
         num_workers=0,
         edge_importance_weighting=True,  # try changing to false
@@ -106,10 +110,11 @@ class ST_GCN_18(LightningModule):
         except:
             pass
         self.num_workers = num_workers
-        self.data_dir = data_cfg["data_dir"]
-        self.augment = data_cfg["augment"]
-        self.ideal_sample_no = data_cfg["ideal_sample_no"]
-        self.shift = data_cfg["shift"]
+        data_cfg = data_cfg or {}
+        self.data_dir = data_cfg.get("data_dir")
+        self.augment = data_cfg.get("augment", False)
+        self.ideal_sample_no = data_cfg.get("ideal_sample_no")
+        self.shift = data_cfg.get("shift", False)
 
         try:
             self.regress = data_cfg["regress"]
@@ -176,9 +181,15 @@ class ST_GCN_18(LightningModule):
             self.window_size = None
 
 
-        self.learning_rate = hparams.learning_rate
-        self.batch_size = hparams.batch_size
-        self.dropout = hparams.dropout
+        if hparams is None:
+            # Loaded just to run inference. Dropout does nothing in eval mode.
+            self.learning_rate = None
+            self.batch_size = batch_size
+            self.dropout = 0
+        else:
+            self.learning_rate = hparams.learning_rate
+            self.batch_size = hparams.batch_size
+            self.dropout = hparams.dropout
         
         if self.binary:
             self.num_classes = 1

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import abc
 from pathlib import Path
-from typing import Any, Dict, Optional, Sequence
+from typing import Any, Dict, Optional
 
 import torch
 import lightning.pytorch as pl
@@ -27,9 +27,6 @@ class BasePoseModel(pl.LightningModule, abc.ABC):
     :meth:`training_step`, :meth:`configure_optimizers`).
     """
 
-    # ------------------------------------------------------------------
-    # Identity — fill in sub-class metadata
-    # ------------------------------------------------------------------
     MODEL_NAME: str = "base"
     """Short unique identifier used in the model registry."""
 
@@ -39,9 +36,6 @@ class BasePoseModel(pl.LightningModule, abc.ABC):
     SUPPORTED_INPUT_SHAPE: Optional[tuple] = None
     """Expected ``(C, T, V, M)`` input shape, or ``None`` if flexible."""
 
-    # ------------------------------------------------------------------
-    # Abstract interface
-    # ------------------------------------------------------------------
     @abc.abstractmethod
     def forward(self, x: torch.Tensor) -> torch.Tensor:  # pragma: no cover
         """Forward pass.
@@ -55,9 +49,6 @@ class BasePoseModel(pl.LightningModule, abc.ABC):
         logits : torch.Tensor, shape ``(N, num_classes)`` or ``(N, 1)``
         """
 
-    # ------------------------------------------------------------------
-    # Predict step (works without sub-class override)
-    # ------------------------------------------------------------------
     def predict_step(
         self,
         batch: torch.Tensor | tuple,
@@ -73,9 +64,6 @@ class BasePoseModel(pl.LightningModule, abc.ABC):
         preds = logits.argmax(dim=-1) if logits.shape[-1] > 1 else (probs > 0.5).long().squeeze(-1)
         return {"logits": logits, "probs": probs, "preds": preds}
 
-    # ------------------------------------------------------------------
-    # Convenience I/O
-    # ------------------------------------------------------------------
     def save(self, path: str | Path) -> Path:
         """Save model weights to *path* (`.pt` checkpoint)."""
         path = Path(path)
@@ -111,9 +99,6 @@ class BasePoseModel(pl.LightningModule, abc.ABC):
         model.eval()
         return model
 
-    # ------------------------------------------------------------------
-    # Model card metadata
-    # ------------------------------------------------------------------
     def model_card(self) -> Dict[str, Any]:
         """Return a dict describing this model's architecture."""
         n_params = sum(p.numel() for p in self.parameters())
