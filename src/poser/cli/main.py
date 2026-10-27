@@ -27,9 +27,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+import torch
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
+
+from poser.models.registry import describe_checkpoint
 
 app = typer.Typer(
     name="poser",
@@ -296,7 +300,6 @@ def predict_npy(
     _setup_logging(verbose)
 
     import numpy as np
-    import torch
     from torch.utils.data import DataLoader
 
     # ── Resolve device ──────────────────────────────────────────────────
@@ -619,10 +622,6 @@ def model_inspect(
     checkpoint: Path = typer.Argument(..., help="Path to a .ckpt decoder."),
 ) -> None:
     """Show a decoder's architecture and whether it describes itself."""
-    import torch
-
-    from poser.models.registry import describe_checkpoint
-
     raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
     arch = describe_checkpoint(raw)
     stored = raw.get("hyper_parameters", {}) or {}
@@ -664,11 +663,6 @@ def model_repair(
     taken from decoder_config.yml, so it loads correctly with no outside
     context.
     """
-    import torch
-    import yaml
-
-    from poser.models.registry import describe_checkpoint
-
     raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
     arch = describe_checkpoint(raw)
     if arch["layout"] is None:
