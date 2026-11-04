@@ -962,7 +962,7 @@ class ST_GCN_18(LightningModule):
 
         return output, feature
 
-    def predict_step(self, batch, batch_idx, dataloader_idx=0):
+    def predict_step(self, batch):
         # print(len(batch))
         # print(batch[0].shape)
         return self(batch[0])

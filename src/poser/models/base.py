@@ -52,8 +52,6 @@ class BasePoseModel(pl.LightningModule, abc.ABC):
     def predict_step(
         self,
         batch: torch.Tensor | tuple,
-        batch_idx: int,
-        dataloader_idx: int = 0,
     ) -> Dict[str, Any]:
         if isinstance(batch, (list, tuple)):
             x = batch[0]
