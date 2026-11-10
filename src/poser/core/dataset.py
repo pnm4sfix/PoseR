@@ -9,7 +9,7 @@ there is no duplicated code.
 from __future__ import annotations
 
 import os
-from typing import List, Optional, Union
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -186,10 +186,6 @@ class PoseDataset(torch.utils.data.Dataset):
         if self.transform == "heatmap":
             self._init_heatmap_grid()
 
-    # ------------------------------------------------------------------
-    # Dataset protocol
-    # ------------------------------------------------------------------
-
     def __len__(self) -> int:
         return len(self.labels)
 
@@ -225,10 +221,6 @@ class PoseDataset(torch.utils.data.Dataset):
             label = torch.tensor(label)
         return behaviour, label
 
-    # ------------------------------------------------------------------
-    # Frame-level preprocessing (continuous 4D data)
-    # ------------------------------------------------------------------
-
     def preprocess_frames(self, frame: int, window_size: int) -> np.ndarray:
         hw = window_size // 2
         t0 = frame - hw
@@ -254,10 +246,6 @@ class PoseDataset(torch.utils.data.Dataset):
                 bhv = np.pad(bhv, pad_width, mode="edge" if available == 1 else "constant")
 
         return bhv
-
-    # ------------------------------------------------------------------
-    # Pose transforms (instance methods — delegate to core functions)
-    # ------------------------------------------------------------------
 
     def flipy(self, bhv: np.ndarray) -> np.ndarray:
         result = bhv.copy()
@@ -303,10 +291,6 @@ class PoseDataset(torch.utils.data.Dataset):
             self.data, self.labels, self.ideal_sample_no
         )
 
-    # ------------------------------------------------------------------
-    # Class weights
-    # ------------------------------------------------------------------
-
     def get_class_weights(self) -> torch.Tensor:
         cw = sk_class_weight.compute_class_weight(
             class_weight="balanced",
@@ -320,10 +304,6 @@ class PoseDataset(torch.utils.data.Dataset):
         mapping = {k: v.item() for k, v in enumerate(cw)}
         weights = pd.Series(self.labels).map(mapping).to_numpy(dtype="float32")
         return torch.tensor(weights, dtype=torch.float32)
-
-    # ------------------------------------------------------------------
-    # Heatmap (CuPy-accelerated)
-    # ------------------------------------------------------------------
 
     def _init_heatmap_grid(self):
         try:
@@ -352,9 +332,5 @@ class PoseDataset(torch.utils.data.Dataset):
         except Exception:
             return bout
 
-
-# ---------------------------------------------------------------------------
-# Backwards compat alias
-# ---------------------------------------------------------------------------
 
 ZebData = PoseDataset

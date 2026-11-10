@@ -3,9 +3,6 @@ try:
 except ImportError:
     __version__ = "unknown"
 
-# ---------------------------------------------------------------------------
-# PyTorch availability check — shown once at import time
-# ---------------------------------------------------------------------------
 try:
     import torch as _torch  # noqa: F401
 except ImportError:
@@ -21,16 +18,10 @@ except ImportError:
         stacklevel=2,
     )
 
-# ---------------------------------------------------------------------------
-# Legacy napari widget — preserved for backwards compatibility
-# ---------------------------------------------------------------------------
 from poser._widget import PoserWidget
 from poser._loader import HyperParams, ZebData
-from poser.utils import Animation
+from poser.animation import Animation
 
-# ---------------------------------------------------------------------------
-# New public API
-# ---------------------------------------------------------------------------
 from poser.api import PoseR
 
 # Core utilities

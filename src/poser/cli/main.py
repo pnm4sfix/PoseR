@@ -27,9 +27,13 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
+import torch
 import typer
+import yaml
 from rich.console import Console
 from rich.table import Table
+
+from poser.models.registry import describe_checkpoint
 
 app = typer.Typer(
     name="poser",
@@ -45,11 +49,6 @@ app.add_typer(model_app, name="model")
 
 console = Console()
 log = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# install-torch
-# ---------------------------------------------------------------------------
 
 # CUDA version → PyTorch wheel index mapping (extend as new builds are released)
 _CUDA_INDEX: list[tuple[tuple[int, int], str]] = [
@@ -123,10 +122,6 @@ def install_torch(
     console.print("\n[green]OK PyTorch installed successfully.[/green]")
     console.print("  Verify with:  python -c \"import torch; print(torch.__version__, torch.cuda.is_available())\"")
 
-
-# ---------------------------------------------------------------------------
-# train
-# ---------------------------------------------------------------------------
 
 @app.command()
 def train(
@@ -233,10 +228,6 @@ def train(
     console.print(f"\n[green]Training complete.[/green]  Best checkpoint: {best}")
 
 
-# ---------------------------------------------------------------------------
-# predict
-# ---------------------------------------------------------------------------
-
 @app.command()
 def predict(
     pose_file: Path = typer.Argument(..., help="Input pose HDF5 or CSV file."),
@@ -265,10 +256,6 @@ def predict(
     console.print(f"[green]Predictions saved to:[/green] {out_path}")
 
 
-# ---------------------------------------------------------------------------
-# predict-npy  (frame-by-frame inference on a *_pose.npy file)
-# ---------------------------------------------------------------------------
-
 @app.command(name="predict-npy")
 def predict_npy(
     pose_file: Path = typer.Argument(
@@ -296,12 +283,13 @@ def predict_npy(
     _setup_logging(verbose)
 
     import numpy as np
-    import torch
     from torch.utils.data import DataLoader
 
     # ── Resolve device ──────────────────────────────────────────────────
     if device == "auto":
-        dev = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        from poser.core.settings import resolve_device
+
+        dev = resolve_device()
     else:
         dev = torch.device(device)
     console.print(f"Device: [cyan]{dev}[/cyan]")
@@ -331,8 +319,13 @@ def predict_npy(
         hp = raw_ckpt.get("hyper_parameters", {})
         data_cfg = hp.get("data_cfg", {})
         T2        = int(data_cfg.get("T2", 100))
-        transform = data_cfg.get("transform", ["center", "align", "pad"])
-        center_node = int(hp.get("graph_cfg", {}).get("center", 0))
+        transform = data_cfg.get("transform") or ["center", "align", "pad"]
+        # Both key spellings; see core/inference.py decoder_settings for why.
+        center_node = int(
+            hp.get("graph_cfg", {}).get(
+                "center_node", hp.get("graph_cfg", {}).get("center", 0)
+            )
+        )
         head_node = int(data_cfg.get("head", 0))
         num_class = int(hp.get("num_class", 2))
     except Exception as exc:
@@ -361,6 +354,9 @@ def predict_npy(
             str(checkpoint),
             map_location=dev,
             hparams=_infer_hparams,
+            # torch 2.6 defaults weights_only=True, which rejects the pickled
+            # poser._loader.HyperParams inside these released checkpoints.
+            weights_only=False,
         )
         model.eval()
         model.to(dev)
@@ -435,10 +431,6 @@ def predict_npy(
         console.print(f"  class {cls_id:3d}: {cnt:6d} frames  ({pct:.1f}%)")
 
 
-# ---------------------------------------------------------------------------
-# batch
-# ---------------------------------------------------------------------------
-
 @app.command()
 def batch(
     pose_files: List[Path] = typer.Argument(..., help="Pose files to process."),
@@ -477,10 +469,6 @@ def batch(
     console.print(f"Manifest: {output_dir / 'batch_manifest.csv'}")
 
 
-# ---------------------------------------------------------------------------
-# finetune
-# ---------------------------------------------------------------------------
-
 @app.command()
 def finetune(
     images_dir: Path = typer.Argument(..., help="YOLO-format training images directory."),
@@ -510,10 +498,6 @@ def finetune(
     )
     console.print(f"[green]Fine-tuning complete.[/green]  Outputs: {run_dir}")
 
-
-# ---------------------------------------------------------------------------
-# skeleton sub-commands
-# ---------------------------------------------------------------------------
 
 @skeleton_app.command("list")
 def skeleton_list() -> None:
@@ -577,10 +561,6 @@ def skeleton_validate(
         raise typer.Exit(1)
 
 
-# ---------------------------------------------------------------------------
-# model sub-commands
-# ---------------------------------------------------------------------------
-
 @model_app.command("list")
 def model_list() -> None:
     """List registered model architectures and discovered checkpoints."""
@@ -604,9 +584,108 @@ def model_list() -> None:
             console.print(f"  {p}")
 
 
-# ---------------------------------------------------------------------------
-# init
-# ---------------------------------------------------------------------------
+@model_app.command("inspect")
+def model_inspect(
+    checkpoint: Path = typer.Argument(..., help="Path to a .ckpt decoder."),
+) -> None:
+    """Show a decoder's architecture and whether it describes itself."""
+    raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    arch = describe_checkpoint(raw)
+    stored = raw.get("hyper_parameters", {}) or {}
+
+    table = Table(title=checkpoint.name)
+    table.add_column("Property", style="cyan")
+    table.add_column("Value")
+    for key in ("num_nodes", "in_channels", "num_class", "layout"):
+        table.add_row(key, str(arch[key]))
+    table.add_row("hyper_parameters", ", ".join(sorted(stored)) or "(none)")
+    console.print(table)
+
+    if arch["layout"] is None:
+        console.print(
+            f"[red]No graph layout defines {arch['num_nodes']} nodes, so this "
+            "decoder cannot be rebuilt.[/red]"
+        )
+    if "data_cfg" not in stored:
+        console.print(
+            "[yellow]No data_cfg stored: preprocessing settings fall back to "
+            "defaults, which silently produces wrong predictions. Run "
+            "'poser model repair' to embed them.[/yellow]"
+        )
+
+
+@model_app.command("repair")
+def model_repair(
+    checkpoint: Path = typer.Argument(..., help="Decoder to repair."),
+    config: Path = typer.Option(..., "--config", "-c", help="decoder_config.yml."),
+    output: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Defaults to <checkpoint>.repaired.ckpt."
+    ),
+) -> None:
+    """Embed a decoder's preprocessing settings into the checkpoint.
+
+    Several released decoders stored only "hparams", so loading them falls
+    back to defaults that do not match how they were trained. This writes a
+    copy carrying the architecture read from the weights plus the data_cfg
+    taken from decoder_config.yml, so it loads correctly with no outside
+    context.
+    """
+    raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
+    arch = describe_checkpoint(raw)
+    if arch["layout"] is None:
+        console.print(
+            f"[red]No graph layout defines {arch['num_nodes']} nodes.[/red]"
+        )
+        raise typer.Exit(1)
+
+    cfg = yaml.safe_load(config.read_text())["data_cfg"]
+    if int(cfg["V"]) != arch["num_nodes"]:
+        console.print(
+            f"[red]Config says V={cfg['V']} but the weights have "
+            f"{arch['num_nodes']} nodes. Wrong config for this decoder.[/red]"
+        )
+        raise typer.Exit(1)
+
+    hp = dict(raw.get("hyper_parameters", {}) or {})
+    hp.update(
+        in_channels=arch["in_channels"],
+        num_class=arch["num_class"],
+        graph_cfg={
+            "layout": arch["layout"],
+            "strategy": "spatial",
+            "center_node": int(cfg["center"]),
+        },
+        data_cfg={
+            "data_dir": ".",
+            "augment": False,
+            "ideal_sample_no": None,
+            "shift": False,
+            "regress": False,
+            "softmax": False,
+            "transform": ["center", "align", "pad"],
+            "labels_to_ignore": cfg.get("labels_to_ignore", []),
+            "label_dict": cfg.get("classification_dict"),
+            "calc_class_weights": False,
+            "T2": int(cfg["T2"]),
+            "head": 0,
+            "weighted_random_sampler": False,
+            "binary": False,
+            "binary_class": None,
+            "preprocess_frame": False,
+            "window_size": None,
+        },
+    )
+    raw["hyper_parameters"] = hp
+
+    out = output or checkpoint.with_suffix(".repaired.ckpt")
+    torch.save(raw, str(out))
+    console.print(f"[green]Wrote {out}[/green]")
+    console.print(
+        f"  nodes={arch['num_nodes']} in_channels={arch['in_channels']} "
+        f"num_class={arch['num_class']} layout={arch['layout']} "
+        f"T2={cfg['T2']} center_node={cfg['center']}"
+    )
+
 
 @app.command()
 def init(
@@ -634,10 +713,6 @@ def init(
     console.print(f"  Config: {config_path}")
     console.print(f"  Edit [cyan]decoder_config.yml[/cyan] to customise your training settings.")
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def _setup_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
