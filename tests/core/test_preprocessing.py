@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from poser.core.preprocessing import preprocess_bouts
+from poser.core.preprocessing import align, preprocess_bouts
 
 V = 5
 T = 400
@@ -73,3 +73,21 @@ def test_window_method_still_derives_T_from_fps(egocentric, ci_frame):
         egocentric, ci_frame, [(200, 210)], fps=30.0, denominator=8, T2=50
     )
     assert padded.shape == (1, 3, 50, V, 1)
+
+
+def test_align_rotates_each_individual_by_its_own_heading():
+    # (C, T, V, M) with two individuals whose heads point right and down.
+    # The two angles used to be forced into one float, which raised TypeError
+    # for any bout with more than one individual.
+    bout = np.zeros((3, 4, 2, 2))
+    bout[0:2, :, 0, 0] = [[2.0], [0.0]]
+    bout[0:2, :, 0, 1] = [[0.0], [-3.0]]
+    bout[2] = 0.9
+
+    aligned = align(bout, head_node=0)
+
+    np.testing.assert_allclose(aligned[0:2, 0, 0, 0], [0.0, 2.0], atol=1e-12)
+    np.testing.assert_allclose(aligned[0:2, 0, 0, 1], [0.0, 3.0], atol=1e-12)
+    np.testing.assert_array_equal(aligned[2], bout[2])
+    for m in range(2):
+        np.testing.assert_allclose(aligned[..., m : m + 1], align(bout[..., m : m + 1]))

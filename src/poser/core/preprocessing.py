@@ -29,17 +29,17 @@ def center_all(bout: np.ndarray, center_node: int) -> np.ndarray:
 
 
 def align(bout: np.ndarray, head_node: int = 0) -> np.ndarray:
-    """Rotate bout so the head node points upward (0,1) at frame 0."""
+    """Rotate each individual so its head node points upward (0,1) at frame 0."""
     nose_vec = bout[0:2, 0, head_node]
     if np.linalg.norm(nose_vec) == 0:
         return bout
-    theta = float(np.arctan2(nose_vec[0], nose_vec[1]))
-    if theta < 0:
-        theta += 2 * np.pi
+    # One angle per individual: (M,) for a (C, T, V, M) bout.
+    theta = np.arctan2(nose_vec[0], nose_vec[1]).astype(np.float64)
+    theta = np.where(theta < 0, theta + 2 * np.pi, theta)
     c, s = np.cos(theta), np.sin(theta)
     R = np.array([[c, -s], [s, c]])
     result = bout.copy()
-    result[0:2] = np.dot(R, bout[0:2].reshape(2, -1)).reshape(bout[0:2].shape)
+    result[0:2] = np.einsum("ij...,jtv...->itv...", R, bout[0:2])
     return result
 
 
