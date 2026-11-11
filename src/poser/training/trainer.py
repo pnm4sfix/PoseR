@@ -128,6 +128,12 @@ class PoseRTrainer:
             tuner = Tuner(trainer)
             tuner.lr_find(model, train_dataloaders=train_loader,
                           val_dataloaders=val_loader)
+            # The finder writes its choice to model.learning_rate. The built-in
+            # model builds its optimiser from _optimiser_config instead, so the
+            # choice is copied there or fit would train at the old rate.
+            optimiser_config = getattr(model, "_optimiser_config", None)
+            if optimiser_config is not None:
+                optimiser_config.learning_rate = model.learning_rate
             log.info("Auto LR: new learning_rate = %.2e", model.learning_rate)
 
         pl.seed_everything(self.config.trainer.seed, workers=True)
