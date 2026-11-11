@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import tables as tb
+import torch
 
 from poser.core.io import save_to_h5
 from poser.training import data_prep
@@ -16,6 +17,7 @@ V = 5
 T = 10
 CENTER_NODE = 3
 HEAD_NODE = 2
+WINDOW = 20
 
 
 class Behaviour(tb.IsDescription):
@@ -129,3 +131,34 @@ def test_hdf5_bouts_use_the_node_count_stored_in_the_file(classification_h5):
 
     assert train_loader.dataset.dataset.data.shape == (2, 3, T, V, 1)
     assert config.model.num_nodes == V
+
+
+@pytest.fixture
+def pose_npy(tmp_path):
+    """One continuous recording, (C, T_total, V, M), with its per-frame labels."""
+    rng = np.random.default_rng(20261111)
+    pose = rng.normal(0, 1, (3, 200, V, 1))
+    pose[2] = 0.9
+    np.save(tmp_path / "rec_pose.npy", pose)
+    np.save(tmp_path / "rec_labels.npy", rng.integers(0, 2, 200))
+    return tmp_path / "rec_pose.npy"
+
+
+def test_validation_inputs_are_the_same_on_every_pass(pose_npy):
+    # Validation shared the training datasets, so every read was randomly
+    # rotated, jittered and scaled and an unchanged model scored differently.
+    config = TrainingConfig(data={"T": WINDOW, "T2": WINDOW})
+    _, val_loader = prepare_dataset([pose_npy], config)
+
+    first = torch.cat([x for x, _ in val_loader])
+    second = torch.cat([x for x, _ in val_loader])
+
+    assert torch.equal(first, second)
+
+
+def test_training_inputs_are_still_augmented(pose_npy):
+    config = TrainingConfig(data={"T": WINDOW, "T2": WINDOW})
+    train_loader, _ = prepare_dataset([pose_npy], config)
+    train_ds = train_loader.dataset
+
+    assert not torch.equal(train_ds[0][0], train_ds[0][0])

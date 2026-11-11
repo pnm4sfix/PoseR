@@ -20,6 +20,7 @@ Usage
 """
 from __future__ import annotations
 
+import copy
 import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -198,6 +199,16 @@ def prepare_dataset(
 
     full_dataset = ConcatDataset(all_datasets) if len(all_datasets) > 1 else all_datasets[0]
 
+    # Validation reads the same arrays through shallow copies with augmentation
+    # off, so an unchanged model scores the same on every pass. Clearing the
+    # flag on the shared datasets would switch training augmentation off too.
+    eval_datasets: List = []
+    for ds in all_datasets:
+        eval_ds = copy.copy(ds)
+        eval_ds.augment = False
+        eval_datasets.append(eval_ds)
+    eval_dataset = ConcatDataset(eval_datasets) if len(eval_datasets) > 1 else eval_datasets[0]
+
     # ── Auto-detect num_nodes and in_channels from data shape ─────────
     # When layout='auto' (default), the model needs to know V and C before
     # it can build the fully-connected graph.  Read them from the first dataset
@@ -248,11 +259,12 @@ def prepare_dataset(
             n_total, val_split,
         )
         train_ds = full_dataset
-        val_ds   = full_dataset
+        val_ds   = eval_dataset
         n_train  = n_total
     elif n_val > 0:
         generator = torch.Generator().manual_seed(tcfg.seed)
         train_ds, val_ds = random_split(full_dataset, [n_train, n_val], generator=generator)
+        val_ds = Subset(eval_dataset, val_ds.indices)
     else:
         train_ds, val_ds = full_dataset, None
 
