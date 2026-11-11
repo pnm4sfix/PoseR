@@ -216,8 +216,8 @@ def read_classification_h5(filepath: PathLike) -> Dict:
 
     Returns:
         {individual: {behaviour: bout}}, where bout has keys classification,
-        coords, ci, start and stop. coords is (n, 3) and ci is (n,), with n
-        the number of nodes times frames in that bout.
+        coords, ci, start, stop and n_nodes. coords is (n, 3) and ci is (n,),
+        with n the number of nodes times frames in that bout.
 
     Note:
         Behaviour keys are 1-based. The on-disk table numbers behaviours from
@@ -233,20 +233,24 @@ def read_classification_h5(filepath: PathLike) -> Dict:
 
             table = f.list_nodes(ind, classname="Table")[0]
 
-            behaviours, classifications, starts, stops = [], [], [], []
+            behaviours, classifications, starts, stops, node_counts = [], [], [], [], []
             for row in table.iterrows():
                 behaviours.append(row["number"])
                 classifications.append(row["classification"])
                 starts.append(row["start"])
                 stops.append(row["stop"])
+                node_counts.append(row["n_nodes"])
 
-            for bhv, cls, start, stop in zip(behaviours, classifications, starts, stops):
+            for bhv, cls, start, stop, n_nodes in zip(
+                behaviours, classifications, starts, stops, node_counts
+            ):
                 behaviour_dict[bhv + 1] = {
                     "classification": cls.decode("utf-8") if isinstance(cls, bytes) else cls,
                     "coords": arrays[bhv][:, :3],
                     "start": int(start),
                     "stop": int(stop),
                     "ci": arrays[bhv][:, 3],
+                    "n_nodes": int(n_nodes),
                 }
 
             classification_data[int(group_name)] = behaviour_dict

@@ -115,3 +115,17 @@ def test_hdf5_bouts_are_aligned_on_the_configured_head_node(classification_h5):
     # Alignment turns the head node to point straight up at frame 0.
     assert bouts[:, 0, 0, HEAD_NODE, 0] == pytest.approx(0, abs=1e-5)
     assert (bouts[:, 1, 0, HEAD_NODE, 0] > 0).all()
+
+
+def test_hdf5_bouts_use_the_node_count_stored_in_the_file(classification_h5):
+    # config.model.num_nodes is only a default. The flat coords were reshaped
+    # with it, which fails or mixes nodes and frames for any other skeleton.
+    config = TrainingConfig(
+        data={"T": T, "T2": T}, behaviour_schema={"labels": NAMES}
+    )
+    assert config.model.num_nodes != V
+
+    train_loader, _ = prepare_dataset([classification_h5], config)
+
+    assert train_loader.dataset.dataset.data.shape == (2, 3, T, V, 1)
+    assert config.model.num_nodes == V

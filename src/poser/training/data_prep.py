@@ -136,11 +136,22 @@ def prepare_dataset(
             log.warning("Skipping %s: %s", fpath, exc)
             continue
 
+        # coords are stored flat as (V * T, 3), so only the node count the file
+        # was written with un-flattens them; config.model.num_nodes is a default.
+        n_nodes = next(
+            (
+                bout["n_nodes"]
+                for individual in classification_data.values()
+                for bout in individual.values()
+            ),
+            mcfg.num_nodes,
+        )
+
         bouts, labels = classification_data_to_bouts(
             classification_data,
             C=dcfg.C,
             T=dcfg.T,
-            V=mcfg.num_nodes,
+            V=n_nodes,
             M=dcfg.M,
             fps=dcfg.fps,
             denominator=dcfg.denominator,
