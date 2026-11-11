@@ -33,6 +33,7 @@ from qtpy.QtWidgets import (
 
 from poser.core.pose_estimation import PoseEstimator
 from poser.core.session import SessionManager, SessionEntry
+from poser.core.video import read_video
 
 
 def _parse_dlc_df(dlc_data):
@@ -375,99 +376,7 @@ class DataPanel(QWidget):
                 if vid_name not in existing:
                     _vid_loaded = False
                     try:
-                        import av           # type: ignore
-                        import dask         # type: ignore
-                        import dask.array as da  # type: ignore
-                        import imageio.v3 as iio # type: ignore
-
-                        # ── 1. Metadata only — no frame decoding yet ──────────
-                        props = iio.improps(
-                            str(entry.video_path), plugin="pyav"
-                        )
-                        n_frames = props.n_images
-                        if not n_frames:
-                            raise IOError("Could not read video metadata")
-                        # props.shape may be (H, W, C) or (N, H, W, C);
-                        # index from the end to get H and W reliably.
-                        H, W = int(props.shape[-3]), int(props.shape[-2])
-                        frame_dtype = props.dtype
-
-                        # Detect grayscale by peeking at the first frame only
-                        first = iio.imread(
-                            str(entry.video_path), index=0, plugin="pyav"
-                        )
-                        grey = (
-                            first.ndim == 3 and first.shape[2] == 3
-                            and np.array_equal(first[:, :, 0], first[:, :, 1])
-                        )
-                        frame_shape = (H, W) if grey else (H, W, 3)
-
-                        # ── 2. Chunk reader — seek once, read sequentially ────
-                        # Each dask chunk opens the file, seeks to the nearest
-                        # keyframe, then decodes forward.  Only the requested
-                        # chunk is ever in RAM.
-                        _CHUNK = 64  # frames per chunk
-
-                        def _read_chunk(
-                            path: str, start: int, count: int,
-                            h: int, w: int, grey: bool, dtype,
-                        ) -> np.ndarray:
-                            import av as _av
-                            import numpy as _np
-                            out = _np.empty(
-                                (count, h, w) if grey else (count, h, w, 3),
-                                dtype=dtype,
-                            )
-                            written = 0
-                            with _av.open(path) as cont:
-                                stream = cont.streams.video[0]
-                                fps = float(
-                                    stream.average_rate
-                                    or stream.guessed_rate
-                                    or 25.0
-                                )
-                                tb = float(stream.time_base)
-                                # seek backward to keyframe before start
-                                if start > 0:
-                                    target = int(start / fps / tb)
-                                    cont.seek(
-                                        target, stream=stream,
-                                        backward=True, any_frame=False,
-                                    )
-                                for frame in cont.decode(stream):
-                                    # Estimate frame index from pts
-                                    fi = int(
-                                        round(float(frame.pts or 0) * tb * fps)
-                                    ) if frame.pts is not None else (start + written)
-                                    if fi < start:
-                                        continue
-                                    if written >= count:
-                                        break
-                                    img = frame.to_ndarray(format="rgb24")
-                                    out[written] = img[:, :, 0] if grey else img
-                                    written += 1
-                            # pad with zeros if video ended early
-                            return out
-
-                        # ── 3. Assemble lazy dask array ───────────────────────
-                        _path = str(entry.video_path)
-                        chunks = []
-                        for start in range(0, n_frames, _CHUNK):
-                            count = min(_CHUNK, n_frames - start)
-                            cshape = (
-                                (count, H, W) if grey else (count, H, W, 3)
-                            )
-                            chunks.append(
-                                da.from_delayed(
-                                    dask.delayed(_read_chunk)(
-                                        _path, start, count,
-                                        H, W, grey, frame_dtype,
-                                    ),
-                                    shape=cshape,
-                                    dtype=frame_dtype,
-                                )
-                            )
-                        vid_arr = da.concatenate(chunks, axis=0)
+                        vid_arr = read_video(entry.video_path)
                         is_rgb = vid_arr.ndim == 4
                         self._viewer.add_image(vid_arr, name=vid_name, rgb=is_rgb)
                         _vid_loaded = True
