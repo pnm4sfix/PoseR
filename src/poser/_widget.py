@@ -2286,10 +2286,11 @@ class PoserWidget(Container):
                 dim=1
             )
 
-            points_list.append(pts)
-            conf_list.append(conf_flat)
-            ind_list.append(ind_flat)
-            node_list.append(node_flat)
+            # Off the inference device now, or a whole video of them stays on it.
+            points_list.append(pts.cpu())
+            conf_list.append(conf_flat.cpu())
+            ind_list.append(ind_flat.cpu())
+            node_list.append(node_flat.cpu())
 
 
         # ---- SAFETY CHECK ----
@@ -2511,10 +2512,10 @@ class PoserWidget(Container):
             )
 
             buf = video_buffers[vid_path]
-            buf["points"].append(pts)
-            buf["conf"].append(conf_flat)
-            buf["ind"].append(ind_flat)
-            buf["node"].append(node_flat)
+            buf["points"].append(pts.cpu())
+            buf["conf"].append(conf_flat.cpu())
+            buf["ind"].append(ind_flat.cpu())
+            buf["node"].append(node_flat.cpu())
 
         # ---- Finalize per video ----
         for vid_path, buf in video_buffers.items():
