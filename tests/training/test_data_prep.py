@@ -162,3 +162,18 @@ def test_training_inputs_are_still_augmented(pose_npy):
     train_ds = train_loader.dataset
 
     assert not torch.equal(train_ds[0][0], train_ds[0][0])
+
+
+def test_hdf5_training_bouts_are_augmented(classification_h5):
+    # PoseDataset augments inside its transform branch, and the HDF5 dataset
+    # was built without a transform list, so the switches did nothing for it.
+    config = TrainingConfig(
+        data={"T": T, "T2": T},
+        model={"num_nodes": V},
+        behaviour_schema={"labels": NAMES},
+    )
+    train_loader, val_loader = prepare_dataset([classification_h5], config)
+    train_ds, val_ds = train_loader.dataset, val_loader.dataset
+
+    assert not torch.equal(train_ds[0][0], train_ds[0][0])
+    assert torch.equal(val_ds[0][0], val_ds[0][0])

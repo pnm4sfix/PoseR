@@ -184,6 +184,9 @@ def prepare_dataset(
         hdf5_ds = PoseDataset(
             data=X,
             labels=y,
+            # The bouts are already centred, aligned and padded. An empty list
+            # repeats none of that but lets PoseDataset reach its augmentation.
+            transform=[],
             augmentation=aug_flags,
             num_class=mcfg.num_class,
             T=dcfg.T2,
