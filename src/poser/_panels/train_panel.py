@@ -225,7 +225,7 @@ class TrainPanel(QWidget):
             self._update_file_label()
 
     def _on_use_session_files(self) -> None:
-        done = [e.pose_path for e in self._session.entries if e.status == "done"]
+        done = [Path(e.pose_path) for e in self._session.entries if e.status == "done"]
         if not done:
             QMessageBox.information(self, "No done files",
                                     "Mark files as 'done' in the Data panel first.")
