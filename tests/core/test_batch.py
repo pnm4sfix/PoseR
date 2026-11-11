@@ -12,6 +12,9 @@ from __future__ import annotations
 import csv
 import sys
 
+import numpy as np
+
+from poser.core import batch
 from poser.core.batch import BatchJob
 
 MANIFEST_COLUMNS = ["pose_file", "video_file", "output", "status", "error"]
@@ -134,3 +137,62 @@ def test_results_carry_the_input_paths(tmp_path):
     results = BatchJob(pose_files=[pose], output_dir=str(tmp_path)).run()
     assert results[0].pose_path == pose
     assert results[0].video_path == ""
+
+
+class _StubEstimator:
+    """Stands in for PoseEstimator, so no video is decoded and no model loads."""
+
+    def input_load(self, path):
+        return 2
+
+    def model_load(self, path, device):
+        pass
+
+    def iter_keypoints(self, mode, max_individuals=1):
+        return iter(())
+
+    def coords_from_keypoints(self, records):
+        zeros = np.zeros((3, 2))
+        return {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
+
+
+def test_pose_estimation_writes_coords_under_output_dir(tmp_path, monkeypatch):
+    # They used to land beside the video whatever output_dir said.
+    monkeypatch.setattr(batch, "PoseEstimator", _StubEstimator)
+    videos = tmp_path / "videos"
+    videos.mkdir()
+    output_dir = tmp_path / "out"
+    results = BatchJob(
+        video_files=[videos / "rec.avi"],
+        mode="pose_estimation",
+        output_dir=output_dir,
+    ).run()
+    assert results[0].status == "ok"
+    assert results[0].output_path == str(output_dir / "rec.avi_poser_coords.h5")
+    assert (output_dir / "rec.avi_poser_coords.h5").exists()
+    assert list(videos.iterdir()) == []
+
+
+def test_pose_estimation_writes_beside_the_video_without_output_dir(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(batch, "PoseEstimator", _StubEstimator)
+    video = tmp_path / "videos" / "rec.avi"
+    video.parent.mkdir()
+    results = BatchJob(video_files=[video], mode="pose_estimation").run()
+    assert results[0].output_path == str(video) + "_poser_coords.h5"
+    assert (video.parent / "rec.avi_poser_coords.h5").exists()
+
+
+def test_pose_estimation_does_not_overwrite_a_same_named_video(tmp_path, monkeypatch):
+    # Two recordings called rec.avi in different folders map to one file under
+    # output_dir, so the second would silently replace the first.
+    monkeypatch.setattr(batch, "PoseEstimator", _StubEstimator)
+    videos = [tmp_path / "a" / "rec.avi", tmp_path / "b" / "rec.avi"]
+    for video in videos:
+        video.parent.mkdir()
+    results = BatchJob(
+        video_files=videos, mode="pose_estimation", output_dir=tmp_path / "out"
+    ).run()
+    assert [r.status for r in results] == ["ok", "error"]
+    assert "rec.avi" in results[1].error
