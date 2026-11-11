@@ -758,14 +758,12 @@ class PoserWidget(Container):
         self.viewer1d.add_line(
             np.c_[t, self.gauss_filtered],
             color="magenta",
-            label="Movement",
             name="Movement",
         )
         thresh = np.median(self.gauss_filtered) + self.threshold
         self.viewer1d.add_line(
             np.c_[[0, self.gauss_filtered.shape[0]], [thresh, thresh]],
             color="cyan",
-            label="Movement threshold",
             name="Threshold",
         )
         self.viewer1d.reset_view()
