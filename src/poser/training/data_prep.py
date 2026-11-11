@@ -55,8 +55,9 @@ def prepare_dataset(
     is created per file with ``preprocess_frame=True`` so that windowing,
     centering, alignment, and padding all happen lazily inside
     ``__getitem__``.  Frames near video boundaries are reflect-padded rather
-    than zero-padded.  A :class:`torch.utils.data.ConcatDataset` is used to
-    combine multiple files without ever loading them all into memory.
+    than zero-padded.  Each recording is read into memory in full and kept
+    there as float32, so memory use grows with the total number of frames.
+    A :class:`torch.utils.data.ConcatDataset` combines the per-file datasets.
 
     **HDF5 legacy path** (``*.h5 / *.hdf5``): bouts are pre-extracted via
     ``classification_data_to_bouts`` and concatenated, then wrapped in a
