@@ -7,7 +7,8 @@ import pytest
 import torch
 
 import poser.models  # noqa: F401  registers the built-in architectures
-from poser.models.registry import load_model
+from poser.models.base import BasePoseModel
+from poser.models.registry import _registry, load_model
 from poser.models.st_gcn_aaai18_pylightning_3block import ST_GCN_18
 
 C = 3
@@ -73,3 +74,14 @@ def test_load_model_loads_a_skeleton_with_no_named_layout(tmp_path):
     torch.testing.assert_close(model.state_dict()["A"], saved.state_dict()["A"])
     bouts = torch.zeros(2, C, 20, 7, 1)  # (N, C, T, V, M)
     assert model.eval()(bouts).shape == (2, NUM_CLASS)
+
+
+def test_arch_info_describes_a_built_in_without_model_metadata():
+    # ST_GCN_18 is a plain LightningModule and declares no MODEL_VERSION,
+    # which made `poser model list` raise AttributeError.
+    info = _registry.arch_info("st_gcn_3block")
+
+    assert info["name"] == "st_gcn_3block"
+    assert info["class"] == "ST_GCN_18"
+    assert info["model_version"] == BasePoseModel.MODEL_VERSION
+    assert info["supported_input_shape"] is None

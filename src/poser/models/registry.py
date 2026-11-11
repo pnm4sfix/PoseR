@@ -98,12 +98,18 @@ class _ModelRegistry:
             raise KeyError(f"Architecture '{name}' not registered.")
         entry = self._archs[key]
         cls: _ArchClass = entry["class"]
+        # register_model accepts any class: the built-in ST_GCN_18 is a plain
+        # LightningModule, so it carries none of the BasePoseModel metadata.
         return {
             "name": key,
             "class": cls.__qualname__,
             "description": entry["description"],
-            "model_version": cls.MODEL_VERSION,
-            "supported_input_shape": cls.SUPPORTED_INPUT_SHAPE,
+            "model_version": getattr(
+                cls, "MODEL_VERSION", BasePoseModel.MODEL_VERSION
+            ),
+            "supported_input_shape": getattr(
+                cls, "SUPPORTED_INPUT_SHAPE", BasePoseModel.SUPPORTED_INPUT_SHAPE
+            ),
         }
 
     def scan_directory(self, directory: str | Path) -> List[Path]:
