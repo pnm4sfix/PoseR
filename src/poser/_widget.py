@@ -2100,7 +2100,7 @@ class PoserWidget(Container):
 
     def read_coords(self, h5_file):
         """Reads coordinates from DLC files (h5 and csv). Optional data cleaning."""
-        if "poser" in str(h5_file):
+        if "poser" in os.path.basename(str(h5_file)):
             self.read_poser_coords_file(h5_file)
 
         else:
