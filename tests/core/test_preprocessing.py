@@ -6,7 +6,11 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from poser.core.preprocessing import align, preprocess_bouts
+from poser.core.preprocessing import (
+    align,
+    classification_data_to_bouts,
+    preprocess_bouts,
+)
 
 V = 5
 T = 400
@@ -133,3 +137,38 @@ def test_xy_only_output_has_no_confidence_channel(egocentric, ci_frame):
     )
     assert xy.shape == (1, 2, 100, V, 1)
     np.testing.assert_array_equal(xy, xyc[:, :2])
+
+
+def _classification_data(egocentric: np.ndarray, n_frames: int) -> dict:
+    """One labelled bout of n_frames, in the layout read_classification_h5 returns."""
+    return {
+        1: {
+            1: {
+                "classification": "left",
+                "coords": egocentric[:, :n_frames].reshape(-1, 3),
+                "ci": np.full(V * n_frames, 0.95),
+            }
+        }
+    }
+
+
+def test_classification_crop_is_T_frames_from_the_middle(egocentric):
+    # DataConfig defaults. The crop used to be int(fps/denominator) frames
+    # either side of the middle, which is 0 here, so every bout came back empty.
+    bouts, labels = classification_data_to_bouts(
+        _classification_data(egocentric, 300),
+        C=3, T=100, V=V, M=1, fps=25, denominator=100.0, T2=100,
+    )
+    assert bouts.shape == (1, 3, 100, V, 1)
+    np.testing.assert_allclose(bouts[0, 0, :, :, 0], egocentric[:, 100:200, 2].T)
+    assert list(labels) == ["left"]
+
+
+def test_classification_crop_is_clamped_to_a_short_bout(egocentric):
+    # A bout shorter than T gave a negative start, which sliced the last
+    # frames of the bout instead of all of it.
+    bouts, _ = classification_data_to_bouts(
+        _classification_data(egocentric, 60),
+        C=3, T=100, V=V, M=1, fps=400, denominator=8, T2=100,
+    )
+    np.testing.assert_allclose(bouts[0, 0, :60, :, 0], egocentric[:, :60, 2].T)

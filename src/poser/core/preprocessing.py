@@ -224,7 +224,8 @@ def classification_data_to_bouts(
     C, T, V, M:
         Data dimensions (channels, time, vertices, individuals).
     fps, denominator:
-        Used to compute window size.
+        Used only when T is None: the padded length is then
+        ``2 * int(fps / denominator)`` unless T2 is given.
     center:
         If not None, centre all bouts on this node.
     T2:
@@ -264,15 +265,15 @@ def classification_data_to_bouts(
             coords_rs = coords.reshape(V, -1, 3)
             ci_rs = ci_raw.reshape(V, -1, 1)
 
-            # window from middle
-            mid = coords_rs.shape[1] // 2
-            half = int(fps / denominator)
-            start, end = mid - half, mid + half
-
             if T is None:
                 coords_sub = coords_rs
                 ci_sub = ci_rs
             else:
+                # T frames from the middle, clamped to the bout: a negative
+                # start would slice from the far end of the array.
+                n_frames = coords_rs.shape[1]
+                start = max(0, n_frames // 2 - T // 2)
+                end = min(n_frames, start + T)
                 coords_sub = coords_rs[:, start:end]
                 ci_sub = ci_rs[:, start:end]
 
