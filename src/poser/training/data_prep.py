@@ -158,7 +158,15 @@ def prepare_dataset(
 
     if hdf5_bouts:
         X = np.concatenate(hdf5_bouts, axis=0)   # (N, C, T2, V, M)
-        y = np.concatenate(hdf5_labels, axis=0)  # (N,)
+        names = np.concatenate(hdf5_labels, axis=0).tolist()  # (N,) behaviour names
+        index_of = {name: idx for idx, name in config.behaviour_schema.labels.items()}
+        unknown = sorted(set(names) - set(index_of))
+        if unknown:
+            raise ValueError(
+                f"Behaviour names {unknown} in the HDF5 files are not in "
+                f"config.behaviour_schema.labels ({sorted(index_of)})."
+            )
+        y = np.array([index_of[name] for name in names], dtype=np.int64)  # (N,)
         log.info("HDF5 bouts: %d  |  classes: %s", len(X), np.unique(y))
         hdf5_ds = PoseDataset(
             data=X,
