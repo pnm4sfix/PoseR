@@ -57,6 +57,7 @@ from scipy.signal import find_peaks
 from torch.utils.data import DataLoader
 
 from ._loader import HyperParams, ZebData
+from .core.video import read_video
 from .models import c3d, st_gcn_aaai18_pylightning_3block
 
 
@@ -65,12 +66,6 @@ try:
 except:
     print("pygmtools not installed")
 import networkx as nx
-
-try:
-    from napari_video.napari_video import VideoReaderNP
-except:
-    print("no module named napari_video. pip install napari_video")
-    import time
 
 try:
     pass
@@ -529,7 +524,8 @@ class PoserWidget(Container):
                     if self.detection_backbone == "YOLO11":
                         h = self.im_subset.data[self.frame].shape[0]
                         results = self.model(
-                            self.im_subset.data[self.frame], imgsz=h - (h % 32)
+                            np.asarray(self.im_subset.data[self.frame]),
+                            imgsz=h - (h % 32),
                         )
                         for result in results:
                             names = result.names
@@ -556,7 +552,9 @@ class PoserWidget(Container):
                                     shape_data.append(new_shape)
 
                     elif self.detection_backbone == "YOLOv5":
-                        results = self.model(self.im_subset.data[self.frame])
+                        results = self.model(
+                            np.asarray(self.im_subset.data[self.frame])
+                        )
                         result_df = results.pandas().xyxy[0]
                         print(result_df)
 
@@ -604,7 +602,7 @@ class PoserWidget(Container):
                         break
 
                 if exists == False:
-                    im = self.im_subset.data[self.frame]
+                    im = np.asarray(self.im_subset.data[self.frame])
 
                     person_results = []
 
@@ -1295,7 +1293,7 @@ class PoserWidget(Container):
             # vid = pims.open(str(self.video_file))
             self.fps = self.config_data["data_cfg"]["fps"]
             try:
-                self.im = VideoReaderNP(str(self.video_file))
+                self.im = read_video(self.video_file)
             except:
                 print("Couldn't read video file")
                 self.im = None
@@ -2369,7 +2367,7 @@ class PoserWidget(Container):
                                 }
 
                                 person_results.append(bbox_data)
-                                im = self.im_subset.data[frame]
+                                im = np.asarray(self.im_subset.data[frame])
 
                     if len(person_results) > 0:
                         pose_results, _ = inference_top_down_pose_model(
