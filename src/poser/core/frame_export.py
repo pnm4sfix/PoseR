@@ -130,7 +130,12 @@ def save_frame_as_yolo(
     return img_path, lbl_path
 
 
-def build_yolo_data_yaml(output_dir: str, num_keypoints: int, num_classes: int = 1) -> str:
+def build_yolo_data_yaml(
+    output_dir: str,
+    num_keypoints: int,
+    num_classes: int = 1,
+    val_dir: Optional[Union[str, Path]] = None,
+) -> str:
     """Write a minimal YOLO-pose ``data.yaml`` for ultralytics training.
 
     Parameters
@@ -141,6 +146,9 @@ def build_yolo_data_yaml(output_dir: str, num_keypoints: int, num_classes: int =
         Number of skeleton keypoints.
     num_classes:
         Number of object classes (default 1).
+    val_dir:
+        Validation image directory.  When ``None``, the training images are
+        reused for validation.
 
     Returns
     -------
@@ -153,7 +161,7 @@ def build_yolo_data_yaml(output_dir: str, num_keypoints: int, num_classes: int =
     data = {
         "path": os.path.abspath(output_dir),
         "train": "images",
-        "val": "images",
+        "val": os.path.abspath(val_dir) if val_dir is not None else "images",
         "kpt_shape": [num_keypoints, 3],
         "nc": num_classes,
         "names": {i: f"class{i}" for i in range(num_classes)},
