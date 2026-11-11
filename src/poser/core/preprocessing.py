@@ -184,9 +184,11 @@ def preprocess_bouts(
         # A recording shorter than the window leaves fewer frames than
         # bouts_raw reserves, so tile them to length first.
         bouts_raw[n, :2] = pad_bout(bhv, T_effective)
-        bouts_raw[n, 2] = (
-            pad_bout(ci_slice, T_effective)[0] if ci_slice.ndim >= 3 else 0
-        )
+        # C=2 is xy only, so there is no confidence channel to fill.
+        if C > 2:
+            bouts_raw[n, 2] = (
+                pad_bout(ci_slice, T_effective)[0] if ci_slice.ndim >= 3 else 0
+            )
 
         padded[n] = pad_bout(bouts_raw[n], T_pad)
 

@@ -119,3 +119,17 @@ def test_confidence_shorter_than_the_coordinates_is_rejected(egocentric, ci_fram
             T2=100,
             T_method="pad",
         )
+
+
+def test_xy_only_output_has_no_confidence_channel(egocentric, ci_frame):
+    # DataConfig allows C=2. Writing confidence into channel 2 of a
+    # two-channel array raised IndexError.
+    bouts = [(200, 210)]
+    xy, _ = preprocess_bouts(
+        egocentric, ci_frame, bouts, C=2, T=100, T2=100, T_method="pad"
+    )
+    xyc, _ = preprocess_bouts(
+        egocentric, ci_frame, bouts, C=3, T=100, T2=100, T_method="pad"
+    )
+    assert xy.shape == (1, 2, 100, V, 1)
+    np.testing.assert_array_equal(xy, xyc[:, :2])
