@@ -35,3 +35,22 @@ def test_finetune_yolo_generates_data_yaml_with_val_dir(tmp_path, monkeypatch):
     with open(_FakeYOLO.train_kwargs["data"]) as f:
         data = yaml.safe_load(f)
     assert data["val"] == str(val_dir)
+
+
+def test_extra_kwargs_override_named_defaults(tmp_path, monkeypatch):
+    # A key such as batch reached dict() twice, once named and once through
+    # **extra_kwargs, which raised TypeError.
+    monkeypatch.setitem(
+        sys.modules, "ultralytics", types.SimpleNamespace(YOLO=_FakeYOLO)
+    )
+
+    finetune_yolo(
+        tmp_path,
+        data_yaml=tmp_path / "data.yaml",
+        project=str(tmp_path / "project"),
+        extra_kwargs={"batch": 8, "patience": 5},
+    )
+
+    assert _FakeYOLO.train_kwargs["batch"] == 8
+    assert _FakeYOLO.train_kwargs["patience"] == 5
+    assert _FakeYOLO.train_kwargs["epochs"] == 50
