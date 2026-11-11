@@ -69,6 +69,14 @@ def decode_behaviours(
     egocentric[:, :, 0] = np.arange(n_frames)
     egocentric[:, :, 1] = y if y.ndim == 2 else y.reshape(n_nodes, n_frames)
     egocentric[:, :, 2] = x if x.ndim == 2 else x.reshape(n_nodes, n_frames)
+    if data_cfg.center_data:
+        # preprocess_bouts mirrors and rotates about the origin but does not
+        # centre, and decoders are trained on bouts centred on this node.
+        # NaN marks a missing detection: zeroed first, as the widget did, or
+        # one at the centre node would blank every node of its frame.
+        egocentric = np.nan_to_num(egocentric)
+        center = egocentric[data_cfg.center_node, :, 1:]
+        egocentric[:, :, 1:] = egocentric[:, :, 1:] - center[None, :, :]
 
     padded, _ = preprocess_bouts(
         egocentric,
