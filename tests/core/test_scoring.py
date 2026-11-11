@@ -115,6 +115,21 @@ def test_checkpoint_names_only_when_stored_as_names():
     assert class_names_from_checkpoint({}) is None
 
 
+def test_checkpoint_resolves_numeric_labels_to_ignore():
+    # `poser model repair` copies labels_to_ignore from the config unchanged,
+    # numbers included. They used to be dropped, so the class was scored.
+    repaired = {
+        "hyper_parameters": {
+            "data_cfg": {
+                "label_dict": {0: "forward", 1: "left", 2: "right"},
+                "labels_to_ignore": ["forward", 2],
+            }
+        }
+    }
+    classes = class_names_from_checkpoint(repaired)
+    assert classes.ignored == frozenset({"forward", "right"})
+
+
 def test_save_score_csv_writes_metrics_and_matrix(tmp_path):
     predictions = np.array([0] * 10 + [2] * 10)
     bouts = [LabelledBout(0, 10, "forward"), LabelledBout(10, 20, "right")]

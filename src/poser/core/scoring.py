@@ -64,11 +64,12 @@ def class_names_from_checkpoint(checkpoint: dict) -> ClassNames | None:
     if not label_dict or not all(isinstance(n, str) for n in label_dict.values()):
         return None
     names = {int(index): name for index, name in label_dict.items()}
-    ignored = {
-        str(label)
-        for label in data_cfg.get("labels_to_ignore") or []
-        if str(label) in names.values()
-    }
+    ignored = set()
+    for label in data_cfg.get("labels_to_ignore") or []:
+        if str(label) in names.values():
+            ignored.add(str(label))
+        elif str(label).isdigit() and int(label) in names:
+            ignored.add(names[int(label)])
     return ClassNames(names=names, ignored=frozenset(ignored))
 
 
