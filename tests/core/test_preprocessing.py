@@ -172,3 +172,17 @@ def test_classification_crop_is_clamped_to_a_short_bout(egocentric):
         C=3, T=100, V=V, M=1, fps=400, denominator=8, T2=100,
     )
     np.testing.assert_allclose(bouts[0, 0, :60, :, 0], egocentric[:, :60, 2].T)
+
+
+def test_classification_bouts_keep_only_the_requested_channels(egocentric):
+    # C=2 means xy without confidence. The bout is always built with three
+    # channels, so storing it whole into a two-channel array used to raise.
+    data = _classification_data(egocentric, 20)
+    kwargs = dict(T=10, V=V, M=1, fps=25, denominator=5.0, T2=16)
+
+    xy, labels = classification_data_to_bouts(data, C=2, **kwargs)
+    xyc, _ = classification_data_to_bouts(data, C=3, **kwargs)
+
+    assert xy.shape == (1, 2, 16, V, 1)
+    np.testing.assert_array_equal(xy, xyc[:, :2])
+    assert list(labels) == ["left"]

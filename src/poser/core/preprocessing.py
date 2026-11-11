@@ -297,7 +297,7 @@ def classification_data_to_bouts(
                 new_bout = align(new_bout, head_node)
 
             new_bout = pad_bout(new_bout, T_pad)
-            bout_data[bout_idx] = new_bout
+            bout_data[bout_idx] = new_bout[:C]
             bout_labels.append(info["classification"])
 
         all_bouts.append(bout_data)
