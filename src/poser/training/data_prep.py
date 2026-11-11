@@ -144,9 +144,10 @@ def prepare_dataset(
             M=dcfg.M,
             fps=dcfg.fps,
             denominator=dcfg.denominator,
-            center=dcfg.center_data,
+            center=dcfg.center_node if dcfg.center_data else None,
             T2=dcfg.T2,
             align_data=dcfg.align_data,
+            head_node=dcfg.head_node,
         )
         if bouts is not None and len(bouts) > 0:
             hdf5_bouts.append(bouts)

@@ -4,12 +4,56 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import tables as tb
 
+from poser.core.io import save_to_h5
 from poser.training import data_prep
 from poser.training.config import TrainingConfig
 from poser.training.data_prep import prepare_dataset
 
 NAMES = {0: "swim", 1: "turn"}
+V = 5
+T = 10
+CENTER_NODE = 3
+HEAD_NODE = 2
+
+
+class Behaviour(tb.IsDescription):
+    """The label table of a classification .h5, mirroring _widget.Behaviour."""
+
+    number = tb.Int32Col()
+    classification = tb.StringCol(16)
+    n_nodes = tb.Int32Col()
+    start = tb.Int32Col()
+    stop = tb.Int32Col()
+
+
+@pytest.fixture
+def classification_h5(tmp_path) -> str:
+    """A classification .h5 with one swim and one turn bout, T frames of V nodes."""
+    rng = np.random.default_rng(20260916)
+    bouts = {
+        behaviour: {
+            "classification": name,
+            "coords": rng.normal(5, 1, (V * T, 3)),
+            "ci": np.full(V * T, 0.9),
+            "start": behaviour * 25,
+            "stop": behaviour * 25 + T,
+        }
+        for behaviour, name in NAMES.items()
+    }
+    return save_to_h5({1: bouts}, tmp_path / "rec.avi", V, Behaviour)
+
+
+def _hdf5_bouts(path: str, **data) -> np.ndarray:
+    """The (N, C, T, V, M) bouts prepare_dataset builds from an HDF5 file."""
+    config = TrainingConfig(
+        data={"T": T, "T2": T, **data},
+        model={"num_nodes": V},
+        behaviour_schema={"labels": NAMES},
+    )
+    train_loader, _ = prepare_dataset([path], config)
+    return train_loader.dataset.dataset.data
 
 
 @pytest.fixture
@@ -41,3 +85,33 @@ def test_hdf5_behaviour_name_missing_from_schema_is_rejected(named_bouts):
 
     with pytest.raises(ValueError, match=r"\['turn'\].*behaviour_schema"):
         prepare_dataset(["bouts.h5"], config)
+
+
+def test_hdf5_bouts_are_centred_on_the_configured_node(classification_h5):
+    # The on/off flag center_data was passed where a node index is expected,
+    # which raised ValueError for every HDF5 file.
+    bouts = _hdf5_bouts(
+        classification_h5, center_data=True, center_node=CENTER_NODE, align_data=False
+    )
+    assert np.abs(bouts[:, 0:2, :, CENTER_NODE]).max() == 0
+    assert np.abs(bouts[:, 0:2, :, 0]).max() > 0
+
+
+def test_hdf5_bouts_are_not_centred_when_centring_is_off(classification_h5):
+    bouts = _hdf5_bouts(
+        classification_h5, center_data=False, center_node=CENTER_NODE, align_data=False
+    )
+    assert np.abs(bouts[:, 0:2, :, CENTER_NODE]).min() > 0
+
+
+def test_hdf5_bouts_are_aligned_on_the_configured_head_node(classification_h5):
+    bouts = _hdf5_bouts(
+        classification_h5,
+        center_data=True,
+        center_node=CENTER_NODE,
+        align_data=True,
+        head_node=HEAD_NODE,
+    )
+    # Alignment turns the head node to point straight up at frame 0.
+    assert bouts[:, 0, 0, HEAD_NODE, 0] == pytest.approx(0, abs=1e-5)
+    assert (bouts[:, 1, 0, HEAD_NODE, 0] > 0).all()
