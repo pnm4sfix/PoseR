@@ -91,3 +91,31 @@ def test_align_rotates_each_individual_by_its_own_heading():
     np.testing.assert_array_equal(aligned[2], bout[2])
     for m in range(2):
         np.testing.assert_allclose(aligned[..., m : m + 1], align(bout[..., m : m + 1]))
+
+
+def test_recording_shorter_than_the_window_is_tiled_to_length(egocentric, ci_frame):
+    # 60 frames cannot fill a 100-frame window. Assigning the short slice to
+    # the fixed-size raw array used to raise a broadcasting ValueError.
+    short = egocentric[:, :60]
+    padded, _ = preprocess_bouts(
+        short, ci_frame.iloc[:, :60], [(5, 10)], C=3, T=100, T2=100, T_method="pad"
+    )
+    assert padded.shape == (1, 3, 100, V, 1)
+    # Frames past the end of the recording repeat it from the start.
+    np.testing.assert_array_equal(padded[0, :, 60:], padded[0, :, :40])
+    np.testing.assert_array_equal(padded[0, 2], 0.95)
+
+
+def test_confidence_shorter_than_the_coordinates_is_rejected(egocentric, ci_frame):
+    # Tiling is for a recording that is short. A confidence array that stops
+    # before the bout is a mismatch between the two inputs, not a short clip.
+    with pytest.raises(ValueError, match="ci has 150 frames"):
+        preprocess_bouts(
+            egocentric,
+            ci_frame.iloc[:, :150],
+            [(300, 310)],
+            C=3,
+            T=100,
+            T2=100,
+            T_method="pad",
+        )

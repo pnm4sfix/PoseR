@@ -159,6 +159,12 @@ def preprocess_bouts(
 
         bhv = points[:, new_start:new_end]
         ci_slice = cis[:, new_start:new_end]
+        if ci_slice.shape[1] != bhv.shape[1]:
+            raise ValueError(
+                f"ci has {cis.shape[1]} frames but the coordinates have "
+                f"{n_frames}, so the bout at frames {bhv_start} to {bhv_end} "
+                "cannot be given its confidence."
+            )
         ci_slice = ci_slice.reshape((*ci_slice.shape, 1)) if ci_slice.ndim == 3 else ci_slice
 
         # swap x/y channels (widget convention matches here)
@@ -175,8 +181,12 @@ def preprocess_bouts(
         # align to heading
         bhv = align(bhv, head_node)
 
-        bouts_raw[n, :2] = bhv
-        bouts_raw[n, 2] = ci_slice[0] if ci_slice.ndim >= 3 else 0
+        # A recording shorter than the window leaves fewer frames than
+        # bouts_raw reserves, so tile them to length first.
+        bouts_raw[n, :2] = pad_bout(bhv, T_effective)
+        bouts_raw[n, 2] = (
+            pad_bout(ci_slice, T_effective)[0] if ci_slice.ndim >= 3 else 0
+        )
 
         padded[n] = pad_bout(bouts_raw[n], T_pad)
 
