@@ -2296,9 +2296,15 @@ class PoserWidget(Container):
         if len(points_list) > 0:
 
             points = torch.cat(points_list, dim=0).cpu().numpy()
-            point_properties["confidence"] = torch.cat(conf_list).cpu().numpy()
-            point_properties["ind"] = torch.cat(ind_list).cpu().numpy()
-            point_properties["node"] = torch.cat(node_list).cpu().numpy()
+            point_properties["confidence"] = np.append(
+                point_properties["confidence"], torch.cat(conf_list).cpu().numpy()
+            )
+            point_properties["ind"] = np.append(
+                point_properties["ind"], torch.cat(ind_list).cpu().numpy()
+            )
+            point_properties["node"] = np.append(
+                point_properties["node"], torch.cat(node_list).cpu().numpy()
+            )
 
             self.points_layer.data = np.concatenate(
                 (self.points_layer.data, points)
