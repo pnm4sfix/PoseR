@@ -179,11 +179,20 @@ class AnnotationPanel(QWidget):
     # ------------------------------------------------------------------
 
     def load_bouts(self, bouts: List[dict]) -> None:
-        """Populate the bout list from detected bouts."""
+        """Populate the bout list from detected bouts and select one.
+
+        Selects the bout selected before if one with its start and end is listed,
+        else the first unlabelled bout, else the first; the viewer does not move.
+        """
+        selected = self._bout_list.currentItem()
+        data = selected.data(Qt.UserRole) if selected is not None else None
+        # PySide returns a stored tuple as a list; the spans compared below are tuples.
+        previous = tuple(data) if data is not None else None
         log.debug(
-            "load_bouts received %d bouts; label map %s",
+            "load_bouts received %d bouts; label map %s; selected before: %s",
             len(bouts),
             self._behaviour_labels,
+            previous,
         )
         self._current_bouts = bouts
         self._bout_list.clear()
@@ -193,6 +202,7 @@ class AnnotationPanel(QWidget):
             item = QListWidgetItem(
                 f"Bout {i+1:03d}  frames {b['start']}–{b['end']}  [{label_name}]"
             )
+            item.setData(Qt.UserRole, (b["start"], b["end"]))
             self._bout_list.addItem(item)
         self._update_stats()
         labelled = sum(1 for b in bouts if b.get("label", -1) >= 0)
@@ -210,6 +220,20 @@ class AnnotationPanel(QWidget):
                 unknown,
                 self._behaviour_labels,
             )
+        spans = [(b["start"], b["end"]) for b in bouts]
+        if previous in spans:
+            row = spans.index(previous)
+        else:
+            row = next((i for i, b in enumerate(bouts) if b.get("label", -1) < 0), 0)
+        if bouts:
+            # With signals blocked this selection does not move the viewer, which
+            # only a user's selection should do.
+            self._bout_list.blockSignals(True)
+            self._bout_list.setCurrentRow(row)
+            self._bout_list.blockSignals(False)
+            self._on_bout_selected(row, seek=False)
+        else:
+            self._current_label_display.setText("Current: —")
         self._emit_annotations()
     def set_behaviour_labels(self, labels: Dict[int, str]) -> None:
         """Update label schema and rebuild buttons."""
@@ -275,7 +299,7 @@ class AnnotationPanel(QWidget):
             self._behaviour_labels,
         )
 
-    def _on_bout_selected(self, row: int) -> None:
+    def _on_bout_selected(self, row: int, seek: bool = True) -> None:
         if row < 0 or row >= len(self._current_bouts):
             log.debug(
                 "No bout selected (row %d of %d bouts)", row, len(self._current_bouts)
@@ -283,23 +307,25 @@ class AnnotationPanel(QWidget):
             return
         bout = self._current_bouts[row]
         # Seek viewer to start of bout
-        try:
-            self._viewer.dims.set_point(0, bout["start"])
-        except Exception:
-            log.debug(
-                "Cannot move the viewer to bout %d; it stays on its current frame",
-                row + 1,
-                exc_info=True,
-            )
+        if seek:
+            try:
+                self._viewer.dims.set_point(0, bout["start"])
+            except Exception:
+                log.debug(
+                    "Cannot move the viewer to bout %d; it stays on its current frame",
+                    row + 1,
+                    exc_info=True,
+                )
         label_idx = bout.get("label", -1)
         label_name = self._behaviour_labels.get(label_idx, "unlabelled")
         log.debug(
-            "Bout %d selected: frames %s-%s, label %s (%s)",
+            "Bout %d selected: frames %s-%s, label %s (%s); move viewer: %s",
             row + 1,
             bout.get("start"),
             bout.get("end"),
             label_idx,
             label_name,
+            seek,
         )
         self._current_label_display.setText(f"Current: [{label_idx}] {label_name}")
 
@@ -325,6 +351,7 @@ class AnnotationPanel(QWidget):
                 row,
                 len(self._current_bouts),
             )
+            self._current_label_display.setText("Select a bout first")
             return
         btn = self.sender()
         label_idx = btn.property("label_idx")

@@ -1,4 +1,4 @@
-"""Stand-ins shared by the panel tests, which run without a QApplication."""
+"""Stand-ins shared by the panel tests, most of which run without a QApplication."""
 
 from __future__ import annotations
 

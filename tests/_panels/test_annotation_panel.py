@@ -157,13 +157,36 @@ def test_label_click_with_no_bout_selected_logs_a_warning(tmp_path, caplog):
     assert panel._current_bouts == [{"start": 2, "end": 5}]
 
 
+def test_label_click_with_no_bout_selected_says_to_select_one(tmp_path, monkeypatch):
+    # The click did nothing visible, so it looked lost.
+    monkeypatch.setattr(annotation_panel, "QMessageBox", SimpleNamespace())  # no dialog
+    panel = _labelling_panel(tmp_path, row=-1, bouts=[])
+    shown = []
+    panel._current_label_display = SimpleNamespace(setText=shown.append)
+
+    AnnotationPanel._on_assign_label(panel)
+
+    assert shown == ["Select a bout first"]
+
+
 def test_loaded_bouts_are_logged_with_their_label_counts(
     tmp_path, monkeypatch, caplog
 ):
     caplog.set_level(logging.DEBUG, logger="poser")
-    monkeypatch.setattr(annotation_panel, "QListWidgetItem", str)
+    monkeypatch.setattr(
+        annotation_panel,
+        "QListWidgetItem",
+        lambda text: SimpleNamespace(setData=lambda role, value: None),
+    )
     panel = _panel(tmp_path)  # a 10-frame recording
-    panel._bout_list = SimpleNamespace(clear=lambda: None, addItem=lambda item: None)
+    panel._bout_list = SimpleNamespace(
+        currentItem=lambda: None,
+        clear=lambda: None,
+        addItem=lambda item: None,
+        blockSignals=lambda block: None,
+        setCurrentRow=lambda row: None,
+    )
+    panel._on_bout_selected = lambda row, seek: None
     panel._update_stats = lambda: None
     panel._bouts_to_labels = lambda: AnnotationPanel._bouts_to_labels(panel)
     panel._emit_annotations = lambda: AnnotationPanel._emit_annotations(panel)
@@ -179,6 +202,56 @@ def test_loaded_bouts_are_logged_with_their_label_counts(
     )
     [short] = _messages(caplog, logging.WARNING)
     assert "Label array has 10 frames, shorter than the last bout end 14" in short
+
+
+def test_loading_selects_the_first_unlabelled_bout_and_leaves_the_viewer(qtbot):
+    # A label click right after loading did nothing: no bout was selected.
+    seeks = []
+    viewer = SimpleNamespace(
+        dims=SimpleNamespace(set_point=lambda axis, frame: seeks.append(frame))
+    )
+    panel = AnnotationPanel(viewer, session=SessionManager())
+    qtbot.addWidget(panel)
+
+    panel.load_bouts(
+        [
+            {"start": 2, "end": 5, "label": 1},
+            {"start": 6, "end": 9},
+            {"start": 10, "end": 12},
+        ]
+    )
+
+    assert panel._bout_list.currentRow() == 1
+    assert panel._current_label_display.text() == "Current: [-1] unlabelled"
+    assert seeks == []
+    panel._bout_list.setCurrentRow(2)  # as a click, an arrow key or Next does
+    assert seeks == [10]
+
+
+def test_reloading_keeps_the_selected_bout_while_it_is_listed(qtbot):
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=SessionManager())
+    qtbot.addWidget(panel)
+    bouts = [{"start": 2, "end": 5}, {"start": 10, "end": 12}]
+    panel.load_bouts(bouts)
+    panel._bout_list.setCurrentRow(1)
+
+    bouts.insert(0, {"start": 0, "end": 1})  # a bout added before the selected one
+    panel.load_bouts(bouts)
+    assert panel._bout_list.currentRow() == 2
+
+    # Detecting again makes new bouts; the one with the same frames stays selected.
+    panel.load_bouts([{"start": 0, "end": 1}, {"start": 10, "end": 12}])
+    assert panel._bout_list.currentRow() == 1
+
+    # Once it is gone and every bout is labelled, the first bout is selected.
+    panel.load_bouts(
+        [{"start": 2, "end": 5, "label": 1}, {"start": 6, "end": 9, "label": 1}]
+    )
+    assert panel._bout_list.currentRow() == 0
+
+    panel.load_bouts([])
+    assert panel._current_label_display.text() == "Current: —"
 
 
 def test_label_track_is_as_long_as_a_data_panel_recording(tmp_path):
