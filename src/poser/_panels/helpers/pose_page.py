@@ -26,7 +26,7 @@ from qtpy.QtWidgets import (
 )
 
 from poser._panels.helpers.option_help import help_button
-from poser.core.io import save_coords_to_h5
+from poser.core.io import save_coords_as
 from poser.core.pose_estimation import (
     POSER_PRETRAINED,
     YOLO_PRETRAINED,
@@ -34,7 +34,7 @@ from poser.core.pose_estimation import (
 )
 from poser.core.schemas import InferenceMode
 from poser.core.session import SessionEntry, SessionManager
-from poser.core.settings import resolve_device
+from poser.core.settings import resolve_device, resolve_output_dir
 
 log = logging.getLogger(__name__)
 
@@ -193,17 +193,37 @@ class PosePage(QWidget):
                 "No active video. Add one in the Data panel and activate it first."
             )
             return
-        self._run([entry])
+        name = f"{Path(entry.video_path).name}_poser_coords.h5"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save pose estimation as",
+            str(resolve_output_dir("pose") / name),
+            "PoseR coords (*.h5)",
+        )
+        if path:
+            self._run([entry], [Path(path)])
 
     def _on_run_all_clicked(self) -> None:
         entries = [entry for entry in self._session.entries if entry.video_path]
         if not entries:
             self._status.append("No session entries have a video.")
             return
-        self._run(entries)
+        folder = QFileDialog.getExistingDirectory(
+            self, "Save pose estimation files in", str(resolve_output_dir("pose"))
+        )
+        if folder:
+            outputs = [
+                Path(folder) / f"{Path(entry.video_path).name}_poser_coords.h5"
+                for entry in entries
+            ]
+            self._run(entries, outputs)
 
-    def _run(self, entries: list[SessionEntry]) -> None:
-        """Read every option here, on the UI thread, then start the worker."""
+    def _run(self, entries: list[SessionEntry], outputs: list[Path]) -> None:
+        """Read every option here, on the UI thread, then start the worker.
+
+        Args:
+            outputs: Where each entry's pose file is written, in entry order.
+        """
         model = self._model_combo.currentText()
         camera = self._camera_spin.value()
         options = {
@@ -216,7 +236,9 @@ class PosePage(QWidget):
         self._progress.setValue(0)
         self._status.append(f"Loading {Path(model).name} …")
 
-        worker = thread_worker(self._estimate_videos)(entries, model, camera, options)
+        worker = thread_worker(self._estimate_videos)(
+            entries, outputs, model, camera, options
+        )
         worker.yielded.connect(self._on_worker_yielded)
         worker.returned.connect(lambda: self._status.append("Pose estimation done."))
         worker.errored.connect(self._on_worker_errored)
@@ -228,6 +250,7 @@ class PosePage(QWidget):
     def _estimate_videos(
         self,
         entries: list[SessionEntry],
+        outputs: list[Path],
         model: str,
         camera: int,
         options: dict,
@@ -239,9 +262,14 @@ class PosePage(QWidget):
         """
         self._estimator.model_load(Path(model), resolve_device())
         yield f"Loaded {Path(model).name}."
-        for index, entry in enumerate(entries):
+        for index, (entry, output) in enumerate(zip(entries, outputs)):
             name = Path(entry.video_path).name
             try:
+                if output in outputs[:index]:
+                    raise ValueError(
+                        f"{output.name} is also the pose file of an earlier video "
+                        "in this run, which it would replace."
+                    )
                 n_frames = self._estimator.input_load(entry.video_path, camera)
                 yield f"[{index + 1}/{len(entries)}] {name}: {n_frames:,} frames …"
                 records = []
@@ -252,7 +280,7 @@ class PosePage(QWidget):
                 coords = self._estimator.coords_from_keypoints(records)
                 pose_path = ""
                 if coords:
-                    pose_path = save_coords_to_h5(coords, entry.video_path)
+                    pose_path = save_coords_as(coords, output)
                 yield _VideoResult(index, entry, pose_path=pose_path, coords=coords)
             except Exception as exc:
                 # One bad video must not stop the rest of the run (FR-P4).

@@ -18,6 +18,7 @@ from poser.core.io import (
     read_dlc,
     read_poser_coords,
     read_sleap,
+    save_coords_as,
     save_coords_to_h5,
     save_to_h5,
 )
@@ -188,6 +189,15 @@ def test_writers_name_output_after_the_video(tmp_path, xy_ci, classification_dat
     )
     assert coords_path.endswith("rec.avi_poser_coords.h5")
     assert cls_path.endswith("rec.avi_classification.h5")
+
+
+def test_save_coords_as_writes_exactly_the_given_path(tmp_path, xy_ci):
+    # The pose page saves wherever the user chose, under any name.
+    x, y, ci = xy_ci
+    written = save_coords_as({"1": {"x": x, "y": y, "ci": ci}}, tmp_path / "fish1.h5")
+    assert written == str(tmp_path / "fish1.h5")
+    # No poser_coords in the name, so read_coords finds the format by trying.
+    np.testing.assert_allclose(read_coords(written)["1"]["x"], x)
 
 
 # --- CTVM conversion -------------------------------------------------------
