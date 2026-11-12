@@ -33,6 +33,7 @@ from qtpy.QtWidgets import (
 
 from poser.core.pose_estimation import PoseEstimator
 from poser.core.session import SessionManager, SessionEntry
+from poser.core.settings import resolve_output_dir
 from poser.core.video import read_video
 
 
@@ -443,7 +444,10 @@ class DataPanel(QWidget):
 
     def _on_save_session(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save session", "session.json", "JSON (*.json)"
+            self,
+            "Save session",
+            str(resolve_output_dir("sessions") / "session.json"),
+            "JSON (*.json)",
         )
         if path:
             self._session.save(Path(path))
