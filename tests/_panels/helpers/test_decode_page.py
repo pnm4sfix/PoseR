@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -133,3 +134,65 @@ def test_second_file_with_the_same_predictions_name_is_refused(tmp_path):
     assert first.error is None
     assert "rec_DLC_predictions.npy" in str(second.error)
     assert page._inference.saved == [output]
+
+
+def test_saved_predictions_are_logged_with_their_full_path(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    session = SessionManager()
+    session.add(tmp_path / "rec_DLC.h5")
+    output = tmp_path / "fish1.npy"
+
+    _predict(session.entries, [output])
+
+    [record] = [r for r in caplog.records if "Saved predictions" in r.getMessage()]
+    assert record.name == "poser._panels.helpers.decode_page"
+    assert record.levelno == logging.INFO
+    assert f"rec_DLC.h5 to {output} and its .csv (2 frames)" in record.getMessage()
+
+
+def test_decoded_classes_are_logged_as_they_go_to_the_ethogram(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    session = SessionManager()
+    session.add(tmp_path / "rec_DLC.h5")
+    session.activate(0)
+    sent = []
+    page = SimpleNamespace(
+        _session=session,
+        _checkpoint=Path("decoder.ckpt"),
+        _status=SimpleNamespace(append=lambda text: None),
+        predictions_ready=SimpleNamespace(emit=lambda *args: sent.append(args)),
+    )
+    result = _FileResult(
+        session.active,
+        "rec_DLC.h5",
+        predictions=np.array([0, 1, 1]),
+        saved_path=tmp_path / "rec_DLC_predictions.npy",
+    )
+
+    DecodePage._show_file_result(page, result)
+
+    [decoded] = [r for r in caplog.records if "Decoded rec_DLC.h5" in r.getMessage()]
+    assert decoded.name == "poser._panels.helpers.decode_page"
+    assert decoded.levelno == logging.INFO
+    assert "3 frames, frames per class {0: 1, 1: 2}" in decoded.getMessage()
+    [handed_over] = [r for r in caplog.records if "Ethogram" in r.getMessage()]
+    assert handed_over.name == "poser._panels.helpers.decode_page"
+    assert handed_over.levelno == logging.INFO
+    assert len(sent) == 1
+
+
+def test_predict_without_a_decoder_logs_why_nothing_ran(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(decode_page, "QFileDialog", Dialogs(answer=""))
+    session = SessionManager()
+    session.add(tmp_path / "rec_DLC.h5")
+    session.activate(0)
+    page = _page(session)
+    page._checkpoint = None
+
+    DecodePage._on_predict_clicked(page)
+
+    [record] = [r for r in caplog.records if "no decoder checkpoint" in r.getMessage()]
+    assert record.name == "poser._panels.helpers.decode_page"
+    assert record.levelno == logging.WARNING
