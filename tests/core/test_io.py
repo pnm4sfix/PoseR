@@ -161,6 +161,16 @@ def test_classification_splits_coords_and_ci(
     np.testing.assert_allclose(bout["coords"], classification_data[1][0]["coords"])
 
 
+def test_classification_reports_the_stored_node_count(
+    tmp_path, classification_data, behaviour_schema
+):
+    written = save_to_h5(
+        classification_data, tmp_path / "rec.avi", V, behaviour_schema
+    )
+    bouts = read_classification_h5(written)[1]
+    assert [bout["n_nodes"] for bout in bouts.values()] == [V, V]
+
+
 def test_save_to_h5_raises_on_malformed_bout(tmp_path, behaviour_schema):
     incomplete = {1: {0: {"classification": "swim", "coords": np.zeros((10, 3))}}}
     with pytest.raises(BehaviourWriteError) as excinfo:

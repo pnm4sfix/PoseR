@@ -53,7 +53,7 @@ except ImportError:
 # sys.path.insert(1, "../")
 from .._loader import ZebData
 from . import ConvTemporalGraphical, Graph
-from .registry import register_model
+from .registry import describe_checkpoint, register_model
 
 # from preprocessing import PreProcessing
 
@@ -390,6 +390,35 @@ class ST_GCN_18(LightningModule):
         model._max_epochs = tcfg.max_epochs
         model._external_dataloaders = True  # skip legacy setup() file loading
         return model
+
+    @classmethod
+    def load_from(cls, path, *, map_location="cpu", **model_kwargs) -> "ST_GCN_18":
+        """Rebuild a trained decoder from its checkpoint, for load_model().
+
+        Args:
+            path: A .ckpt file written by training.
+            **model_kwargs: Ignored. The network's shape is read from the
+                weights, which cannot drift from them, and several released
+                decoders saved no hyper_parameters for Lightning to replay.
+        """
+        architecture = describe_checkpoint(path)
+        # Only the graph's size matters here: the adjacency is a buffer in the
+        # checkpoint and replaces whatever the layout builds. A node count with
+        # no named layout gets the fully connected "auto" graph of that size.
+        graph_cfg = {"layout": architecture["layout"]}
+        if architecture["layout"] is None:
+            graph_cfg = {
+                "layout": "auto",
+                "num_nodes_override": architecture["num_nodes"],
+            }
+        return cls.load_from_checkpoint(
+            str(path),
+            map_location=map_location,
+            weights_only=False,
+            in_channels=architecture["in_channels"],
+            num_class=architecture["num_class"],
+            graph_cfg=graph_cfg,
+        )
 
     def training_step(self, batch, batch_idx):
         # Make sure dataloaders are on cuda

@@ -29,17 +29,17 @@ def center_all(bout: np.ndarray, center_node: int) -> np.ndarray:
 
 
 def align(bout: np.ndarray, head_node: int = 0) -> np.ndarray:
-    """Rotate bout so the head node points upward (0,1) at frame 0."""
+    """Rotate each individual so its head node points upward (0,1) at frame 0."""
     nose_vec = bout[0:2, 0, head_node]
     if np.linalg.norm(nose_vec) == 0:
         return bout
-    theta = float(np.arctan2(nose_vec[0], nose_vec[1]))
-    if theta < 0:
-        theta += 2 * np.pi
+    # One angle per individual: (M,) for a (C, T, V, M) bout.
+    theta = np.arctan2(nose_vec[0], nose_vec[1]).astype(np.float64)
+    theta = np.where(theta < 0, theta + 2 * np.pi, theta)
     c, s = np.cos(theta), np.sin(theta)
     R = np.array([[c, -s], [s, c]])
     result = bout.copy()
-    result[0:2] = np.dot(R, bout[0:2].reshape(2, -1)).reshape(bout[0:2].shape)
+    result[0:2] = np.einsum("ij...,jtv...->itv...", R, bout[0:2])
     return result
 
 
@@ -159,6 +159,12 @@ def preprocess_bouts(
 
         bhv = points[:, new_start:new_end]
         ci_slice = cis[:, new_start:new_end]
+        if ci_slice.shape[1] != bhv.shape[1]:
+            raise ValueError(
+                f"ci has {cis.shape[1]} frames but the coordinates have "
+                f"{n_frames}, so the bout at frames {bhv_start} to {bhv_end} "
+                "cannot be given its confidence."
+            )
         ci_slice = ci_slice.reshape((*ci_slice.shape, 1)) if ci_slice.ndim == 3 else ci_slice
 
         # swap x/y channels (widget convention matches here)
@@ -175,8 +181,14 @@ def preprocess_bouts(
         # align to heading
         bhv = align(bhv, head_node)
 
-        bouts_raw[n, :2] = bhv
-        bouts_raw[n, 2] = ci_slice[0] if ci_slice.ndim >= 3 else 0
+        # A recording shorter than the window leaves fewer frames than
+        # bouts_raw reserves, so tile them to length first.
+        bouts_raw[n, :2] = pad_bout(bhv, T_effective)
+        # C=2 is xy only, so there is no confidence channel to fill.
+        if C > 2:
+            bouts_raw[n, 2] = (
+                pad_bout(ci_slice, T_effective)[0] if ci_slice.ndim >= 3 else 0
+            )
 
         padded[n] = pad_bout(bouts_raw[n], T_pad)
 
@@ -212,7 +224,8 @@ def classification_data_to_bouts(
     C, T, V, M:
         Data dimensions (channels, time, vertices, individuals).
     fps, denominator:
-        Used to compute window size.
+        Used only when T is None: the padded length is then
+        ``2 * int(fps / denominator)`` unless T2 is given.
     center:
         If not None, centre all bouts on this node.
     T2:
@@ -252,15 +265,15 @@ def classification_data_to_bouts(
             coords_rs = coords.reshape(V, -1, 3)
             ci_rs = ci_raw.reshape(V, -1, 1)
 
-            # window from middle
-            mid = coords_rs.shape[1] // 2
-            half = int(fps / denominator)
-            start, end = mid - half, mid + half
-
             if T is None:
                 coords_sub = coords_rs
                 ci_sub = ci_rs
             else:
+                # T frames from the middle, clamped to the bout: a negative
+                # start would slice from the far end of the array.
+                n_frames = coords_rs.shape[1]
+                start = max(0, n_frames // 2 - T // 2)
+                end = min(n_frames, start + T)
                 coords_sub = coords_rs[:, start:end]
                 ci_sub = ci_rs[:, start:end]
 
@@ -284,7 +297,7 @@ def classification_data_to_bouts(
                 new_bout = align(new_bout, head_node)
 
             new_bout = pad_bout(new_bout, T_pad)
-            bout_data[bout_idx] = new_bout
+            bout_data[bout_idx] = new_bout[:C]
             bout_labels.append(info["classification"])
 
         all_bouts.append(bout_data)

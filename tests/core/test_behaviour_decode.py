@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
-from poser.core.behaviour_decode import _points_from_coords
+from poser.core import behaviour_decode
+from poser.core.behaviour_decode import _points_from_coords, decode_behaviours
+from poser.core.io import save_coords_to_h5
+from poser.core.schemas.training import DataConfig, TrainingConfig
 
 V = 3
 T = 4
+CENTER_NODE = 2
 
 
 def _identity_arrays() -> tuple[np.ndarray, np.ndarray]:
@@ -49,3 +53,52 @@ def test_one_node_trajectory_is_contiguous_after_reshape():
     blocks = points.reshape(V, T, 3)
     for node in range(V):
         assert [int(v) for v in blocks[node, :, 1]] == [node] * T
+
+
+def _classifier_input(tmp_path, monkeypatch, xy_ci, center_data: bool) -> np.ndarray:
+    """Decode one fixed bout and return the (N, C, T2, V, M) array the model gets."""
+    x, y, ci = xy_ci
+    # Offset so the animal sits well away from the image origin.
+    pose_path = save_coords_to_h5(
+        {"ind1": {"x": x + 100, "y": y + 50, "ci": ci}}, tmp_path / "recording"
+    )
+    seen = {}
+
+    def fake_predict(padded, architecture, checkpoint):
+        seen["padded"] = padded
+        return np.zeros(len(padded), dtype=int)
+
+    monkeypatch.setattr(
+        behaviour_decode, "orthogonal_variance", lambda *args, **kwargs: ([(5, 15)],)
+    )
+    monkeypatch.setattr(behaviour_decode, "_predict", fake_predict)
+    data_cfg = DataConfig(T=10, T2=10, center_node=CENTER_NODE, center_data=center_data)
+    decode_behaviours(
+        pose_path, "unused.ckpt", TrainingConfig(data=data_cfg), str(tmp_path)
+    )
+    return seen["padded"]
+
+
+def test_classifier_input_is_centred_on_the_centre_node(tmp_path, monkeypatch, xy_ci):
+    # Absolute image coordinates used to reach the classifier, which is
+    # trained on bouts with the centre node at the origin.
+    padded = _classifier_input(tmp_path, monkeypatch, xy_ci, center_data=True)
+    np.testing.assert_allclose(padded[:, :2, :, CENTER_NODE], 0, atol=1e-9)
+
+
+def test_center_data_false_leaves_coordinates_absolute(tmp_path, monkeypatch, xy_ci):
+    padded = _classifier_input(tmp_path, monkeypatch, xy_ci, center_data=False)
+    distance_from_origin = np.linalg.norm(padded[:, :2, :, CENTER_NODE], axis=1)
+    assert distance_from_origin.min() > 50
+
+
+def test_missing_centre_detection_does_not_blank_its_frame(
+    tmp_path, monkeypatch, xy_ci
+):
+    # NaN marks a missing detection. Subtracting a NaN centre would spread it
+    # to every node of that frame.
+    x, y, ci = xy_ci
+    x = x.copy()
+    x[CENTER_NODE, 7] = np.nan
+    padded = _classifier_input(tmp_path, monkeypatch, (x, y, ci), center_data=True)
+    assert not np.isnan(padded).any()

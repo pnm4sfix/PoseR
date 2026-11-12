@@ -20,6 +20,7 @@ Usage
 """
 from __future__ import annotations
 
+import copy
 import logging
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -54,8 +55,9 @@ def prepare_dataset(
     is created per file with ``preprocess_frame=True`` so that windowing,
     centering, alignment, and padding all happen lazily inside
     ``__getitem__``.  Frames near video boundaries are reflect-padded rather
-    than zero-padded.  A :class:`torch.utils.data.ConcatDataset` is used to
-    combine multiple files without ever loading them all into memory.
+    than zero-padded.  Each recording is read into memory in full and kept
+    there as float32, so memory use grows with the total number of frames.
+    A :class:`torch.utils.data.ConcatDataset` combines the per-file datasets.
 
     **HDF5 legacy path** (``*.h5 / *.hdf5``): bouts are pre-extracted via
     ``classification_data_to_bouts`` and concatenated, then wrapped in a
@@ -136,17 +138,29 @@ def prepare_dataset(
             log.warning("Skipping %s: %s", fpath, exc)
             continue
 
+        # coords are stored flat as (V * T, 3), so only the node count the file
+        # was written with un-flattens them; config.model.num_nodes is a default.
+        n_nodes = next(
+            (
+                bout["n_nodes"]
+                for individual in classification_data.values()
+                for bout in individual.values()
+            ),
+            mcfg.num_nodes,
+        )
+
         bouts, labels = classification_data_to_bouts(
             classification_data,
             C=dcfg.C,
             T=dcfg.T,
-            V=mcfg.num_nodes,
+            V=n_nodes,
             M=dcfg.M,
             fps=dcfg.fps,
             denominator=dcfg.denominator,
-            center=dcfg.center_data,
+            center=dcfg.center_node if dcfg.center_data else None,
             T2=dcfg.T2,
             align_data=dcfg.align_data,
+            head_node=dcfg.head_node,
         )
         if bouts is not None and len(bouts) > 0:
             hdf5_bouts.append(bouts)
@@ -158,11 +172,22 @@ def prepare_dataset(
 
     if hdf5_bouts:
         X = np.concatenate(hdf5_bouts, axis=0)   # (N, C, T2, V, M)
-        y = np.concatenate(hdf5_labels, axis=0)  # (N,)
+        names = np.concatenate(hdf5_labels, axis=0).tolist()  # (N,) behaviour names
+        index_of = {name: idx for idx, name in config.behaviour_schema.labels.items()}
+        unknown = sorted(set(names) - set(index_of))
+        if unknown:
+            raise ValueError(
+                f"Behaviour names {unknown} in the HDF5 files are not in "
+                f"config.behaviour_schema.labels ({sorted(index_of)})."
+            )
+        y = np.array([index_of[name] for name in names], dtype=np.int64)  # (N,)
         log.info("HDF5 bouts: %d  |  classes: %s", len(X), np.unique(y))
         hdf5_ds = PoseDataset(
             data=X,
             labels=y,
+            # The bouts are already centred, aligned and padded. An empty list
+            # repeats none of that but lets PoseDataset reach its augmentation.
+            transform=[],
             augmentation=aug_flags,
             num_class=mcfg.num_class,
             T=dcfg.T2,
@@ -177,6 +202,16 @@ def prepare_dataset(
         )
 
     full_dataset = ConcatDataset(all_datasets) if len(all_datasets) > 1 else all_datasets[0]
+
+    # Validation reads the same arrays through shallow copies with augmentation
+    # off, so an unchanged model scores the same on every pass. Clearing the
+    # flag on the shared datasets would switch training augmentation off too.
+    eval_datasets: List = []
+    for ds in all_datasets:
+        eval_ds = copy.copy(ds)
+        eval_ds.augment = False
+        eval_datasets.append(eval_ds)
+    eval_dataset = ConcatDataset(eval_datasets) if len(eval_datasets) > 1 else eval_datasets[0]
 
     # ── Auto-detect num_nodes and in_channels from data shape ─────────
     # When layout='auto' (default), the model needs to know V and C before
@@ -228,11 +263,12 @@ def prepare_dataset(
             n_total, val_split,
         )
         train_ds = full_dataset
-        val_ds   = full_dataset
+        val_ds   = eval_dataset
         n_train  = n_total
     elif n_val > 0:
         generator = torch.Generator().manual_seed(tcfg.seed)
         train_ds, val_ds = random_split(full_dataset, [n_train, n_val], generator=generator)
+        val_ds = Subset(eval_dataset, val_ds.indices)
     else:
         train_ds, val_ds = full_dataset, None
 

@@ -144,8 +144,8 @@ def finetune_yolo(
         device=device,
         freeze=freeze_layers,
         kpt_shape=[num_keypoints, 3],  # x, y, visibility
-        **(extra_kwargs or {}),
     )
+    train_kwargs.update(extra_kwargs or {})
 
     log.info("Starting YOLO fine-tuning: %s", train_kwargs)
     results = model.train(**train_kwargs)

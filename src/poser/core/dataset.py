@@ -108,6 +108,7 @@ class PoseDataset(torch.utils.data.Dataset):
         if augmentation is not None:
             augment = any(augmentation.values())
         self.augment = augment
+        self.augmentation = augmentation
         self.preprocess_frame = preprocess_frame
         self.window_size = window_size
         print(f"PoseDataset — augment={self.augment}")
@@ -207,8 +208,18 @@ class PoseDataset(torch.utils.data.Dataset):
                 behaviour = self.pad(behaviour, self.T)
             if "pad_flip" in self.transform:
                 behaviour = self.pad_flip(behaviour, self.T)
-            if self.augment:
+            if self.augment and self.augmentation is None:
                 behaviour = random_augmentation(behaviour)
+            elif self.augment:
+                # roll and fragment have never been part of this online path.
+                if self.augmentation.get("rotate"):
+                    behaviour = rotate_transform(behaviour, 1)[0]
+                if self.augmentation.get("jitter"):
+                    behaviour = jitter_transform(behaviour, 1)[0]
+                if self.augmentation.get("scale"):
+                    behaviour = scale_transform(behaviour, 1)[0]
+                if self.augmentation.get("shear"):
+                    behaviour = shear_transform(behaviour, 1)[0]
             if self.transform == "heatmap":
                 behaviour = self._to_heatmap(behaviour)
 

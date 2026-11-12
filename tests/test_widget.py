@@ -1,5 +1,10 @@
 import os
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import torch
+from napari.components import ViewerModel
 from napari.layers import Image
 from poser._widget import PoserWidget
 import pandas as pd
@@ -177,3 +182,58 @@ def test_workflow1(make_napari_viewer, capsys):
         )
 
     # test load different file - assert all changes that need to be made
+
+
+def test_predict_poses_keeps_one_property_row_per_point(monkeypatch):
+    # The new keypoints were appended to the layer's points but replaced its
+    # properties, so the layer had more points than property rows and napari
+    # rejected it once the whole video had been processed.
+    n_frames, n_nodes = 2, 3
+
+    class FakeYOLO:
+        def __init__(self, weights):
+            pass
+
+        def to(self, device):
+            pass
+
+        def track(self, **kwargs):
+            return [
+                SimpleNamespace(
+                    keypoints=SimpleNamespace(
+                        xy=torch.rand(1, n_nodes, 2), conf=torch.rand(1, n_nodes)
+                    ),
+                    boxes=None,
+                )
+                for _ in range(n_frames)
+            ]
+
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=FakeYOLO))
+    frames = np.zeros((n_frames, 64, 64))
+    # predict_poses run on a stand-in for the widget, so no Qt window is needed.
+    widget = SimpleNamespace(
+        initialise_params=lambda: None,
+        chkpt_dropdown=SimpleNamespace(value="yolo-fake.pt"),
+        accelerator="cpu",
+        im=frames,
+        im_subset=SimpleNamespace(data=frames),
+        video_file="fake.avi",
+        n_inds=1,
+        points_layer=None,
+        viewer=ViewerModel(),
+        convert_point_layer_to_coords_data=lambda layer: None,
+    )
+
+    # The first run starts from the one-point placeholder, the second appends.
+    for run in (1, 2):
+        PoserWidget.predict_poses(widget)
+
+        n_points = 1 + run * n_frames * n_nodes
+        assert len(widget.points_layer.data) == n_points
+        for name in ("confidence", "ind", "node"):
+            assert len(widget.points_layer.properties[name]) == n_points
+
+    np.testing.assert_array_equal(
+        widget.points_layer.properties["node"][1:],
+        np.tile(np.arange(n_nodes), 2 * n_frames),
+    )

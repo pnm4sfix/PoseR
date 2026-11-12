@@ -156,6 +156,9 @@ class SessionManager:
         """Remove entry *idx* from the queue."""
         if self._active_idx == idx:
             self._active_idx = None
+        elif self._active_idx is not None and 0 <= idx < self._active_idx:
+            # Every entry after idx moves down one place.
+            self._active_idx -= 1
         self.entries.pop(idx)
         self.save()
 

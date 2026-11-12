@@ -57,6 +57,7 @@ from scipy.signal import find_peaks
 from torch.utils.data import DataLoader
 
 from ._loader import HyperParams, ZebData
+from .core.video import read_video
 from .models import c3d, st_gcn_aaai18_pylightning_3block
 
 
@@ -65,12 +66,6 @@ try:
 except:
     print("pygmtools not installed")
 import networkx as nx
-
-try:
-    from napari_video.napari_video import VideoReaderNP
-except:
-    print("no module named napari_video. pip install napari_video")
-    import time
 
 try:
     pass
@@ -529,7 +524,8 @@ class PoserWidget(Container):
                     if self.detection_backbone == "YOLO11":
                         h = self.im_subset.data[self.frame].shape[0]
                         results = self.model(
-                            self.im_subset.data[self.frame], imgsz=h - (h % 32)
+                            np.asarray(self.im_subset.data[self.frame]),
+                            imgsz=h - (h % 32),
                         )
                         for result in results:
                             names = result.names
@@ -556,7 +552,9 @@ class PoserWidget(Container):
                                     shape_data.append(new_shape)
 
                     elif self.detection_backbone == "YOLOv5":
-                        results = self.model(self.im_subset.data[self.frame])
+                        results = self.model(
+                            np.asarray(self.im_subset.data[self.frame])
+                        )
                         result_df = results.pandas().xyxy[0]
                         print(result_df)
 
@@ -604,7 +602,7 @@ class PoserWidget(Container):
                         break
 
                 if exists == False:
-                    im = self.im_subset.data[self.frame]
+                    im = np.asarray(self.im_subset.data[self.frame])
 
                     person_results = []
 
@@ -760,14 +758,12 @@ class PoserWidget(Container):
         self.viewer1d.add_line(
             np.c_[t, self.gauss_filtered],
             color="magenta",
-            label="Movement",
             name="Movement",
         )
         thresh = np.median(self.gauss_filtered) + self.threshold
         self.viewer1d.add_line(
             np.c_[[0, self.gauss_filtered.shape[0]], [thresh, thresh]],
             color="cyan",
-            label="Movement threshold",
             name="Threshold",
         )
         self.viewer1d.reset_view()
@@ -1295,7 +1291,7 @@ class PoserWidget(Container):
             # vid = pims.open(str(self.video_file))
             self.fps = self.config_data["data_cfg"]["fps"]
             try:
-                self.im = VideoReaderNP(str(self.video_file))
+                self.im = read_video(self.video_file)
             except:
                 print("Couldn't read video file")
                 self.im = None
@@ -2104,7 +2100,7 @@ class PoserWidget(Container):
 
     def read_coords(self, h5_file):
         """Reads coordinates from DLC files (h5 and csv). Optional data cleaning."""
-        if "poser" in str(h5_file):
+        if "poser" in os.path.basename(str(h5_file)):
             self.read_poser_coords_file(h5_file)
 
         else:
@@ -2290,19 +2286,26 @@ class PoserWidget(Container):
                 dim=1
             )
 
-            points_list.append(pts)
-            conf_list.append(conf_flat)
-            ind_list.append(ind_flat)
-            node_list.append(node_flat)
+            # Off the inference device now, or a whole video of them stays on it.
+            points_list.append(pts.cpu())
+            conf_list.append(conf_flat.cpu())
+            ind_list.append(ind_flat.cpu())
+            node_list.append(node_flat.cpu())
 
 
         # ---- SAFETY CHECK ----
         if len(points_list) > 0:
 
             points = torch.cat(points_list, dim=0).cpu().numpy()
-            point_properties["confidence"] = torch.cat(conf_list).cpu().numpy()
-            point_properties["ind"] = torch.cat(ind_list).cpu().numpy()
-            point_properties["node"] = torch.cat(node_list).cpu().numpy()
+            point_properties["confidence"] = np.append(
+                point_properties["confidence"], torch.cat(conf_list).cpu().numpy()
+            )
+            point_properties["ind"] = np.append(
+                point_properties["ind"], torch.cat(ind_list).cpu().numpy()
+            )
+            point_properties["node"] = np.append(
+                point_properties["node"], torch.cat(node_list).cpu().numpy()
+            )
 
             self.points_layer.data = np.concatenate(
                 (self.points_layer.data, points)
@@ -2369,7 +2372,7 @@ class PoserWidget(Container):
                                 }
 
                                 person_results.append(bbox_data)
-                                im = self.im_subset.data[frame]
+                                im = np.asarray(self.im_subset.data[frame])
 
                     if len(person_results) > 0:
                         pose_results, _ = inference_top_down_pose_model(
@@ -2509,10 +2512,10 @@ class PoserWidget(Container):
             )
 
             buf = video_buffers[vid_path]
-            buf["points"].append(pts)
-            buf["conf"].append(conf_flat)
-            buf["ind"].append(ind_flat)
-            buf["node"].append(node_flat)
+            buf["points"].append(pts.cpu())
+            buf["conf"].append(conf_flat.cpu())
+            buf["ind"].append(ind_flat.cpu())
+            buf["node"].append(node_flat.cpu())
 
         # ---- Finalize per video ----
         for vid_path, buf in video_buffers.items():

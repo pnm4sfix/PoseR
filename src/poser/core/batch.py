@@ -87,6 +87,8 @@ class BatchRunner:
 
     def __init__(self, job: BatchJob):
         self._job = job
+        # What this run has already named a coords file after, under output_dir.
+        self._named_after: set = set()
 
     def run(self) -> List[BatchResult]:
         """Process every input and write batch_manifest.csv beside the outputs.
@@ -135,6 +137,16 @@ class BatchRunner:
         job = self._job
         try:
             if job.mode is BatchMode.POSE_ESTIMATION:
+                named_after = video_path
+                if job.output_dir:
+                    named_after = str(Path(job.output_dir) / Path(video_path).name)
+                    if named_after in self._named_after:
+                        raise ValueError(
+                            f"{Path(video_path).name} is also the name of an earlier "
+                            f"video in this batch, and its coords file in "
+                            f"{job.output_dir} would replace that one."
+                        )
+                    self._named_after.add(named_after)
                 estimator = PoseEstimator()
                 # Open the video first, so a missing one fails before a model loads.
                 estimator.input_load(video_path)
@@ -147,7 +159,7 @@ class BatchRunner:
                     )
                 )
                 coords = estimator.coords_from_keypoints(records)
-                output = save_coords_to_h5(coords, video_path)
+                output = save_coords_to_h5(coords, named_after)
             else:
                 output = decode_behaviours(
                     pose_path, job.checkpoint, job.config, job.output_dir
