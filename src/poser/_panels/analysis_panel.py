@@ -36,6 +36,7 @@ from qtpy.QtWidgets import (
 
 from poser.core.bout_detection import manual_bout
 from poser.core.session import SessionManager
+from poser.core.settings import resolve_output_dir
 
 
 class AnalysisPanel(QWidget):
@@ -367,7 +368,9 @@ class AnalysisPanel(QWidget):
         entry = self._session.active
         export_type = self._export_type_combo.currentText()
 
-        output_dir = QFileDialog.getExistingDirectory(self, "Select output directory")
+        output_dir = QFileDialog.getExistingDirectory(
+            self, "Select output directory", str(resolve_output_dir("frames"))
+        )
         if not output_dir:
             return
 
