@@ -13,6 +13,7 @@ Predictions row when both panels are open.
 """
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from pathlib import Path
 from typing import Dict, Optional
@@ -30,6 +31,8 @@ from qtpy.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Class colour palette (up to 20 classes, cycling)
@@ -158,6 +161,7 @@ class EthogramPanel(QWidget):
             root.addWidget(canvas, 1)
 
         except Exception as exc:
+            log.exception("matplotlib canvas unavailable; the ethogram cannot be drawn")
             err_lbl = QLabel(f"matplotlib canvas unavailable: {exc}")
             err_lbl.setStyleSheet("color: orange; font-size: 10px;")
             root.addWidget(err_lbl)
@@ -204,6 +208,12 @@ class EthogramPanel(QWidget):
     ) -> None:
         """Called by InferencePanel.predictions_ready signal."""
         self._predictions = predictions.astype(np.int64)
+        log.debug(
+            "load_predictions: %s array of shape %s, checkpoint %s",
+            predictions.dtype,
+            predictions.shape,
+            checkpoint,
+        )
         name = checkpoint.name if checkpoint is not None else "inference"
         self._pred_label.setText(name)
         # Try to pull class names out of the checkpoint
@@ -217,15 +227,51 @@ class EthogramPanel(QWidget):
                     self._label_names = {int(k): v for k, v in cn.items()}
                 elif cn and isinstance(cn, (list, tuple)):
                     self._label_names = {i: v for i, v in enumerate(cn)}
+                log.debug(
+                    "Checkpoint %s stores class names %s; label names now %s",
+                    checkpoint,
+                    cn,
+                    self._label_names,
+                )
             except Exception:
-                pass
+                log.debug(
+                    "Could not read class names from %s; label names stay %s",
+                    checkpoint,
+                    self._label_names,
+                    exc_info=True,
+                )
+        labels_present, frame_counts = np.unique(self._predictions, return_counts=True)
+        log.info(
+            "Ethogram received predictions of shape %s (checkpoint %s); "
+            "frames per class %s",
+            self._predictions.shape,
+            checkpoint,
+            dict(zip(labels_present.tolist(), frame_counts.tolist())),
+        )
         self._refresh()
 
     def load_annotations(self, annotations: np.ndarray) -> None:
         self._annotations = annotations.astype(np.int64)
+        log.debug(
+            "load_annotations: %s array of shape %s, label names %s",
+            annotations.dtype,
+            annotations.shape,
+            self._label_names,
+        )
+        labels_present, frame_counts = np.unique(self._annotations, return_counts=True)
+        log.info(
+            "Ethogram received annotations of shape %s; frames per label %s "
+            "(-1 = bout not labelled yet, drawn grey; 0 also covers frames "
+            "outside any bout)",
+            self._annotations.shape,
+            dict(zip(labels_present.tolist(), frame_counts.tolist())),
+        )
         self._refresh()
 
     def set_label_names(self, label_names: Dict[int, str]) -> None:
+        log.info(
+            "Ethogram class names set: %s (were %s)", label_names, self._label_names
+        )
         self._label_names = label_names
         self._legend_widget.update_names(label_names)
         self._refresh()
@@ -239,8 +285,18 @@ class EthogramPanel(QWidget):
             self, "Select *_labels.npy", "",
             "NumPy arrays (*.npy);;All files (*)"
         )
+        log.debug("Annotations file dialog: %s", path or "cancelled")
         if path:
             self._annotations = np.load(path).astype(np.int64)
+            labels_present, frame_counts = np.unique(
+                self._annotations, return_counts=True
+            )
+            log.info(
+                "Loaded annotations from %s: shape %s, frames per label %s",
+                path,
+                self._annotations.shape,
+                dict(zip(labels_present.tolist(), frame_counts.tolist())),
+            )
             self._ann_label.setText(Path(path).name)
             self._try_load_schema(path)
             self._refresh()
@@ -250,8 +306,18 @@ class EthogramPanel(QWidget):
             self, "Select *_predictions.npy", "",
             "NumPy arrays (*.npy);;All files (*)"
         )
+        log.debug("Predictions file dialog: %s", path or "cancelled")
         if path:
             self._predictions = np.load(path).astype(np.int64)
+            labels_present, frame_counts = np.unique(
+                self._predictions, return_counts=True
+            )
+            log.info(
+                "Loaded predictions from %s: shape %s, frames per class %s",
+                path,
+                self._predictions.shape,
+                dict(zip(labels_present.tolist(), frame_counts.tolist())),
+            )
             self._pred_label.setText(Path(path).name)
             self._try_load_schema(path)
             self._refresh()
@@ -269,16 +335,32 @@ class EthogramPanel(QWidget):
                             raw = json.load(fh)
                         self._label_names = {int(k): v for k, v in raw.items()}
                         self._legend_widget.update_names(self._label_names)
+                        log.info(
+                            "Loaded class names from %s: %s", base, self._label_names
+                        )
                     except Exception:
-                        pass
+                        log.debug(
+                            "Could not read class names from %s; label names stay %s",
+                            base,
+                            self._label_names,
+                            exc_info=True,
+                        )
                     return
+        log.debug("No class-name schema found for %s; label names unchanged", p)
 
     # ------------------------------------------------------------------
     # Redraw
     # ------------------------------------------------------------------
 
     def _refresh(self) -> None:
+        log.debug(
+            "Refreshing ethogram: annotations %s, predictions %s, label names %s",
+            getattr(self._annotations, "shape", None),
+            getattr(self._predictions, "shape", None),
+            self._label_names,
+        )
         if self._canvas is None:
+            log.warning("No matplotlib canvas; the ethogram is not drawn")
             return
 
         self._cursor_lines.clear()
@@ -296,15 +378,26 @@ class EthogramPanel(QWidget):
 
         if T > 0:
             self._ax_ann.set_xlim(0, T)
+        else:
+            log.warning("Nothing to draw: no annotation or prediction frames loaded")
 
         # Cursor
         try:
             frame = float(self._viewer.dims.current_step[0])
         except Exception:
+            log.debug(
+                "Could not read the viewer frame; cursor drawn at frame 0",
+                exc_info=True,
+            )
             frame = 0.0
         for ax in (self._ax_ann, self._ax_pred):
             line = ax.axvline(frame, color="white", linewidth=1.0, alpha=0.85, zorder=10)
             self._cursor_lines.append(line)
+        log.debug(
+            "Ethogram x-axis spans %d frames (longest track), cursor at frame %s",
+            T,
+            frame,
+        )
 
         self._canvas.draw()
         self._legend_widget.update_names(self._label_names)
@@ -312,7 +405,9 @@ class EthogramPanel(QWidget):
 
     def _draw_track(self, ax, labels: np.ndarray) -> None:
         """Draw one ethogram row using broken_barh (one call per class)."""
+        row = "annotations" if ax is self._ax_ann else "predictions"
         if len(labels) == 0:
+            log.warning("Empty %s track (0 frames); nothing drawn", row)
             return
         starts, ends, values = _rle(labels)
 
@@ -320,6 +415,25 @@ class EthogramPanel(QWidget):
         class_runs: dict = defaultdict(list)
         for s, e, v in zip(starts, ends, values):
             class_runs[int(v)].append((int(s), int(e) - int(s)))
+        log.debug(
+            "Drawing the %s row: %d runs over %d frames; runs per class %s "
+            "(negative = unlabelled)",
+            row,
+            len(starts),
+            len(labels),
+            {c: len(r) for c, r in sorted(class_runs.items())},
+        )
+        unnamed = [
+            c for c in sorted(class_runs) if c >= 0 and c not in self._label_names
+        ]
+        if unnamed:
+            log.warning(
+                "Classes %s in the %s row are not in the label names %s; "
+                "shown as cls<N>",
+                unnamed,
+                row,
+                self._label_names,
+            )
 
         for cls_id, runs in sorted(class_runs.items()):
             if cls_id < 0:
@@ -344,6 +458,9 @@ class EthogramPanel(QWidget):
         try:
             frame = int(self._viewer.dims.current_step[0])
         except Exception:
+            log.debug(
+                "Could not read the viewer frame; status shows frame 0", exc_info=True
+            )
             frame = 0
 
         parts = [f"Frame <b>{frame}</b>"]
@@ -370,7 +487,10 @@ class EthogramPanel(QWidget):
             self._canvas.draw_idle()
             self._update_frame_status()
         except Exception:
-            pass
+            log.debug(
+                "Could not follow the viewer frame; cursor and status not updated",
+                exc_info=True,
+            )
 
 
 # ---------------------------------------------------------------------------
