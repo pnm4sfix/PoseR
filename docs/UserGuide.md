@@ -131,6 +131,16 @@ line, `--output` overrides the default.
 | Batch outputs and `batch_manifest.csv` | `poser batch`; `PoseR.batch()` | `data/batch/` |
 | YOLO fine-tuning runs | `poser finetune` | `data/finetune/` |
 | `<checkpoint>.repaired.ckpt` | `poser model repair` | `data/models/` |
+| `poser.log`, the panels' log | every panel | `data/logs/` |
+
+### Logs
+
+The panels log what each button received, decided and produced. Messages from
+INFO up appear in the terminal napari was started from; start napari with
+`POSER_LOG_LEVEL=DEBUG` to see everything there. The log file
+`data/logs/poser.log` always keeps everything from DEBUG up, in at most four
+files of 5 MB (`poser.log`, then `poser.log.1` to `poser.log.3`), so it can be
+attached to a bug report.
 
 ---
 
