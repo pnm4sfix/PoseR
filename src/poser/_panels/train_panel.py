@@ -8,6 +8,7 @@ the GUI fully responsive.  A live log readout streams subprocess stdout.
 """
 from __future__ import annotations
 
+import logging
 import subprocess
 import sys
 import threading
@@ -34,6 +35,8 @@ from qtpy.QtWidgets import (
 
 from poser.core.session import SessionManager
 from poser.core.settings import resolve_output_dir
+
+log = logging.getLogger(__name__)
 
 
 class TrainPanel(QWidget):
@@ -178,6 +181,7 @@ class TrainPanel(QWidget):
             self, "Select folder with numpy training data", ""
         )
         if not folder:
+            log.debug("Numpy training folder dialog cancelled")
             return
         folder = Path(folder)
         pose_files = sorted(folder.glob("*_pose.npy"))
@@ -187,8 +191,18 @@ class TrainPanel(QWidget):
             lf = folder / f"{stem}_labels.npy"
             if lf.exists():
                 paired.append(pf)
+        log.debug(
+            "Found %d *_pose.npy file(s) in %s, %d with a matching *_labels.npy",
+            len(pose_files),
+            folder,
+            len(paired),
+        )
 
         if not paired:
+            log.warning(
+                "No *_pose.npy / *_labels.npy pairs in %s; training files unchanged",
+                folder,
+            )
             QMessageBox.warning(
                 self, "No data found",
                 f"No matching *_pose.npy / *_labels.npy pairs found in:\n{folder}",
@@ -197,6 +211,12 @@ class TrainPanel(QWidget):
 
         self._training_files = paired
         self._update_file_label()
+        log.info(
+            "Training files set to %d numpy pair(s) in %s: %s",
+            len(paired),
+            folder,
+            ", ".join(pf.name for pf in paired),
+        )
 
         # Auto-set num_class from schema if present
         for pf in paired:
@@ -207,13 +227,24 @@ class TrainPanel(QWidget):
                 try:
                     schema = json.loads(schema_path.read_text())
                     n = len(schema)
+                    log.debug("%s lists %d class(es)", schema_path, n)
                     if n >= 2:
                         self._num_class_spin.setValue(n)
                         self._log_signal.emit(
                             f"[INFO] num_class set to {n} from {schema_path.name}"
                         )
+                        log.info(
+                            "num_class set to %d from %s (schema lists %d)",
+                            self._num_class_spin.value(),
+                            schema_path,
+                            n,
+                        )
                 except Exception:
-                    pass
+                    log.debug(
+                        "Could not read the class count from %s; num_class unchanged",
+                        schema_path,
+                        exc_info=True,
+                    )
                 break
 
     def _on_add_files(self) -> None:
@@ -221,32 +252,65 @@ class TrainPanel(QWidget):
             self, "Select labelled HDF5 files", "",
             "HDF5 files (*.h5 *.hdf5);;All files (*)"
         )
+        log.debug("Labelled HDF5 files dialog: %d file(s) chosen", len(files))
         if files:
             self._training_files = [Path(f) for f in files]
             self._update_file_label()
+            log.info(
+                "Training files set to %d HDF5 file(s): %s",
+                len(files),
+                ", ".join(files),
+            )
 
     def _on_use_session_files(self) -> None:
         done = [Path(e.pose_path) for e in self._session.entries if e.status == "done"]
+        log.debug(
+            "Use session files clicked: %d of %d session files are marked done",
+            len(done),
+            len(self._session.entries),
+        )
         if not done:
+            log.warning(
+                "Use session files clicked with no file marked done; "
+                "training files unchanged"
+            )
             QMessageBox.information(self, "No done files",
                                     "Mark files as 'done' in the Data panel first.")
             return
         self._training_files = done
         self._update_file_label()
+        log.info(
+            "Training files set to %d done session file(s): %s",
+            len(done),
+            ", ".join(str(p) for p in done),
+        )
 
     def _on_browse_config(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Select config YAML", "", "YAML (*.yml *.yaml)"
         )
+        log.debug("Config YAML dialog: %s", path or "cancelled")
         if path:
             self._config_path = Path(path)
             self._cfg_label.setText(str(self._config_path))
+            log.info("Training config set to %s", self._config_path)
 
     def _on_start_training(self) -> None:
+        log.debug(
+            "Start training clicked: %d training file(s), config %s",
+            len(self._training_files),
+            self._config_path,
+        )
         if not self._training_files:
+            log.warning(
+                "Start training clicked with no training files; nothing launched"
+            )
             QMessageBox.warning(self, "No files", "Add labelled HDF5 files first.")
             return
         if self._training_proc is not None and self._training_proc.poll() is None:
+            log.warning(
+                "Start training clicked while training is running; nothing launched"
+            )
             QMessageBox.warning(self, "Already running", "Training is already in progress.")
             return
 
@@ -283,9 +347,11 @@ class TrainPanel(QWidget):
                 env=env,
             )
         except Exception as exc:
+            log.exception("Could not launch training: %s", " ".join(cmd))
             QMessageBox.critical(self, "Launch error", str(exc))
             return
 
+        log.info("Training launched: %s", " ".join(cmd))
         self._btn_train.setEnabled(False)
         self._btn_stop.setEnabled(True)
 
@@ -293,8 +359,13 @@ class TrainPanel(QWidget):
         threading.Thread(target=self._stream_output, daemon=True).start()
 
     def _on_stop_training(self) -> None:
+        log.debug(
+            "Stop training clicked; training process pid %s",
+            getattr(self._training_proc, "pid", None),
+        )
         if self._training_proc and self._training_proc.poll() is None:
             self._training_proc.terminate()
+            log.info("Training stopped by the user; terminated the training process")
             self._log_signal.emit("\n[TRAINING STOPPED BY USER]")
         self._btn_train.setEnabled(True)
         self._btn_stop.setEnabled(False)
@@ -306,8 +377,17 @@ class TrainPanel(QWidget):
         self._btn_train.setEnabled(True)
         self._btn_stop.setEnabled(False)
         if exit_code == 0:
+            log.info("Training finished successfully (exit code 0)")
             self._log_signal.emit("\n✅ Training completed successfully.")
         else:
+            log.warning(
+                "Training exited with code %d; its output is in the Training Log",
+                exit_code,
+            )
+            log.debug(
+                "End of the Training Log:\n%s",
+                "\n".join(self._log_text.toPlainText().splitlines()[-30:]),
+            )
             self._log_signal.emit(f"\n❌ Training exited with code {exit_code}.")
 
     # ------------------------------------------------------------------
@@ -318,7 +398,9 @@ class TrainPanel(QWidget):
         """Read subprocess stdout line-by-line and emit to log."""
         proc = self._training_proc
         if proc is None or proc.stdout is None:
+            log.warning("No training process output to stream")
             return
+        log.debug("Streaming the output of training process %s", proc.pid)
         # Use iter(readline, '') rather than 'for line in proc.stdout:' —
         # the iterator has 8 KB read-ahead buffering which delays output;
         # readline() blocks only until the next '\n' is available.
