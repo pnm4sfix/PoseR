@@ -230,7 +230,7 @@ def predict(
     pose_file: Path = typer.Argument(..., help="Input pose HDF5 or CSV file."),
     checkpoint: Path = typer.Option(..., "--checkpoint", "-w", help="Model .ckpt / .pt file."),
     config: Path = typer.Option("decoder_config.yml", "--config", "-c"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output HDF5 path."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output .json path. Defaults to data/predictions."),
     individual: str = typer.Option("ind1", "--individual", "-i"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -247,7 +247,8 @@ def predict(
         individual=individual,
     )
 
-    out_path = output or pose_file.with_suffix(".predictions.json")
+    name = pose_file.with_suffix(".predictions.json").name
+    out_path = output or resolve_output_dir("predictions") / name
     with open(out_path, "w") as fh:
         json.dump({str(k): int(v) for k, v in result.items()}, fh, indent=2)
     console.print(f"[green]Predictions saved to:[/green] {out_path}")
