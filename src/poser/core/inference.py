@@ -70,6 +70,18 @@ def decoder_settings(checkpoint: dict) -> dict:
     }
 
 
+def predictions_file_name(pose_path: str | Path) -> str:
+    """Return the file name for pose_path's predictions, <stem>_predictions.npy.
+
+    A *_pose.npy file loses its "_pose", so rec_pose.npy gives
+    rec_predictions.npy, as rec.h5 does.
+    """
+    name = Path(pose_path).name
+    if name.endswith("_pose.npy"):
+        return name[: -len("_pose.npy")] + "_predictions.npy"
+    return f"{Path(pose_path).stem}_predictions.npy"
+
+
 class Inference:
     """Decode behaviour from a pose file: load the poses and decoder, label frames."""
 
@@ -80,7 +92,6 @@ class Inference:
         self._checkpoint: Path
         self._device: torch.device
         self._pose: np.ndarray # (C, T, V, M)
-        self._pose_path: Path
 
     def model_load(self, path: Path, device: torch.device) -> dict:
         """Load an ST-GCN decoder checkpoint onto device.
@@ -193,7 +204,6 @@ class Inference:
         if pose.ndim == 3:  # (C, T, V) with no individual axis
             pose = pose[..., np.newaxis]
         self._pose = pose
-        self._pose_path = pose_path
         return form
 
     @property
@@ -291,34 +301,23 @@ class Inference:
                 scores = self._model(batch.to(self._device))
             yield scores.argmax(dim=-1).cpu().numpy()
 
-    def predictions_save(self, predictions: np.ndarray) -> Path:
-        """Write <stem>_predictions.npy and .csv beside the pose file (FR-B4).
+    def predictions_save(self, predictions: np.ndarray, path: Path) -> Path:
+        """Write predictions to path as .npy, and to a .csv of that stem beside it.
 
-        The .csv has columns frame,predicted_label. A *_pose.npy file loses its
-        "_pose", so rec_pose.npy gives rec_predictions.npy.
-
-        Returns:
-            Path to the .npy file.
-
-        Raises:
-            ValueError: If the pose came from memory, with no file to save beside.
+        The .csv has columns frame,predicted_label. predictions_file_name gives
+        the usual name for path.
         """
-        if self._pose_path is None:
-            raise ValueError(
-                "This pose came from the Data panel's memory, so there is no pose "
-                "file to save the predictions beside."
-            )
-        stem = self._pose_path.stem
-        if self._pose_path.name.endswith("_pose.npy"):
-            stem = stem[: -len("_pose")]
-        npy_path = self._pose_path.parent / f"{stem}_predictions.npy"
-        np.save(npy_path, predictions)
+        path = Path(path)
+        # Through a file object, so np.save keeps the name it is given instead
+        # of adding .npy to one without it.
+        with open(path, "wb") as fh:
+            np.save(fh, predictions)
 
-        with open(npy_path.with_suffix(".csv"), "w", newline="") as fh:
+        with open(path.with_suffix(".csv"), "w", newline="") as fh:
             writer = csv.writer(fh)
             writer.writerow(["frame", "predicted_label"])
             writer.writerows(enumerate(predictions.tolist()))
-        return npy_path
+        return path
 
     def _windows(self) -> PoseDataset:
         """One window per frame, prepared exactly as the decoder's training data."""
