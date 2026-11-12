@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from qtpy.QtCore import Signal
 from qtpy.QtWidgets import (
     QComboBox,
@@ -18,6 +20,8 @@ import napari
 from poser._panels.helpers.decode_page import DecodePage
 from poser._panels.helpers.pose_page import PosePage
 from poser.core.session import SessionManager
+
+log = logging.getLogger(__name__)
 
 
 class InferencePanel(QWidget):
@@ -52,4 +56,12 @@ class InferencePanel(QWidget):
 
     def _connect(self) -> None:
         self._mode_combo.currentIndexChanged.connect(self._stack.setCurrentIndex)
+        self._mode_combo.currentTextChanged.connect(
+            lambda mode: log.debug("Inference panel switched to %s", mode)
+        )
         self._decode_page.predictions_ready.connect(self.predictions_ready)
+        log.debug(
+            "Inference panel wired, starting in %s mode: the mode combo picks the "
+            "page, and the decode page's predictions are relayed as predictions_ready",
+            self._mode_combo.currentText(),
+        )
