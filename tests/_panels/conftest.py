@@ -11,6 +11,8 @@ class Dialogs:
     An empty answer is the user pressing Cancel.
     """
 
+    DontConfirmOverwrite = 0x4  # a QFileDialog option, passed through as options
+
     def __init__(self, answer: str) -> None:
         self.answer = answer
         self.opened: list[Path] = []
