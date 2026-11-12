@@ -32,6 +32,8 @@ import shutil
 from pathlib import Path
 from typing import Optional
 
+from poser.core.settings import resolve_output_dir
+
 log = logging.getLogger(__name__)
 
 
@@ -47,7 +49,7 @@ def finetune_yolo(
     imgsz: int = 640,
     batch: int = 16,
     lr0: float = 0.001,
-    project: str = "poser_yolo_finetune",
+    project: str | Path | None = None,
     name: str = "run",
     device: str = "auto",
     freeze_backbone: bool = True,
@@ -81,7 +83,7 @@ def finetune_yolo(
     lr0:
         Initial learning rate.
     project:
-        Output project directory.
+        Output project directory. Defaults to data/finetune.
     name:
         Run name sub-directory.
     device:
@@ -110,6 +112,7 @@ def finetune_yolo(
         ) from exc
 
     images_dir = Path(images_dir)
+    project = Path(project) if project else resolve_output_dir("finetune")
 
     # Build data.yaml if not provided
     if data_yaml is None:
@@ -139,7 +142,7 @@ def finetune_yolo(
         imgsz=imgsz,
         batch=batch,
         lr0=lr0,
-        project=project,
+        project=str(project),
         name=name,
         device=device,
         freeze=freeze_layers,

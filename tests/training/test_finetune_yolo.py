@@ -7,6 +7,7 @@ import types
 
 import yaml
 
+from poser.core.settings import settings
 from poser.training.finetune_yolo import finetune_yolo
 
 
@@ -54,3 +55,16 @@ def test_extra_kwargs_override_named_defaults(tmp_path, monkeypatch):
     assert _FakeYOLO.train_kwargs["batch"] == 8
     assert _FakeYOLO.train_kwargs["patience"] == 5
     assert _FakeYOLO.train_kwargs["epochs"] == 50
+
+
+def test_runs_go_under_data_finetune_by_default(tmp_path, monkeypatch):
+    # They used to go to poser_yolo_finetune/ in whatever folder Python started in.
+    monkeypatch.setitem(
+        sys.modules, "ultralytics", types.SimpleNamespace(YOLO=_FakeYOLO)
+    )
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+
+    run_dir = finetune_yolo(tmp_path, data_yaml=tmp_path / "data.yaml")
+
+    assert _FakeYOLO.train_kwargs["project"] == str(tmp_path / "data" / "finetune")
+    assert run_dir == tmp_path / "data" / "finetune" / "run"

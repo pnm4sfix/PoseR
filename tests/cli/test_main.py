@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import torch
@@ -115,3 +117,29 @@ def test_batch_writes_under_data_batch_by_default(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert seen["output_dir"] == str(tmp_path / "data" / "batch")
+
+
+class _FakeYOLO:
+    """Stands in for ultralytics.YOLO and records what train() was given."""
+
+    train_kwargs: dict = {}
+
+    def __init__(self, weights):
+        pass
+
+    def train(self, **kwargs):
+        _FakeYOLO.train_kwargs = kwargs
+
+
+def test_finetune_writes_under_data_finetune_by_default(tmp_path, monkeypatch):
+    # The command passed its own poser_yolo_finetune/ default, relative to the
+    # folder it was started from.
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setitem(sys.modules, "ultralytics", SimpleNamespace(YOLO=_FakeYOLO))
+    frames = tmp_path / "frames"
+    frames.mkdir()
+
+    result = runner.invoke(app, ["finetune", str(frames)])
+
+    assert result.exit_code == 0, result.output
+    assert _FakeYOLO.train_kwargs["project"] == str(tmp_path / "data" / "finetune")

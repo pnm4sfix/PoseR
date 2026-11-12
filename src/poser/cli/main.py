@@ -479,7 +479,9 @@ def finetune(
     num_keypoints: int = typer.Option(9, "--keypoints", "-k"),
     epochs: int = typer.Option(50, "--epochs", "-e"),
     batch_size: int = typer.Option(16, "--batch", "-b"),
-    project: str = typer.Option("poser_yolo_finetune", "--project"),
+    project: Optional[Path] = typer.Option(
+        None, "--project", help="Defaults to data/finetune."
+    ),
     name: str = typer.Option("run", "--name"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
