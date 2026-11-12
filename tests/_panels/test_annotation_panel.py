@@ -73,6 +73,42 @@ def test_name_without_the_pose_suffix_still_pairs_for_training(tmp_path, monkeyp
     assert (tmp_path / "fish1_labels.npy").is_file()
 
 
+def test_export_question_says_unlabelled_bout_frames_are_ignored(
+    tmp_path, monkeypatch
+):
+    # It said they would default to label 0 (other), but they are saved as -1.
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(
+        annotation_panel, "QFileDialog", Dialogs(answer=str(tmp_path / "fish1"))
+    )
+    asked = []
+
+    def answer_yes(parent, title, text, buttons):
+        asked.append(text)
+        return annotation_panel.QMessageBox.Yes
+
+    monkeypatch.setattr(
+        annotation_panel,
+        "QMessageBox",
+        SimpleNamespace(Yes=1, No=2, question=answer_yes, information=lambda *a: None),
+    )
+    panel = _panel(tmp_path)
+    panel._current_bouts.append({"start": 6, "end": 8})
+
+    AnnotationPanel._on_export(panel)
+    first_labels = np.load(tmp_path / "fish1_labels.npy")
+    panel._current_bouts.append({"start": 9, "end": 10})
+    AnnotationPanel._on_export(panel)
+
+    assert asked == [
+        "1 bout is still unlabelled. Its frames are saved as -1 and ignored in "
+        "training. Continue?",
+        "2 bouts are still unlabelled. Their frames are saved as -1 and ignored in "
+        "training. Continue?",
+    ]
+    assert first_labels.tolist() == [0, 0, 1, 1, 1, 0, -1, -1, 0, 0]
+
+
 def _labelling_panel(tmp_path, row: int, bouts: list[dict]) -> SimpleNamespace:
     """The stand-in panel listing bouts, with row selected and label 1 clicked."""
     panel = _panel(tmp_path)

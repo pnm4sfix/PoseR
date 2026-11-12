@@ -437,10 +437,12 @@ class AnnotationPanel(QWidget):
                 len(unlabelled),
                 len(self._current_bouts),
             )
+            n = len(unlabelled)
             reply = QMessageBox.question(
                 self, "Unlabelled bouts",
-                f"{len(unlabelled)} bouts are still unlabelled. "
-                "Unlabelled frames will default to label 0 (other). Continue?",
+                f"{n} {'bout is' if n == 1 else 'bouts are'} still unlabelled. "
+                f"{'Its' if n == 1 else 'Their'} frames are saved as -1 and ignored in "
+                "training. Continue?",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if reply != QMessageBox.Yes:
