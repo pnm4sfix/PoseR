@@ -437,12 +437,15 @@ def batch(
                              help="'behaviour' or 'pose_estimation'."),
     checkpoint: Optional[Path] = typer.Option(None, "--checkpoint", "-w"),
     config: Path = typer.Option("decoder_config.yml", "--config", "-c"),
-    output_dir: Path = typer.Option(Path("batch_output"), "--output", "-o"),
+    output_dir: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Defaults to data/batch."
+    ),
     n_individuals: int = typer.Option(1, "--individuals", "-n"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Batch process multiple pose files."""
     _setup_logging(verbose)
+    output_dir = output_dir or resolve_output_dir("batch")
 
     from poser.core.batch import BatchJob
     from poser.training.config import TrainingConfig

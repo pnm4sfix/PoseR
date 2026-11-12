@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from poser import api
 from poser.cli.main import app
+from poser.core.batch import BatchRunner
 from poser.core.settings import settings
 from poser.models.st_gcn_aaai18_pylightning_3block import ST_GCN_18
 from poser.training import data_prep
@@ -96,3 +97,21 @@ def test_predict_npy_writes_under_data_predictions_by_default(tmp_path, monkeypa
     saved = tmp_path / "data" / "predictions" / "rec_pose_predictions.npy"
     assert np.load(saved).tolist() == [1] * 12
     assert saved.with_suffix(".csv").is_file()
+
+
+def test_batch_writes_under_data_batch_by_default(tmp_path, monkeypatch):
+    # It used to write to batch_output/ in whatever folder it was started from.
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.chdir(tmp_path)
+    seen = {}
+
+    def record(batch_runner):
+        seen["output_dir"] = batch_runner._job.output_dir
+        return []
+
+    monkeypatch.setattr(BatchRunner, "run", record)
+
+    result = runner.invoke(app, ["batch", str(tmp_path / "rec_DLC.h5")])
+
+    assert result.exit_code == 0, result.output
+    assert seen["output_dir"] == str(tmp_path / "data" / "batch")
