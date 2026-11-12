@@ -33,6 +33,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from poser.core.settings import resolve_output_dir
 from poser.models.registry import describe_checkpoint
 
 app = typer.Typer(
@@ -127,7 +128,7 @@ def install_torch(
 def train(
     files: List[Path] = typer.Argument(..., help="HDF5 or *_pose.npy files to train on."),
     config: Path = typer.Option("decoder_config.yml", "--config", "-c", help="TrainingConfig YAML."),
-    output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Override output directory."),
+    output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Defaults to data/runs."),
     epochs: Optional[int] = typer.Option(None, "--epochs", "-e", help="Override max_epochs."),
     run_name: Optional[str] = typer.Option(None, "--name", "-n", help="Run name / sub-directory."),
     num_class: Optional[int] = typer.Option(None, "--num-class", help="Override model num_class."),
@@ -150,11 +151,7 @@ def train(
         console.print("[yellow]Config file not found - using defaults.[/yellow]")
 
     # Apply CLI overrides
-    if output_dir:
-        cfg.output_dir = output_dir
-    else:
-        # Default: place runs alongside the training data, not in CWD
-        cfg.output_dir = files[0].resolve().parent / "poser_runs"
+    cfg.output_dir = output_dir or resolve_output_dir("runs")
     if epochs:
         cfg.trainer.max_epochs = epochs
     if run_name:
