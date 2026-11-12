@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 
@@ -75,3 +76,71 @@ def test_an_unwritable_log_folder_leaves_terminal_logging(
     _factories._configure_logging()
 
     assert sorted(_handlers(poser_logger)) == ["poser-terminal"]
+
+
+class _Signal:
+    """Stands in for a Qt signal and records what was connected to it."""
+
+    def __init__(self) -> None:
+        self.slots = []
+
+    def connect(self, slot) -> None:
+        self.slots.append(slot)
+
+
+def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    viewer = object()
+    panels = {
+        "_annotation_cache": SimpleNamespace(annotations_changed=_Signal()),
+        "_ethogram_cache": SimpleNamespace(
+            load_annotations=lambda labels: None,
+            load_predictions=lambda predictions, checkpoint: None,
+        ),
+        "_inference_cache": SimpleNamespace(predictions_ready=_Signal()),
+        "_metrics_cache": SimpleNamespace(
+            load_predictions=lambda predictions, checkpoint: None
+        ),
+    }
+    for cache, panel in panels.items():
+        monkeypatch.setattr(_factories, cache, {id(viewer): panel})
+    monkeypatch.setattr(_factories, "_wired", set())
+
+    _factories._wire_panels(viewer)
+    _factories._wire_panels(viewer)
+
+    connected = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "poser._panels._factories" and record.levelno == logging.INFO
+    ]
+    assert connected == [
+        "Connected the Annotation panel's labels to the Ethogram",
+        "Connected the Inference panel's predictions to the Ethogram",
+        "Connected the Inference panel's predictions to the Metrics panel",
+    ]
+
+
+def test_the_panels_open_for_a_viewer_are_logged(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    viewer = object()
+    for cache in (
+        "_annotation_cache",
+        "_ethogram_cache",
+        "_inference_cache",
+        "_metrics_cache",
+    ):
+        monkeypatch.setattr(_factories, cache, {})
+    monkeypatch.setattr(
+        _factories,
+        "_annotation_cache",
+        {id(viewer): SimpleNamespace(annotations_changed=_Signal())},
+    )
+
+    _factories._wire_panels(viewer)
+
+    [record] = [r for r in caplog.records if r.name == "poser._panels._factories"]
+    assert record.levelno == logging.DEBUG
+    assert "annotation=True ethogram=False inference=False metrics=False" in (
+        record.getMessage()
+    )

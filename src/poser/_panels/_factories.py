@@ -117,30 +117,42 @@ def _wire_panels(viewer) -> None:
     ethogram = _ethogram_cache.get(key)
     inference = _inference_cache.get(key)
     metrics = _metrics_cache.get(key)
+    log.debug(
+        "Panels open for viewer %s: annotation=%s ethogram=%s inference=%s metrics=%s",
+        key,
+        annotation is not None,
+        ethogram is not None,
+        inference is not None,
+        metrics is not None,
+    )
 
     if annotation is not None and ethogram is not None:
         pair = (id(annotation), id(ethogram), "annotations")
         if pair not in _wired:
             annotation.annotations_changed.connect(ethogram.load_annotations)
             _wired.add(pair)
+            log.info("Connected the Annotation panel's labels to the Ethogram")
 
     if inference is not None and ethogram is not None:
         pair = (id(inference), id(ethogram), "predictions")
         if pair not in _wired:
             inference.predictions_ready.connect(ethogram.load_predictions)
             _wired.add(pair)
+            log.info("Connected the Inference panel's predictions to the Ethogram")
 
     if inference is not None and metrics is not None:
         pair = (id(inference), id(metrics), "metrics_predictions")
         if pair not in _wired:
             inference.predictions_ready.connect(metrics.load_predictions)
             _wired.add(pair)
+            log.info("Connected the Inference panel's predictions to the Metrics panel")
 
 
 def make_data_panel() -> DataPanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the data panel for viewer %s", id(v))
     return DataPanel(v, session=get_session(v))
 
 
@@ -148,6 +160,7 @@ def make_annotation_panel() -> AnnotationPanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the annotation panel for viewer %s", id(v))
     panel = AnnotationPanel(v, session=get_session(v))
     _annotation_cache[id(v)] = panel
     _wire_panels(v)
@@ -158,6 +171,7 @@ def make_analysis_panel() -> AnalysisPanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the analysis panel for viewer %s", id(v))
     return AnalysisPanel(v, session=get_session(v))
 
 
@@ -165,6 +179,7 @@ def make_inference_panel() -> InferencePanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the inference panel for viewer %s", id(v))
     panel = InferencePanel(v, session=get_session(v))
     _inference_cache[id(v)] = panel
     _wire_panels(v)
@@ -175,6 +190,7 @@ def make_train_panel() -> TrainPanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the train panel for viewer %s", id(v))
     return TrainPanel(v, session=get_session(v))
 
 
@@ -182,6 +198,7 @@ def make_ethogram_panel() -> EthogramPanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the ethogram panel for viewer %s", id(v))
     panel = EthogramPanel(v)
     _ethogram_cache[id(v)] = panel
     _wire_panels(v)
@@ -192,6 +209,7 @@ def make_metrics_panel() -> MetricsPanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the metrics panel for viewer %s", id(v))
     panel = MetricsPanel(v, session=get_session(v))
     _metrics_cache[id(v)] = panel
     _wire_panels(v)
