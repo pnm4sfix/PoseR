@@ -12,6 +12,7 @@ Features:
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
@@ -37,6 +38,8 @@ from qtpy.QtWidgets import (
 from poser.core.bout_detection import manual_bout
 from poser.core.session import SessionManager
 from poser.core.settings import resolve_output_dir
+
+log = logging.getLogger(__name__)
 
 
 class AnalysisPanel(QWidget):
@@ -67,6 +70,7 @@ class AnalysisPanel(QWidget):
         self._manual_start: Optional[int] = None
 
         self._build_ui()
+        log.debug("Analysis panel created with on_bouts_updated=%s", on_bouts_updated)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -172,7 +176,10 @@ class AnalysisPanel(QWidget):
         try:
             self._viewer.dims.events.current_step.connect(self._on_frame_changed)
         except Exception:
-            pass
+            log.debug(
+                "Cannot follow the viewer frame slider; the frame readout stays at 0",
+                exc_info=True,
+            )
 
         btn_row = QHBoxLayout()
         self._btn_set_start = QPushButton("Set Start")
@@ -216,13 +223,21 @@ class AnalysisPanel(QWidget):
             frame = int(self._viewer.dims.current_step[0])
             self._frame_label.setText(f"Current frame: {frame}")
         except Exception:
-            pass
+            log.debug(
+                "Cannot read the current frame; the frame readout is not updated",
+                exc_info=True,
+            )
 
     def _on_set_start(self) -> None:
         try:
             self._manual_start = int(self._viewer.dims.current_step[0])
         except Exception:
+            log.debug(
+                "Cannot read the current frame; the manual bout starts at 0",
+                exc_info=True,
+            )
             self._manual_start = 0
+        log.debug("Manual bout start set to frame %d", self._manual_start)
         self._manual_range_label.setText(f"Range: {self._manual_start} to —")
         self._btn_set_end.setEnabled(True)
 
@@ -230,9 +245,23 @@ class AnalysisPanel(QWidget):
         try:
             end_frame = int(self._viewer.dims.current_step[0])
         except Exception:
+            log.debug(
+                "Cannot read the current frame; using the start frame as the end",
+                exc_info=True,
+            )
             end_frame = self._manual_start or 0
+        log.debug(
+            "Set End clicked: start frame %s, end frame %d",
+            self._manual_start,
+            end_frame,
+        )
 
         if self._manual_start is None or end_frame <= self._manual_start:
+            log.warning(
+                "Manual bout not added: end frame %d is not after start frame %s",
+                end_frame,
+                self._manual_start,
+            )
             QMessageBox.warning(
                 self, "Invalid range",
                 "End frame must be after start frame."
@@ -243,6 +272,10 @@ class AnalysisPanel(QWidget):
         entry = self._session.active
         coords_data = entry.coords_data if entry else None
         if not coords_data:
+            log.warning(
+                "Manual bout not added: no pose data loaded (active entry: %s)",
+                entry.pose_path if entry else None,
+            )
             QMessageBox.warning(self, "No data", "Load a pose file first.")
             return
 
@@ -259,6 +292,11 @@ class AnalysisPanel(QWidget):
             self._individual_combo.blockSignals(False)
         individual = self._individual_combo.currentText()
         if individual not in coords_data:
+            log.debug(
+                "Individual %s is not in the pose data %s; using the first one",
+                individual,
+                available,
+            )
             individual = available[0]
             self._individual_combo.setCurrentText(individual)
 
@@ -269,10 +307,26 @@ class AnalysisPanel(QWidget):
             individual_key=individual,
         )
         self._detected_bouts.append(bout)
+        log.info(
+            "Added manual bout %d-%d for %s on %s; %d bouts in total",
+            self._manual_start,
+            end_frame,
+            individual,
+            entry.pose_path,
+            len(self._detected_bouts),
+        )
         self._update_bout_count()
         self._save_bouts_to_session(self._detected_bouts)
         if self._on_bouts_updated:
+            log.debug(
+                "Passing %d bouts to on_bouts_updated", len(self._detected_bouts)
+            )
             self._on_bouts_updated(list(self._detected_bouts))
+        else:
+            log.debug(
+                "No on_bouts_updated callback; the Annotation panel gets these bouts "
+                "only from its Load Bouts button"
+            )
 
         self._manual_range_label.setText(
             f"Added: {self._manual_start} → {end_frame}  "
@@ -284,6 +338,10 @@ class AnalysisPanel(QWidget):
     def _on_detect(self) -> None:
         entry = self._session.active
         if entry is None or not entry.coords_data:
+            log.warning(
+                "Bout detection skipped: no pose data loaded (active entry: %s)",
+                entry.pose_path if entry else None,
+            )
             QMessageBox.warning(self, "No data", "Load a pose file first.")
             return
 
@@ -305,6 +363,11 @@ class AnalysisPanel(QWidget):
 
         individual = self._individual_combo.currentText()
         if individual not in coords_data:
+            log.debug(
+                "Individual %s is not in the pose data %s; using the first one",
+                individual,
+                available,
+            )
             individual = available[0]
             self._individual_combo.setCurrentText(individual)
 
@@ -322,6 +385,20 @@ class AnalysisPanel(QWidget):
         fps = self._fps_spin.value()
         method = self._method_combo.currentText()
         center_node = min(self._center_node_spin.value(), n_nodes - 1)
+        log.debug(
+            "Detecting bouts on %s: individual %s, %d nodes x %d frames "
+            "(%d NaN coordinates set to 0), method %s, fps %d, centre node %d; "
+            "the Threshold box (%.2f) is not passed to the detector",
+            entry.pose_path,
+            individual,
+            n_nodes,
+            n_frames,
+            int(np.isnan(x).sum() + np.isnan(y).sum()),
+            method,
+            fps,
+            center_node,
+            self._thresh_spin.value(),
+        )
 
         try:
             if method == "egocentric":
@@ -333,6 +410,11 @@ class AnalysisPanel(QWidget):
                     points, center_node=center_node, fps=fps, n_nodes=n_nodes
                 )
         except Exception as exc:
+            log.exception(
+                "Bout detection with the %s method failed on %s",
+                method,
+                entry.pose_path,
+            )
             QMessageBox.critical(self, "Detection error", str(exc))
             return
 
@@ -341,44 +423,88 @@ class AnalysisPanel(QWidget):
             b if isinstance(b, dict) else {"start": int(b[0]), "end": int(b[1])}
             for b in bouts
         ]
+        log.debug(
+            "The %s method found %d bouts before the length filter", method, len(bouts)
+        )
 
         # Filter by duration
         min_f = self._min_frames_spin.value()
         max_f = self._max_frames_spin.value()
         bouts = [b for b in bouts if min_f <= (b["end"] - b["start"]) <= max_f]
+        log.info(
+            "Detected %d bouts on %s (individual %s, method %s, fps %d, "
+            "centre node %d, %d-%d frames long)",
+            len(bouts),
+            entry.pose_path,
+            individual,
+            method,
+            fps,
+            center_node,
+            min_f,
+            max_f,
+        )
 
         self._detected_bouts = bouts
         self._update_bout_count()
         self._save_bouts_to_session(bouts)
         if self._on_bouts_updated:
+            log.debug("Passing %d bouts to on_bouts_updated", len(bouts))
             self._on_bouts_updated(list(bouts))
+        else:
+            log.debug(
+                "No on_bouts_updated callback; the Annotation panel gets these bouts "
+                "only from its Load Bouts button"
+            )
 
     def _save_bouts_to_session(self, bouts: list) -> None:
         """Persist bouts onto the active SessionEntry so other panels can read them."""
         entry = self._session.active
         if entry is not None:
+            labelled_before = sum(1 for b in entry.bouts if "label" in b)
             entry.bouts = list(bouts)
+            log.debug(
+                "Stored %d bouts (%d labelled) on session entry %s; it had %d "
+                "labelled before",
+                len(entry.bouts),
+                sum(1 for b in entry.bouts if "label" in b),
+                entry.pose_path,
+                labelled_before,
+            )
 
     def _on_export_frame(self) -> None:
         try:
             frame_idx = int(self._viewer.dims.current_step[0])
         except Exception:
+            log.debug("Cannot read the current frame; exporting frame 0", exc_info=True)
             frame_idx = 0
 
         entry = self._session.active
         export_type = self._export_type_combo.currentText()
         individual = self._individual_combo.currentText()
+        log.debug(
+            "Export frame %d of %s as %s, individual %s",
+            frame_idx,
+            entry.pose_path if entry else None,
+            export_type,
+            individual,
+        )
 
         if "YOLO" in export_type:
             output_dir = QFileDialog.getExistingDirectory(
                 self, "Select output directory", str(resolve_output_dir("frames"))
             )
             if not output_dir:
+                log.debug("YOLO frame export cancelled in the folder dialog")
                 return
+            log.debug("YOLO frame export folder chosen: %s", output_dir)
 
             # Need a frame image — try to get from viewer
             frame_image = self._get_frame_image(frame_idx)
             if frame_image is None:
+                log.warning(
+                    "YOLO frame export skipped: no image for frame %d in the viewer",
+                    frame_idx,
+                )
                 QMessageBox.warning(self, "No image", "No image layer found in viewer.")
                 return
 
@@ -386,8 +512,16 @@ class AnalysisPanel(QWidget):
             # (already filtered, NaN-free) then fall back to coords_data
             keypoints = self._get_keypoints_from_layer(frame_idx, individual)
             if keypoints is None:
+                log.debug(
+                    "No keypoints on a visible Points layer; trying the pose data"
+                )
                 keypoints = self._get_keypoints(frame_idx, individual, entry)
             if keypoints is None:
+                log.warning(
+                    "YOLO frame export skipped: no keypoints for %s at frame %d",
+                    individual,
+                    frame_idx,
+                )
                 QMessageBox.warning(
                     self, "No keypoints",
                     f"No pose data found for individual '{individual}' "
@@ -405,6 +539,13 @@ class AnalysisPanel(QWidget):
                 source_stem=entry.stem if entry else "frame",
                 output_dir=Path(output_dir),
             )
+            log.info(
+                "Saved frame %d with %d keypoints for YOLO: image %s, label %s",
+                frame_idx,
+                len(keypoints),
+                img_path,
+                label_path,
+            )
             QMessageBox.information(self, "Saved", f"Image: {img_path}\nLabel: {label_path}")
 
         else:  # Classification
@@ -417,14 +558,22 @@ class AnalysisPanel(QWidget):
                 options=QFileDialog.DontConfirmOverwrite,
             )
             if not path:
+                log.debug("Classification frame export cancelled in the save dialog")
                 return
+            log.debug("Classification frame file chosen: %s", path)
 
             if entry is None or entry.coords_data is None:
+                log.warning(
+                    "Classification frame export skipped: no pose data loaded "
+                    "(active entry: %s)",
+                    entry.pose_path if entry else None,
+                )
                 QMessageBox.warning(self, "No data", "No pose data loaded.")
                 return
 
             label, ok = self._ask_label()
             if not ok:
+                log.debug("Classification frame export cancelled in the label dialog")
                 return
 
             from poser.core.frame_export import save_frame_as_classification
@@ -436,6 +585,14 @@ class AnalysisPanel(QWidget):
                 source_file=entry.pose_path,
                 output_dir=Path(path).parent,
                 file_name=Path(path).name,
+            )
+            log.info(
+                "Added frame %d of %s (individual %s, label %s) to %s",
+                frame_idx,
+                entry.pose_path,
+                individual,
+                label,
+                h5_path,
             )
             QMessageBox.information(self, "Saved", f"Saved classification frame to:\n{h5_path}")
 
@@ -457,6 +614,7 @@ class AnalysisPanel(QWidget):
         visible = [lyr for lyr in candidates if lyr.visible]
         layer = visible[0] if visible else (candidates[0] if candidates else None)
         if layer is None:
+            log.debug("No Image layer in the viewer to read frame %d from", frame_idx)
             return None
         try:
             data = layer.data
@@ -466,6 +624,12 @@ class AnalysisPanel(QWidget):
                 frame = np.array(data[frame_idx])
             return frame
         except Exception:
+            log.debug(
+                "Cannot read frame %d from image layer %s; no image to export",
+                frame_idx,
+                layer.name,
+                exc_info=True,
+            )
             return None
 
     def _get_keypoints_from_layer(self, frame_idx: int, individual: str) -> Optional[np.ndarray]:
@@ -479,6 +643,7 @@ class AnalysisPanel(QWidget):
             if isinstance(lyr, napari.layers.Points) and lyr.visible
         ]
         if not visible_pts:
+            log.debug("No visible Points layer to read keypoints from")
             return None
         layer = visible_pts[0]
         pts = layer.data          # (N, 3): frame, y, x
@@ -486,6 +651,9 @@ class AnalysisPanel(QWidget):
 
         frame_mask = pts[:, 0].astype(int) == frame_idx
         if not frame_mask.any():
+            log.debug(
+                "Points layer %s has no points at frame %d", layer.name, frame_idx
+            )
             return None
 
         xs = pts[frame_mask, 2]
@@ -498,11 +666,22 @@ class AnalysisPanel(QWidget):
         try:
             ind_idx = int(individual.replace("ind", "")) - 1
         except Exception:
+            log.debug(
+                "No individual number in %s; using individual 0 of the Points layer",
+                individual,
+                exc_info=True,
+            )
             ind_idx = 0
 
         ind_mask = inds == ind_idx
         if not ind_mask.any():
             # fallback: just use all points at this frame
+            log.debug(
+                "No points of individual %d at frame %d; using all %d points",
+                ind_idx,
+                frame_idx,
+                len(xs),
+            )
             ind_mask = np.ones(len(xs), dtype=bool)
 
         return np.stack([xs[ind_mask], ys[ind_mask], confs[ind_mask]], axis=-1)
@@ -510,9 +689,16 @@ class AnalysisPanel(QWidget):
     def _get_keypoints(self, frame_idx: int, individual: str, entry) -> Optional[np.ndarray]:
         """Return ``(V, 2)`` keypoints for *frame_idx* from session coords_data."""
         if entry is None or not entry.coords_data:
+            log.debug("No session pose data to read keypoints from")
             return None
         ind = entry.coords_data.get(individual)
         if ind is None:
+            log.debug(
+                "Individual %s is not in the pose data of %s (%s)",
+                individual,
+                entry.pose_path,
+                list(entry.coords_data),
+            )
             return None
         import pandas as pd
         x = ind["x"]
@@ -525,6 +711,11 @@ class AnalysisPanel(QWidget):
                 ci = pd.DataFrame(ci)
         n_nodes, n_frames = x.shape
         if frame_idx >= n_frames:
+            log.debug(
+                "Frame %d is past the end of the pose data (%d frames)",
+                frame_idx,
+                n_frames,
+            )
             return None
         xs = x.iloc[:, frame_idx].to_numpy(dtype=float)  # (V,)
         ys = y.iloc[:, frame_idx].to_numpy(dtype=float)  # (V,)
@@ -545,6 +736,7 @@ class AnalysisPanel(QWidget):
 
     def set_individuals(self, individuals: List[str]) -> None:
         """Update the individual combo box."""
+        log.debug("Individuals set to %s", individuals)
         self._individual_combo.clear()
         for ind in individuals:
             self._individual_combo.addItem(ind)
