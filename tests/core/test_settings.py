@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from poser.core.settings import Settings, _find_data_dir, resolve_output_dir, settings
 
 
@@ -33,3 +36,16 @@ def test_output_dir_is_a_data_dir_subfolder_made_on_first_use(tmp_path, monkeypa
 
     assert folder == tmp_path / "data" / "pose"
     assert folder.is_dir()
+
+
+def test_log_level_is_read_from_the_environment_in_any_case(monkeypatch):
+    monkeypatch.setenv("POSER_LOG_LEVEL", "debug")
+
+    assert Settings().log_level == "DEBUG"
+
+
+def test_unknown_log_level_is_rejected(monkeypatch):
+    monkeypatch.setenv("POSER_LOG_LEVEL", "verbose")
+
+    with pytest.raises(ValidationError, match="log_level"):
+        Settings()

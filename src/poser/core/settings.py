@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Literal
 
 import torch
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # The data_dir subfolder each kind of generated file goes to by default.
@@ -26,6 +26,7 @@ OutputKind = Literal[
     "batch",
     "finetune",
     "frames",
+    "logs",
     "metrics",
     "models",
     "pose",
@@ -73,6 +74,24 @@ class Settings(BaseSettings):
         "In a source checkout it is the repository's data/. An installed "
         "package has no repository, so it is ~/.poser/data.",
     )
+
+    log_level: str = Field(
+        "INFO",
+        description="Lowest level of PoseR log messages shown in the terminal: "
+        "DEBUG, INFO, WARNING or ERROR. The log file in data_dir/logs keeps "
+        "everything from DEBUG up.",
+    )
+
+    @field_validator("log_level")
+    @classmethod
+    def _known_level(cls, value: str) -> str:
+        """Accept any case, so POSER_LOG_LEVEL=debug works."""
+        level = value.upper()
+        if level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
+            raise ValueError(
+                f"log_level must be DEBUG, INFO, WARNING or ERROR, not {value!r}"
+            )
+        return level
 
 
 settings = Settings()
