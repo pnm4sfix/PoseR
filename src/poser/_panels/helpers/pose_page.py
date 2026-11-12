@@ -178,17 +178,33 @@ class PosePage(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select pose model", "", "YOLO weights (*.pt);;All files (*)"
         )
+        log.debug("Custom pose model chosen: %s", path or "none, dialog cancelled")
         if path:
             self._model_combo.insertItem(0, path)
             self._model_combo.setCurrentIndex(0)
+            log.info("Added custom pose model %s and selected it", path)
 
     def _on_mode_changed(self) -> None:
         # Track runs one frame at a time, so batch size does not apply.
         self._batch_spin.setEnabled(self._mode() is InferenceMode.PREDICT)
+        log.debug(
+            "Inference mode changed to %s; batch size %s",
+            self._mode().value,
+            "enabled" if self._mode() is InferenceMode.PREDICT else "disabled",
+        )
 
     def _on_run_active_clicked(self) -> None:
         entry = self._session.active
+        log.debug(
+            "Run pose estimation on the active video: entry %s, video %r",
+            getattr(entry, "stem", None),
+            getattr(entry, "video_path", None),
+        )
         if entry is None or not entry.video_path:
+            log.warning(
+                "Pose estimation not started: no active video (active entry: %s)",
+                getattr(entry, "stem", None),
+            )
             self._status.append(
                 "No active video. Add one in the Data panel and activate it first."
             )
@@ -200,17 +216,25 @@ class PosePage(QWidget):
             str(resolve_output_dir("pose") / name),
             "PoseR coords (*.h5)",
         )
+        log.debug("Pose file chosen: %s", path or "none, dialog cancelled")
         if path:
             self._run([entry], [Path(path)])
 
     def _on_run_all_clicked(self) -> None:
         entries = [entry for entry in self._session.entries if entry.video_path]
+        log.debug(
+            "Run pose estimation on all session videos: %d of %d entries have one",
+            len(entries),
+            len(self._session.entries),
+        )
         if not entries:
+            log.warning("Pose estimation not started: no session entry has a video")
             self._status.append("No session entries have a video.")
             return
         folder = QFileDialog.getExistingDirectory(
             self, "Save pose estimation files in", str(resolve_output_dir("pose"))
         )
+        log.debug("Pose file folder chosen: %s", folder or "none, dialog cancelled")
         if folder:
             outputs = [
                 Path(folder) / f"{Path(entry.video_path).name}_poser_coords.h5"
@@ -232,6 +256,13 @@ class PosePage(QWidget):
             "max_individuals": self._individuals_spin.value(),
             "imgsz": self._imgsz_spin.value() or None,  # 0 means auto
         }
+        log.info(
+            "Starting pose estimation of %d video(s) with model %s, camera %d, %s",
+            len(entries),
+            model,
+            camera,
+            options,
+        )
         self._n_videos = len(entries)
         self._progress.setValue(0)
         self._status.append(f"Loading {Path(model).name} …")
@@ -260,7 +291,11 @@ class PosePage(QWidget):
         Yields the run's progress as a percentage, status lines, and one
         _VideoResult per video.
         """
+        log.debug(
+            "Pose worker started: %d video(s), loading model %s", len(entries), model
+        )
         self._estimator.model_load(Path(model), resolve_device())
+        log.info("Loaded pose model %s", model)
         yield f"Loaded {Path(model).name}."
         for index, (entry, output) in enumerate(zip(entries, outputs)):
             name = Path(entry.video_path).name
@@ -271,6 +306,14 @@ class PosePage(QWidget):
                         "in this run, which it would replace."
                     )
                 n_frames = self._estimator.input_load(entry.video_path, camera)
+                log.debug(
+                    "[%d/%d] Opened %s: %d frames, pose file %s",
+                    index + 1,
+                    len(entries),
+                    entry.video_path,
+                    n_frames,
+                    output,
+                )
                 yield f"[{index + 1}/{len(entries)}] {name}: {n_frames:,} frames …"
                 records = []
                 for keypoints in self._estimator.iter_keypoints(**options):
@@ -278,6 +321,13 @@ class PosePage(QWidget):
                     videos_done = index + (keypoints.frame + 1) / max(n_frames, 1)
                     yield min(100, int(100 * videos_done / len(entries)))
                 coords = self._estimator.coords_from_keypoints(records)
+                log.debug(
+                    "%s: %d frames of keypoints (video reported %d), %d individual(s)",
+                    name,
+                    len(records),
+                    n_frames,
+                    len(coords),
+                )
                 pose_path = ""
                 if coords:
                     pose_path = save_coords_as(coords, output)
@@ -285,6 +335,7 @@ class PosePage(QWidget):
             except Exception as exc:
                 # One bad video must not stop the rest of the run (FR-P4).
                 yield _VideoResult(index, entry, error=exc)
+        log.info("Pose estimation finished on %d video(s)", len(entries))
 
     def _on_worker_yielded(self, item: int | str | _VideoResult) -> None:
         if isinstance(item, int):
@@ -298,14 +349,30 @@ class PosePage(QWidget):
         name = Path(result.entry.video_path).name
         prefix = f"[{result.index + 1}/{self._n_videos}] {name}"
         if result.error is not None:
-            log.error("Pose estimation failed on %s", name, exc_info=result.error)
+            log.error(
+                "%s: pose estimation failed (video %s)",
+                prefix,
+                result.entry.video_path,
+                exc_info=result.error,
+            )
             self._status.append(
                 f"{prefix}: ERROR {result.error}\n{_traceback_text(result.error)}"
             )
             return
         if not result.coords:
+            log.warning(
+                "%s: no animals found, nothing saved (video %s)",
+                prefix,
+                result.entry.video_path,
+            )
             self._status.append(f"{prefix}: no animals found, nothing saved.")
             return
+        log.info(
+            "%s: saved %s, %d individual(s)",
+            prefix,
+            result.pose_path,
+            len(result.coords),
+        )
         self._add_points_layer(result.entry, result.pose_path, result.coords)
         self._status.append(
             f"{prefix}: saved {Path(result.pose_path).name}, "
@@ -316,12 +383,20 @@ class PosePage(QWidget):
         self, entry: SessionEntry, pose_path: str, coords: dict
     ) -> None:
         """Link the new pose file to its entry and draw it, replacing a rerun's."""
+        log.debug(
+            "Linking pose file %s to entry %s (video %s)",
+            pose_path,
+            entry.stem,
+            entry.video_path,
+        )
         entry.pose_path = pose_path
         entry.coords_data = coords
         name = entry.layer_name("points")
         if name in self._viewer.layers:
+            log.debug("Replacing points layer %s from an earlier run", name)
             self._viewer.layers.remove(self._viewer.layers[name])
         points, properties = PoseEstimator.points_from_coords(coords)
+        log.debug("Drawing %d pose points as layer %s", len(points), name)
         self._viewer.add_points(
             points,
             properties=properties,
@@ -334,6 +409,7 @@ class PosePage(QWidget):
             entry.layer_names.append(name)
 
     def _set_busy(self, busy: bool) -> None:
+        log.debug("Pose estimation buttons %s", "disabled" if busy else "enabled")
         self._browse_button.setEnabled(not busy)
         self._run_active_button.setEnabled(not busy)
         self._run_all_button.setEnabled(not busy)
