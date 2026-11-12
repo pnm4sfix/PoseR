@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from types import SimpleNamespace
 
 import numpy as np
@@ -69,3 +70,75 @@ def test_name_without_the_pose_suffix_still_pairs_for_training(tmp_path, monkeyp
 
     assert (tmp_path / "fish1_pose.npy").is_file()
     assert (tmp_path / "fish1_labels.npy").is_file()
+
+
+def _labelling_panel(tmp_path, row: int, bouts: list[dict]) -> SimpleNamespace:
+    """The stand-in panel listing bouts, with row selected and label 1 clicked."""
+    panel = _panel(tmp_path)
+    panel._current_bouts = bouts
+    panel._bout_list = SimpleNamespace(
+        currentRow=lambda: row,
+        count=lambda: len(bouts),
+        item=lambda r: SimpleNamespace(setText=lambda text: None),
+        setCurrentRow=lambda r: None,
+    )
+    panel.sender = lambda: SimpleNamespace(property=lambda name: 1)
+    panel._current_label_display = SimpleNamespace(setText=lambda text: None)
+    panel._update_stats = lambda: None
+    panel._emit_annotations = lambda: None
+    return panel
+
+
+def _messages(caplog, level: int) -> list[str]:
+    """What the annotation panel logged at level."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "poser._panels.annotation_panel" and record.levelno == level
+    ]
+
+
+def test_assigned_label_is_logged_with_its_bout_and_frames(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    panel = _labelling_panel(tmp_path, row=0, bouts=[{"start": 2, "end": 5}])
+
+    AnnotationPanel._on_assign_label(panel)
+
+    [message] = _messages(caplog, logging.INFO)
+    assert "Assigned label 1 (swim) to bout 1, frames 2-5" in message
+
+
+def test_label_click_with_no_bout_selected_logs_a_warning(tmp_path, caplog):
+    # Nothing is assigned, so the bouts stay unlabelled.
+    caplog.set_level(logging.DEBUG, logger="poser")
+    panel = _labelling_panel(tmp_path, row=-1, bouts=[{"start": 2, "end": 5}])
+
+    AnnotationPanel._on_assign_label(panel)
+
+    [message] = _messages(caplog, logging.WARNING)
+    assert "Label not assigned: no bout selected (row -1, 1 bouts loaded)" in message
+    assert panel._current_bouts == [{"start": 2, "end": 5}]
+
+
+def test_loaded_bouts_are_logged_with_their_label_counts(
+    tmp_path, monkeypatch, caplog
+):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    monkeypatch.setattr(annotation_panel, "QListWidgetItem", str)
+    panel = _panel(tmp_path)  # a 10-frame recording
+    panel._bout_list = SimpleNamespace(clear=lambda: None, addItem=lambda item: None)
+    panel._update_stats = lambda: None
+    panel._bouts_to_labels = lambda: AnnotationPanel._bouts_to_labels(panel)
+    panel._emit_annotations = lambda: AnnotationPanel._emit_annotations(panel)
+    panel.annotations_changed = SimpleNamespace(emit=lambda labels: None)
+    # Detectors pad bouts, so the last one can run past the end of the recording.
+    bouts = [{"start": 2, "end": 5, "label": 1}, {"start": 6, "end": 14}]
+
+    AnnotationPanel.load_bouts(panel, bouts)
+
+    [loaded] = _messages(caplog, logging.INFO)
+    assert "Loaded 2 bouts into the annotation list: 1 labelled, 1 unlabelled" in (
+        loaded
+    )
+    [short] = _messages(caplog, logging.WARNING)
+    assert "Label array has 10 frames, shorter than the last bout end 14" in short

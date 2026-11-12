@@ -11,6 +11,7 @@ Features:
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional
 
@@ -36,6 +37,8 @@ from qtpy.QtWidgets import (
 
 from poser.core.session import SessionManager
 from poser.core.settings import resolve_output_dir
+
+log = logging.getLogger(__name__)
 
 
 class AnnotationPanel(QWidget):
@@ -177,6 +180,11 @@ class AnnotationPanel(QWidget):
 
     def load_bouts(self, bouts: List[dict]) -> None:
         """Populate the bout list from detected bouts."""
+        log.debug(
+            "load_bouts received %d bouts; label map %s",
+            len(bouts),
+            self._behaviour_labels,
+        )
         self._current_bouts = bouts
         self._bout_list.clear()
         for i, b in enumerate(bouts):
@@ -187,9 +195,25 @@ class AnnotationPanel(QWidget):
             )
             self._bout_list.addItem(item)
         self._update_stats()
+        labelled = sum(1 for b in bouts if b.get("label", -1) >= 0)
+        log.info(
+            "Loaded %d bouts into the annotation list: %d labelled, %d unlabelled",
+            len(bouts),
+            labelled,
+            len(bouts) - labelled,
+        )
+        unknown = {b.get("label", -1) for b in bouts} - {-1, *self._behaviour_labels}
+        if unknown:
+            log.warning(
+                "Bout labels %s are not in the label map %s; those bouts show as "
+                "unlabelled",
+                unknown,
+                self._behaviour_labels,
+            )
         self._emit_annotations()
     def set_behaviour_labels(self, labels: Dict[int, str]) -> None:
         """Update label schema and rebuild buttons."""
+        log.debug("Behaviour labels set to %s", labels)
         self._behaviour_labels = labels
         self._rebuild_label_buttons()
 
@@ -201,64 +225,116 @@ class AnnotationPanel(QWidget):
         """Load bouts saved by the Analysis panel onto the active session entry."""
         entry = self._session.active
         if entry is None or not entry.bouts:
+            log.warning(
+                "No bouts to load: none on the active session entry (%s); detect or "
+                "define bouts in the Analysis panel first",
+                entry.pose_path if entry else None,
+            )
             QMessageBox.information(
                 self, "No bouts",
                 "No bouts found on the active session entry.\n"
                 "Use the Analysis panel to detect or manually define bouts first."
             )
             return
+        log.debug(
+            "Loading %d bouts from session entry %s", len(entry.bouts), entry.pose_path
+        )
         self.load_bouts(entry.bouts)
 
     def _on_add_label(self) -> None:
         name = self._new_label_edit.text().strip()
         if not name:
+            log.warning("No behaviour label added: the label name is empty")
             return
         next_idx = max(self._behaviour_labels.keys(), default=-1) + 1
         self._behaviour_labels[next_idx] = name
         self._new_label_edit.clear()
         self._rebuild_label_buttons()
+        log.info(
+            "Added behaviour label %s (%s); labels are now %s",
+            next_idx,
+            name,
+            self._behaviour_labels,
+        )
 
     def _on_remove_label(self) -> None:
         """Remove the highest-index label (simple remove-last approach)."""
         if not self._behaviour_labels:
+            log.warning("No behaviour label removed: there are no labels")
             return
         if len(self._behaviour_labels) == 1:
+            log.warning("Behaviour label not removed: at least one label is required")
             QMessageBox.warning(self, "Cannot remove", "At least one label is required.")
             return
         last_idx = max(self._behaviour_labels.keys())
         del self._behaviour_labels[last_idx]
         self._rebuild_label_buttons()
+        log.info(
+            "Removed behaviour label %s; labels are now %s",
+            last_idx,
+            self._behaviour_labels,
+        )
 
     def _on_bout_selected(self, row: int) -> None:
         if row < 0 or row >= len(self._current_bouts):
+            log.debug(
+                "No bout selected (row %d of %d bouts)", row, len(self._current_bouts)
+            )
             return
         bout = self._current_bouts[row]
         # Seek viewer to start of bout
         try:
             self._viewer.dims.set_point(0, bout["start"])
         except Exception:
-            pass
+            log.debug(
+                "Cannot move the viewer to bout %d; it stays on its current frame",
+                row + 1,
+                exc_info=True,
+            )
         label_idx = bout.get("label", -1)
         label_name = self._behaviour_labels.get(label_idx, "unlabelled")
+        log.debug(
+            "Bout %d selected: frames %s-%s, label %s (%s)",
+            row + 1,
+            bout.get("start"),
+            bout.get("end"),
+            label_idx,
+            label_name,
+        )
         self._current_label_display.setText(f"Current: [{label_idx}] {label_name}")
 
     def _on_prev_bout(self) -> None:
         row = self._bout_list.currentRow()
+        log.debug("Previous bout requested from row %d", row)
         if row > 0:
             self._bout_list.setCurrentRow(row - 1)
 
     def _on_next_bout(self) -> None:
         row = self._bout_list.currentRow()
+        log.debug(
+            "Next bout requested from row %d of %d", row, self._bout_list.count()
+        )
         if row < self._bout_list.count() - 1:
             self._bout_list.setCurrentRow(row + 1)
 
     def _on_assign_label(self) -> None:
         row = self._bout_list.currentRow()
         if row < 0 or row >= len(self._current_bouts):
+            log.warning(
+                "Label not assigned: no bout selected (row %d, %d bouts loaded)",
+                row,
+                len(self._current_bouts),
+            )
             return
         btn = self.sender()
         label_idx = btn.property("label_idx")
         label_name = self._behaviour_labels.get(label_idx, str(label_idx))
+        if label_idx not in self._behaviour_labels:
+            log.warning(
+                "Label index %s is not in the label map %s",
+                label_idx,
+                self._behaviour_labels,
+            )
 
         self._current_bouts[row]["label"] = label_idx
         item = self._bout_list.item(row)
@@ -266,6 +342,14 @@ class AnnotationPanel(QWidget):
         item.setText(f"Bout {row+1:03d}  frames {b['start']}–{b['end']}  [{label_name}]")
 
         self._current_label_display.setText(f"Assigned: [{label_idx}] {label_name}")
+        log.info(
+            "Assigned label %s (%s) to bout %d, frames %s-%s",
+            label_idx,
+            label_name,
+            row + 1,
+            b["start"],
+            b["end"],
+        )
         self._update_stats()
         self._emit_annotations()
 
@@ -284,6 +368,7 @@ class AnnotationPanel(QWidget):
         bout are assigned label 0 (background / other).
         """
         if not self._current_bouts:
+            log.debug("No bouts loaded; no per-frame label array")
             return None
         # Try to get total frame count from the session entry first
         T: Optional[int] = None
@@ -293,30 +378,65 @@ class AnnotationPanel(QWidget):
                 individual = next(iter(entry.coords_data))
                 x_data = entry.coords_data[individual]["x"]
                 T = len(x_data[0]) if hasattr(x_data[0], "__len__") else np.array(x_data).shape[-1]
+                log.debug(
+                    "Label array length T=%d from %s x data on %s (%s, shape %s)",
+                    T,
+                    individual,
+                    entry.pose_path,
+                    type(x_data).__name__,
+                    getattr(x_data, "shape", None),
+                )
             except Exception:
-                pass
+                log.debug(
+                    "Cannot read the frame count from the pose data of %s; "
+                    "using the last bout end",
+                    entry.pose_path,
+                    exc_info=True,
+                )
         if T is None:
             T = max(int(b["end"]) for b in self._current_bouts) + 1
+            log.debug("Label array length T=%d from the last bout end", T)
         labels = np.zeros(T, dtype=np.int64)
         for b in self._current_bouts:
             lbl = b.get("label", -1)
             # -1 means detected but not yet labelled — drawn as gray in ethogram
             labels[max(0, int(b["start"])) : min(T, int(b["end"]))] = lbl
+        last_end = max(int(b["end"]) for b in self._current_bouts)
+        if last_end > T:
+            log.warning(
+                "Label array has %d frames, shorter than the last bout end %d; "
+                "bout frames from %d on are dropped",
+                T,
+                last_end,
+                T,
+            )
         return labels
 
     def _emit_annotations(self) -> None:
         """Build per-frame label array and emit ``annotations_changed``."""
         labels = self._bouts_to_labels()
         if labels is not None:
+            values, counts = np.unique(labels, return_counts=True)
+            log.debug(
+                "Emitting annotations_changed: %d frames, frames per label %s",
+                len(labels),
+                dict(zip(values.tolist(), counts.tolist())),
+            )
             self.annotations_changed.emit(labels)
 
     def _on_export(self) -> None:
         if not self._current_bouts:
+            log.warning("Training data not exported: no bouts loaded")
             QMessageBox.warning(self, "No bouts", "No bouts to export.")
             return
 
         unlabelled = [b for b in self._current_bouts if b.get("label", -1) < 0]
         if unlabelled:
+            log.debug(
+                "%d of %d bouts are unlabelled; asking whether to export anyway",
+                len(unlabelled),
+                len(self._current_bouts),
+            )
             reply = QMessageBox.question(
                 self, "Unlabelled bouts",
                 f"{len(unlabelled)} bouts are still unlabelled. "
@@ -324,10 +444,17 @@ class AnnotationPanel(QWidget):
                 QMessageBox.Yes | QMessageBox.No,
             )
             if reply != QMessageBox.Yes:
+                log.debug(
+                    "Training data export cancelled at the unlabelled bouts question"
+                )
                 return
 
         entry = self._session.active
         if entry is None or not entry.coords_data:
+            log.warning(
+                "Training data not exported: no pose data on the active entry (%s)",
+                entry.pose_path if entry else None,
+            )
             QMessageBox.warning(self, "No pose data", "No pose data on the active entry.")
             return
 
@@ -339,11 +466,13 @@ class AnnotationPanel(QWidget):
             "Training pose (*_pose.npy)",
         )
         if not path:
+            log.debug("Training data export cancelled in the save dialog")
             return
         # The Train panel pairs <stem>_pose.npy with <stem>_labels.npy, so the
         # chosen name only gives the stem and the suffixes are put back.
         out = Path(path).parent
         stem = Path(path).name.removesuffix(".npy").removesuffix("_pose")
+        log.debug("Training data file chosen: %s; saving as %s_*", path, out / stem)
 
         try:
             import json
@@ -388,11 +517,40 @@ class AnnotationPanel(QWidget):
                 json.dump({str(k): v for k, v in schema.items()}, fh, indent=2)
 
         except Exception as exc:
+            log.exception("Training data export to %s failed", out / stem)
             QMessageBox.critical(self, "Export failed", str(exc))
             return
 
         labelled_frames = int((labels > 0).sum())
         unlabelled_frames = int((labels == -1).sum())
+        last_end = max(int(b["end"]) for b in self._current_bouts)
+        if last_end > T:
+            log.warning(
+                "Training labels have %d frames, shorter than the last bout end %d; "
+                "bout frames from %d on are not saved",
+                T,
+                last_end,
+                T,
+            )
+        log.info(
+            "Saved training data from %s (individual %s) to %s_pose.npy, "
+            "%s_labels.npy and %s_schema.json: pose %s (C, T, V, M), %d/%d frames "
+            "labelled, %d unlabelled (-1), schema %s",
+            entry.pose_path,
+            individual,
+            out / stem,
+            out / stem,
+            out / stem,
+            pose.shape,
+            labelled_frames,
+            T,
+            unlabelled_frames,
+            schema,
+        )
+        values, counts = np.unique(labels, return_counts=True)
+        log.debug(
+            "Saved frames per label: %s", dict(zip(values.tolist(), counts.tolist()))
+        )
         QMessageBox.information(
             self, "Saved",
             f"Saved to: {out}\n\n"
