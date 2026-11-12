@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from poser.core.settings import Settings, _find_data_dir, resolve_output_dir, settings
+from poser.core import settings as settings_module
+from poser.core.settings import (
+    Settings,
+    _find_data_dir,
+    resolve_device,
+    resolve_output_dir,
+    settings,
+)
 
 
 def test_source_checkout_keeps_data_in_the_repository(tmp_path):
@@ -49,3 +57,27 @@ def test_unknown_log_level_is_rejected(monkeypatch):
 
     with pytest.raises(ValidationError, match="log_level"):
         Settings()
+
+
+def test_a_named_device_is_logged(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    monkeypatch.setattr(settings, "device", "cpu")
+
+    resolve_device()
+
+    [record] = [r for r in caplog.records if r.name == "poser.core.settings"]
+    assert record.levelno == logging.INFO
+    assert record.getMessage() == "Using device cpu, as POSER_DEVICE asks"
+
+
+def test_the_device_auto_picks_is_logged_with_the_reason(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    monkeypatch.setattr(settings, "device", "auto")
+    torch = settings_module.torch
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
+
+    resolve_device()
+
+    [record] = [r for r in caplog.records if r.name == "poser.core.settings"]
+    assert record.getMessage() == "Using device cpu: neither CUDA nor MPS is available"

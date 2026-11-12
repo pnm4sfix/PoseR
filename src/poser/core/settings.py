@@ -14,12 +14,15 @@ rather than constructing Settings, so one object is shared process-wide.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Literal
 
 import torch
 from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger(__name__)
 
 # The data_dir subfolder each kind of generated file goes to by default.
 OutputKind = Literal[
@@ -106,11 +109,15 @@ def resolve_device() -> torch.device:
     """
     requested = settings.device.strip().lower()
     if requested != "auto":
+        log.info("Using device %s, as POSER_DEVICE asks", requested)
         return torch.device(requested)
     if torch.cuda.is_available():
+        log.info("Using device cuda: it is available")
         return torch.device("cuda")
     if torch.backends.mps.is_available():
+        log.info("Using device mps: CUDA is not available, MPS is")
         return torch.device("mps")
+    log.info("Using device cpu: neither CUDA nor MPS is available")
     return torch.device("cpu")
 
 
