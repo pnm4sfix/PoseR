@@ -377,7 +377,7 @@ class AnnotationPanel(QWidget):
             try:
                 individual = next(iter(entry.coords_data))
                 x_data = entry.coords_data[individual]["x"]
-                T = len(x_data[0]) if hasattr(x_data[0], "__len__") else np.array(x_data).shape[-1]
+                T = np.asarray(x_data).shape[-1]  # x is (V, T), a DataFrame or array
                 log.debug(
                     "Label array length T=%d from %s x data on %s (%s, shape %s)",
                     T,

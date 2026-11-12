@@ -7,6 +7,7 @@ import logging
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 
 from poser._panels import annotation_panel
 from poser._panels.annotation_panel import AnnotationPanel
@@ -142,3 +143,14 @@ def test_loaded_bouts_are_logged_with_their_label_counts(
     )
     [short] = _messages(caplog, logging.WARNING)
     assert "Label array has 10 frames, shorter than the last bout end 14" in short
+
+
+def test_label_track_is_as_long_as_a_data_panel_recording(tmp_path):
+    # The Data panel keeps coords as (V, T) DataFrames; the track was V frames long.
+    panel = _panel(tmp_path)  # one bout labelled swim, frames 2-5
+    table = pd.DataFrame(np.zeros((3, 10)))  # (V, T)
+    panel._session.active.coords_data = {"ind1": {"x": table, "y": table, "ci": table}}
+
+    labels = AnnotationPanel._bouts_to_labels(panel)
+
+    assert labels.tolist() == [0, 0, 1, 1, 1, 0, 0, 0, 0, 0]
