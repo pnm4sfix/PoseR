@@ -623,7 +623,7 @@ def model_repair(
     checkpoint: Path = typer.Argument(..., help="Decoder to repair."),
     config: Path = typer.Option(..., "--config", "-c", help="decoder_config.yml."),
     output: Optional[Path] = typer.Option(
-        None, "--output", "-o", help="Defaults to <checkpoint>.repaired.ckpt."
+        None, "--output", "-o", help="Defaults to data/models/<checkpoint>.repaired.ckpt."
     ),
 ) -> None:
     """Embed a decoder's preprocessing settings into the checkpoint.
@@ -681,7 +681,8 @@ def model_repair(
     )
     raw["hyper_parameters"] = hp
 
-    out = output or checkpoint.with_suffix(".repaired.ckpt")
+    name = checkpoint.with_suffix(".repaired.ckpt").name
+    out = output or resolve_output_dir("models") / name
     torch.save(raw, str(out))
     console.print(f"[green]Wrote {out}[/green]")
     console.print(

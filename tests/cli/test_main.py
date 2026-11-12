@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import torch
+import yaml
 from typer.testing import CliRunner
 
 from poser import api
@@ -143,3 +144,20 @@ def test_finetune_writes_under_data_finetune_by_default(tmp_path, monkeypatch):
 
     assert result.exit_code == 0, result.output
     assert _FakeYOLO.train_kwargs["project"] == str(tmp_path / "data" / "finetune")
+
+
+def test_model_repair_writes_under_data_models_by_default(tmp_path, monkeypatch):
+    # The repaired copy used to land beside the checkpoint.
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    checkpoint = tmp_path / "decoder.ckpt"
+    decoder = ST_GCN_18(in_channels=3, num_class=4, graph_cfg={"layout": "zebrafish"})
+    torch.save({"state_dict": decoder.state_dict()}, checkpoint)
+    config = tmp_path / "decoder_config.yml"
+    config.write_text(yaml.safe_dump({"data_cfg": {"V": 9, "center": 4, "T2": 100}}))
+
+    result = runner.invoke(
+        app, ["model", "repair", str(checkpoint), "--config", str(config)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "data" / "models" / "decoder.repaired.ckpt").is_file()
