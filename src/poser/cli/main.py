@@ -264,7 +264,8 @@ def predict_npy(
     ),
     output: Optional[Path] = typer.Option(
         None, "--output", "-o",
-        help="Output path. Defaults to <pose_file>_predictions.npy and .csv."
+        help="Output path. Defaults to data/predictions/<pose_file>_predictions.npy "
+        "and .csv."
     ),
     batch_size: int = typer.Option(64, "--batch", "-b", help="Inference batch size."),
     device: str = typer.Option(
@@ -404,7 +405,7 @@ def predict_npy(
     predictions = np.array(all_preds, dtype=np.int64)  # (T_total,)
 
     # ── Save outputs ──────────────────────────────────────────────────
-    base = output or pose_file.parent / (pose_file.stem + "_predictions")
+    base = output or resolve_output_dir("predictions") / (pose_file.stem + "_predictions")
     npy_path = base.with_suffix(".npy")
     csv_path = base.with_suffix(".csv")
 
