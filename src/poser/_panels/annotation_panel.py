@@ -35,6 +35,7 @@ from qtpy.QtWidgets import (
 )
 
 from poser.core.session import SessionManager
+from poser.core.settings import resolve_output_dir
 
 
 class AnnotationPanel(QWidget):
@@ -325,23 +326,29 @@ class AnnotationPanel(QWidget):
             if reply != QMessageBox.Yes:
                 return
 
-        folder = QFileDialog.getExistingDirectory(
-            self, "Select output folder for training data"
-        )
-        if not folder:
-            return
-
         entry = self._session.active
         if entry is None or not entry.coords_data:
             QMessageBox.warning(self, "No pose data", "No pose data on the active entry.")
             return
 
+        stem = Path(entry.pose_path).stem if entry.pose_path else "recording"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save training data as",
+            str(resolve_output_dir("training") / f"{stem}_pose.npy"),
+            "Training pose (*_pose.npy)",
+        )
+        if not path:
+            return
+        # The Train panel pairs <stem>_pose.npy with <stem>_labels.npy, so the
+        # chosen name only gives the stem and the suffixes are put back.
+        out = Path(path).parent
+        stem = Path(path).name.removesuffix(".npy").removesuffix("_pose")
+
         try:
             import json
             import numpy as np
-            from pathlib import Path
 
-            out = Path(folder)
             individual = list(entry.coords_data.keys())[0]
             ind_data = entry.coords_data[individual]
 
@@ -375,7 +382,6 @@ class AnnotationPanel(QWidget):
                 elif name not in ("behaviour_0", "other"):
                     schema[0] = name
 
-            stem = Path(entry.pose_path).stem if entry.pose_path else "recording"
             np.save(str(out / f"{stem}_pose.npy"), pose)
             np.save(str(out / f"{stem}_labels.npy"), labels)
             with open(out / f"{stem}_schema.json", "w") as fh:
@@ -389,7 +395,7 @@ class AnnotationPanel(QWidget):
         unlabelled_frames = int((labels == -1).sum())
         QMessageBox.information(
             self, "Saved",
-            f"Saved to: {folder}\n\n"
+            f"Saved to: {out}\n\n"
             f"  {stem}_pose.npy    \u2014 shape {pose.shape}  (C, T, V, M)\n"
             f"  {stem}_labels.npy  \u2014 {labelled_frames}/{T} frames labelled"
             + (f", {unlabelled_frames} unlabelled (-1)" if unlabelled_frames else "") + "\n"
