@@ -437,8 +437,8 @@ class AnalysisPanel(QWidget):
             max_f,
         )
 
-        self._save_bouts_to_session(bouts)
-        self._update_bout_count()
+        kept = self._save_bouts_to_session(bouts)
+        self._update_bout_count(kept)
         log.debug(
             "Emitting bouts_changed for %s (%d bouts)",
             entry.pose_path,
@@ -446,20 +446,33 @@ class AnalysisPanel(QWidget):
         )
         self.bouts_changed.emit(entry)
 
-    def _save_bouts_to_session(self, bouts: list) -> None:
-        """Persist bouts onto the active SessionEntry so other panels can read them."""
+    def _save_bouts_to_session(self, bouts: list) -> int:
+        """Store detected bouts on the active entry, keeping its labelled bouts."""
         entry = self._session.active
-        if entry is not None:
-            labelled_before = sum(1 for b in entry.bouts if "label" in b)
-            entry.bouts = list(bouts)
-            log.debug(
-                "Stored %d bouts (%d labelled) on session entry %s; it had %d "
-                "labelled before",
-                len(entry.bouts),
-                sum(1 for b in entry.bouts if "label" in b),
-                entry.pose_path,
-                labelled_before,
-            )
+        if entry is None:
+            return 0
+        # Labelled bouts stay as they are, so a detected bout that shares a frame
+        # with one (end frames are exclusive) is dropped.
+        kept = [b for b in entry.bouts if b.get("label", -1) >= 0]
+        added = [
+            b
+            for b in bouts
+            if not any(b["start"] < k["end"] and k["start"] < b["end"] for k in kept)
+        ]
+        replaced = len(entry.bouts) - len(kept)
+        entry.bouts = sorted(kept + added, key=lambda b: b["start"])
+        log.debug(
+            "Stored %d bouts on session entry %s: kept its %d labelled bouts, "
+            "replaced its %d unlabelled bouts, added %d detected bouts and dropped "
+            "%d that overlap a labelled bout",
+            len(entry.bouts),
+            entry.pose_path,
+            len(kept),
+            replaced,
+            len(added),
+            len(bouts) - len(added),
+        )
+        return len(kept)
 
     def _on_export_frame(self) -> None:
         try:
@@ -590,10 +603,11 @@ class AnalysisPanel(QWidget):
     # Helpers
     # ------------------------------------------------------------------
 
-    def _update_bout_count(self) -> None:
+    def _update_bout_count(self, kept: int = 0) -> None:
         entry = self._session.active
         count = len(entry.bouts) if entry is not None else 0
-        self._bout_count_label.setText(f"Bouts detected: {count}")
+        suffix = f" ({kept} labelled kept)" if kept else ""
+        self._bout_count_label.setText(f"Bouts detected: {count}{suffix}")
 
     def _get_frame_image(self, frame_idx: int):
         """Try to extract a 2-D image array from the *visible* active image layer."""

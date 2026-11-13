@@ -95,7 +95,9 @@ def _bout_panel(session: SessionManager) -> SimpleNamespace:
     panel._save_bouts_to_session = lambda bouts: (
         AnalysisPanel._save_bouts_to_session(panel, bouts)
     )
-    panel._update_bout_count = lambda: AnalysisPanel._update_bout_count(panel)
+    panel._update_bout_count = lambda *args: AnalysisPanel._update_bout_count(
+        panel, *args
+    )
     return panel
 
 
@@ -108,7 +110,7 @@ def _messages(caplog, level: int) -> list[str]:
     ]
 
 
-def test_detection_logs_its_parameters_and_the_labelled_bouts_it_replaces(
+def test_detection_logs_its_parameters_and_the_labelled_bouts_it_keeps(
     tmp_path, monkeypatch, caplog
 ):
     caplog.set_level(logging.DEBUG, logger="poser")
@@ -120,8 +122,11 @@ def test_detection_logs_its_parameters_and_the_labelled_bouts_it_replaces(
         lambda points, center_node, fps, n_nodes: (found, None, None, None),
     )
     session = _recording(tmp_path, frames=500)
-    # Labelled in the Annotation panel before detection was run again.
-    session.active.bouts = [{"start": 2, "end": 20, "label": 1}]
+    # 2-20 was labelled in the Annotation panel before detection was run again.
+    session.active.bouts = [
+        {"start": 2, "end": 20, "label": 1},
+        {"start": 30, "end": 35},
+    ]
 
     AnalysisPanel._on_detect(_bout_panel(session))
 
@@ -129,9 +134,44 @@ def test_detection_logs_its_parameters_and_the_labelled_bouts_it_replaces(
     assert f"Detected 1 bouts on {tmp_path / 'rec_DLC.h5'} " in message
     assert "method orthogonal, fps 25, centre node 0, 10-300 frames long" in message
     assert (
-        f"Stored 1 bouts (0 labelled) on session entry {tmp_path / 'rec_DLC.h5'}; "
-        "it had 1 labelled before"
+        f"Stored 1 bouts on session entry {tmp_path / 'rec_DLC.h5'}: kept its 1 "
+        "labelled bouts, replaced its 1 unlabelled bouts, added 0 detected bouts "
+        "and dropped 1 that overlap a labelled bout"
     ) in _messages(caplog, logging.DEBUG)
+
+
+def test_detecting_again_keeps_the_labelled_bouts_and_adds_the_others(
+    tmp_path, monkeypatch
+):
+    # Detect replaced the entry's bouts with unlabelled ones, so every label was lost.
+    found = [(5, 20), (30, 45), (62, 80), (90, 110)]
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: (found, None, None, None),
+    )
+    session = _recording(tmp_path, frames=200)
+    session.active.bouts = [
+        {"start": 10, "end": 30, "label": 1, "label_source": "hand"},
+        {"start": 40, "end": 55},
+        {"start": 60, "end": 75, "label": 0},
+        {"start": 85, "end": 95, "label": -1},
+    ]
+    panel = _bout_panel(session)
+    shown = []
+    panel._bout_count_label = SimpleNamespace(setText=shown.append)
+
+    AnalysisPanel._on_detect(panel)
+
+    # 5-20 and 62-80 overlap a labelled bout; 30-45 only starts where one ends;
+    # -1 is unlabelled, so 85-95 is replaced and 90-110 added.
+    assert session.active.bouts == [
+        {"start": 10, "end": 30, "label": 1, "label_source": "hand"},
+        {"start": 30, "end": 45},
+        {"start": 60, "end": 75, "label": 0},
+        {"start": 90, "end": 110},
+    ]
+    assert shown == ["Bouts detected: 4 (2 labelled kept)"]
 
 
 def test_detected_and_added_bouts_are_sent_with_their_entry(tmp_path, monkeypatch):
