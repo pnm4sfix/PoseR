@@ -128,6 +128,7 @@ class SessionManager:
     * Add / remove entries.
     * Activate one entry at a time (hides other entries' napari layers).
     * Persist to / restore from ``session.json`` in the project directory.
+    * Hold the behaviour label map (behaviour_labels) that all entries share.
 
     Parameters
     ----------
@@ -144,6 +145,12 @@ class SessionManager:
         self.viewer = viewer
         self.entries: List[SessionEntry] = []
         self._active_idx: Optional[int] = None
+        # Label 0 is also every frame outside a bout, so behaviours start at 1.
+        self.behaviour_labels: dict[int, str] = {
+            0: "other",
+            1: "behaviour_1",
+            2: "behaviour_2",
+        }
 
     # ------------------------------------------------------------------
     # Entry management

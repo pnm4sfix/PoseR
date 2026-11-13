@@ -63,11 +63,6 @@ class AnnotationPanel(QWidget):
         super().__init__()
         self._viewer = viewer
         self._session = session or SessionManager(viewer=viewer)
-        self._behaviour_labels: Dict[int, str] = {
-            0: "other",
-            1: "behaviour_1",
-            2: "behaviour_2",
-        }
         self._current_bouts: List[dict] = []
 
         self._build_ui()
@@ -174,7 +169,7 @@ class AnnotationPanel(QWidget):
             if w:
                 w.setParent(None)
 
-        for idx, name in sorted(self._behaviour_labels.items()):
+        for idx, name in sorted(self._session.behaviour_labels.items()):
             btn = QPushButton(f"[{idx}] {name}")
             btn.setProperty("label_idx", idx)
             btn.clicked.connect(self._on_assign_label)
@@ -197,14 +192,14 @@ class AnnotationPanel(QWidget):
         log.debug(
             "load_bouts received %d bouts; label map %s; selected before: %s",
             len(bouts),
-            self._behaviour_labels,
+            self._session.behaviour_labels,
             previous,
         )
         self._current_bouts = bouts
         self._bout_list.clear()
         for i, b in enumerate(bouts):
             label_idx = b.get("label", -1)
-            label_name = self._behaviour_labels.get(label_idx, "unlabelled")
+            label_name = self._session.behaviour_labels.get(label_idx, "unlabelled")
             item = QListWidgetItem(
                 f"Bout {i+1:03d}  frames {b['start']}–{b['end']}  [{label_name}]"
             )
@@ -218,13 +213,14 @@ class AnnotationPanel(QWidget):
             labelled,
             len(bouts) - labelled,
         )
-        unknown = {b.get("label", -1) for b in bouts} - {-1, *self._behaviour_labels}
+        known = {-1, *self._session.behaviour_labels}
+        unknown = {b.get("label", -1) for b in bouts} - known
         if unknown:
             log.warning(
                 "Bout labels %s are not in the label map %s; those bouts show as "
                 "unlabelled",
                 unknown,
-                self._behaviour_labels,
+                self._session.behaviour_labels,
             )
         spans = [(b["start"], b["end"]) for b in bouts]
         if previous in spans:
@@ -249,9 +245,9 @@ class AnnotationPanel(QWidget):
                 labels[0],
             )
         behaviours = {idx: name for idx, name in labels.items() if idx != 0}
-        self._behaviour_labels = {0: "other", **behaviours}
+        self._session.behaviour_labels = {0: "other", **behaviours}
         log.debug(
-            "Behaviour labels set to %s from %s", self._behaviour_labels, labels
+            "Behaviour labels set to %s from %s", self._session.behaviour_labels, labels
         )
         self._rebuild_label_buttons()
 
@@ -284,33 +280,33 @@ class AnnotationPanel(QWidget):
         if not name:
             log.warning("No behaviour label added: the label name is empty")
             return
-        next_idx = max(self._behaviour_labels.keys(), default=-1) + 1
-        self._behaviour_labels[next_idx] = name
+        next_idx = max(self._session.behaviour_labels.keys(), default=-1) + 1
+        self._session.behaviour_labels[next_idx] = name
         self._new_label_edit.clear()
         self._rebuild_label_buttons()
         log.info(
             "Added behaviour label %s (%s); labels are now %s",
             next_idx,
             name,
-            self._behaviour_labels,
+            self._session.behaviour_labels,
         )
 
     def _on_remove_label(self) -> None:
         """Remove the highest-index label (simple remove-last approach)."""
-        if not self._behaviour_labels:
+        if not self._session.behaviour_labels:
             log.warning("No behaviour label removed: there are no labels")
             return
-        if len(self._behaviour_labels) == 1:
+        if len(self._session.behaviour_labels) == 1:
             log.warning("Behaviour label not removed: at least one label is required")
             QMessageBox.warning(self, "Cannot remove", "At least one label is required.")
             return
-        last_idx = max(self._behaviour_labels.keys())
-        del self._behaviour_labels[last_idx]
+        last_idx = max(self._session.behaviour_labels.keys())
+        del self._session.behaviour_labels[last_idx]
         self._rebuild_label_buttons()
         log.info(
             "Removed behaviour label %s; labels are now %s",
             last_idx,
-            self._behaviour_labels,
+            self._session.behaviour_labels,
         )
 
     def _on_bout_selected(self, row: int, seek: bool = True) -> None:
@@ -331,7 +327,7 @@ class AnnotationPanel(QWidget):
                     exc_info=True,
                 )
         label_idx = bout.get("label", -1)
-        label_name = self._behaviour_labels.get(label_idx, "unlabelled")
+        label_name = self._session.behaviour_labels.get(label_idx, "unlabelled")
         log.debug(
             "Bout %d selected: frames %s-%s, label %s (%s); move viewer: %s",
             row + 1,
@@ -369,12 +365,12 @@ class AnnotationPanel(QWidget):
             return
         btn = self.sender()
         label_idx = btn.property("label_idx")
-        label_name = self._behaviour_labels.get(label_idx, str(label_idx))
-        if label_idx not in self._behaviour_labels:
+        label_name = self._session.behaviour_labels.get(label_idx, str(label_idx))
+        if label_idx not in self._session.behaviour_labels:
             log.warning(
                 "Label index %s is not in the label map %s",
                 label_idx,
-                self._behaviour_labels,
+                self._session.behaviour_labels,
             )
 
         self._current_bouts[row]["label"] = label_idx
@@ -546,7 +542,7 @@ class AnnotationPanel(QWidget):
                 end = min(T, int(b["end"]))
                 labels[start:end] = lbl  # -1 preserved for unlabelled bouts
 
-            schema = dict(self._behaviour_labels)  # label 0 is always "other"
+            schema = dict(self._session.behaviour_labels)  # label 0 is always "other"
 
             np.save(str(out / f"{stem}_pose.npy"), pose)
             np.save(str(out / f"{stem}_labels.npy"), labels)
@@ -614,7 +610,7 @@ class AnnotationPanel(QWidget):
             lbl = b.get("label", -1)
             counts[lbl] = counts.get(lbl, 0) + 1
 
-        parts = [f"{self._behaviour_labels.get(k, k)}: {v}"
+        parts = [f"{self._session.behaviour_labels.get(k, k)}: {v}"
                  for k, v in counts.items() if k >= 0]
         self._stats_label.setText(
             f"{labelled}/{total} labelled  |  " + ",  ".join(parts)

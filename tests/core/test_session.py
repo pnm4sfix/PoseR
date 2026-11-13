@@ -54,6 +54,15 @@ def test_removing_the_active_entry_leaves_none_active():
     assert session.active is None
 
 
+def test_each_session_starts_with_its_own_behaviour_label_map():
+    # Label names lived in the Annotation panel and were lost when it was reopened.
+    first, second = SessionManager(), SessionManager()
+
+    first.behaviour_labels[3] = "swim"
+
+    assert second.behaviour_labels == {0: "other", 1: "behaviour_1", 2: "behaviour_2"}
+
+
 def test_activating_an_entry_logs_its_bouts_and_coords(caplog):
     # The Annotation panel takes its bouts from whichever entry is active.
     caplog.set_level(logging.DEBUG, logger="poser")

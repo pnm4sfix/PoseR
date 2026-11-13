@@ -22,12 +22,12 @@ def _panel(tmp_path) -> SimpleNamespace:
     session = SessionManager()
     session.add(tmp_path / "rec_DLC.h5")
     session.activate(0)
+    session.behaviour_labels = {0: "other", 1: "swim"}
     zeros = np.zeros((3, 10))  # (V, T)
     session.active.coords_data = {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
     return SimpleNamespace(
         _session=session,
         _current_bouts=[{"start": 2, "end": 5, "label": 1}],
-        _behaviour_labels={0: "other", 1: "swim"},
     )
 
 
@@ -193,9 +193,9 @@ def test_label_0_stays_other_when_the_labels_are_set(tmp_path, caplog):
     panel = _panel(tmp_path)
     panel._rebuild_label_buttons = lambda: None
 
-    AnnotationPanel.set_behaviour_labels(panel, {0: "rest", 1: "swim"})
+    AnnotationPanel.set_behaviour_labels(panel, {0: "rest", 1: "turn"})
 
-    assert panel._behaviour_labels == {0: "other", 1: "swim"}
+    assert panel._session.behaviour_labels == {0: "other", 1: "turn"}
     [warning] = _messages(caplog, logging.WARNING)
     assert "Label 0 is always other; the name 'rest' given for it is not used" in (
         warning
@@ -203,7 +203,28 @@ def test_label_0_stays_other_when_the_labels_are_set(tmp_path, caplog):
 
     AnnotationPanel.set_behaviour_labels(panel, {1: "swim", 2: "turn"})
 
-    assert panel._behaviour_labels == {0: "other", 1: "swim", 2: "turn"}
+    assert panel._session.behaviour_labels == {0: "other", 1: "swim", 2: "turn"}
+
+
+def test_label_names_stay_in_the_session_when_the_panel_is_reopened(qtbot):
+    # Each panel kept its own label map, so reopening the panel reset the names.
+    session = SessionManager()
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=session, behaviour_labels={1: "swim"})
+    qtbot.addWidget(panel)
+    panel._new_label_edit.setText("turn")
+    panel._on_add_label()
+
+    reopened = AnnotationPanel(viewer, session=session)
+    qtbot.addWidget(reopened)
+
+    assert session.behaviour_labels == {0: "other", 1: "swim", 2: "turn"}
+    layout = reopened._label_buttons_layout
+    assert [layout.itemAt(i).widget().text() for i in range(layout.count())] == [
+        "[0] other",
+        "[1] swim",
+        "[2] turn",
+    ]
 
 
 def test_loaded_bouts_are_logged_with_their_label_counts(
