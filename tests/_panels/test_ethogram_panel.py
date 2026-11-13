@@ -43,6 +43,32 @@ def test_received_annotations_are_logged_with_frames_per_label(caplog):
     assert sources == ["Annotation panel"]  # it stayed None
 
 
+def test_none_clears_only_the_labels_the_annotation_panel_sent(caplog):
+    # The panel sends None when it lists no bouts; the row kept the labels of the
+    # recording shown before.
+    caplog.set_level(logging.DEBUG, logger="poser")
+    sources, redrawn = [], []
+    panel = SimpleNamespace(
+        _annotations=np.array([0, 1, 1]),
+        _annotations_from_panel=False,  # a browsed labels file
+        _ann_label=SimpleNamespace(setText=sources.append),
+        _refresh=lambda: redrawn.append(True),
+    )
+
+    EthogramPanel.load_annotations(panel, None)
+    browsed = panel._annotations
+    panel._annotations_from_panel = True
+    EthogramPanel.load_annotations(panel, None)
+
+    assert browsed.tolist() == [0, 1, 1]
+    assert panel._annotations is None
+    assert sources == ["None"]
+    assert redrawn == [True]
+    assert _messages(caplog, logging.INFO) == [
+        "Ethogram annotation row cleared: the Annotation panel lists no bouts"
+    ]
+
+
 def test_browsed_annotations_and_their_class_names_are_logged(
     tmp_path, monkeypatch, caplog
 ):
@@ -58,6 +84,7 @@ def test_browsed_annotations_and_their_class_names_are_logged(
     )
     panel = SimpleNamespace(
         _annotation_names={},
+        _annotations_from_panel=True,
         _prediction_names={0: "forward"},
         _ann_label=SimpleNamespace(setText=lambda text: None),
         _ann_legend=SimpleNamespace(update_names=lambda names: None),
@@ -67,6 +94,7 @@ def test_browsed_annotations_and_their_class_names_are_logged(
 
     EthogramPanel._on_browse_annotations(panel)
 
+    assert not panel._annotations_from_panel  # so the Annotation panel cannot clear it
     loaded, names = _messages(caplog, logging.INFO)
     assert f"Loaded annotations from {labels}: shape (3,)" in loaded
     assert "frames per label {0: 2, 1: 1}" in loaded
@@ -146,7 +174,7 @@ def test_annotation_names_name_the_annotation_row_only():
     assert panel._prediction_names == {0: "forward"}
     assert legends == [{0: "other", 1: "swim"}]  # once: unchanged names change nothing
     assert statuses == [True]
-    assert redrawn == []  # no annotation row yet: redrawing warned 'Nothing to draw'
+    assert redrawn == []  # no annotation row yet: a redraw would draw nothing
 
     panel._annotations = np.array([0, 1, 1])
     EthogramPanel.set_annotation_names(panel, {0: "other", 1: "dart"})
@@ -213,6 +241,32 @@ def test_a_redraw_gives_each_legend_its_own_rows_names():
 
     assert ann_legend == [{0: "other", 1: "swim"}]
     assert pred_legend == [{0: "forward", 1: "left"}]
+
+
+def test_an_empty_ethogram_is_redrawn_without_a_warning(caplog):
+    # A recording with no bouts and no predictions yet empties both rows.
+    caplog.set_level(logging.DEBUG, logger="poser")
+    axes = SimpleNamespace(cla=lambda: None, axvline=lambda *args, **kwargs: object())
+    panel = SimpleNamespace(
+        _viewer=SimpleNamespace(dims=SimpleNamespace(current_step=(0,))),
+        _canvas=SimpleNamespace(draw=lambda: None),
+        _ax_ann=axes,
+        _ax_pred=axes,
+        _cursor_lines=[],
+        _annotations=None,
+        _predictions=None,
+        _annotation_names={},
+        _prediction_names={},
+        _ann_legend=SimpleNamespace(update_names=lambda names: None),
+        _pred_legend=SimpleNamespace(update_names=lambda names: None),
+        _style_axes=lambda: None,
+        _update_frame_status=lambda: None,
+    )
+
+    EthogramPanel._refresh(panel)
+
+    assert _messages(caplog, logging.WARNING) == []
+    assert "Nothing to draw" in " ".join(_messages(caplog, logging.DEBUG))
 
 
 def test_unnamed_classes_are_looked_up_in_their_own_rows_names(caplog):

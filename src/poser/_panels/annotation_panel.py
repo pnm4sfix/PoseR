@@ -54,10 +54,11 @@ class AnnotationPanel(QWidget):
 
     Signals
     -------
-    annotations_changed(np.ndarray)
+    annotations_changed(np.ndarray | None)
         Emitted with a per-frame label array (dtype int64) whenever a bout
-        label is assigned or the bout list is reloaded.  Connected by the
-        factory to ``EthogramPanel.load_annotations``.
+        label is assigned or the bout list is reloaded, and with None when no
+        bouts are listed.  Connected by the factory to
+        ``EthogramPanel.load_annotations``.
     labels_changed(dict)
         Emitted with a copy of the label map {index: name} whenever it changes,
         and whenever an entry is shown, which Load Session does. Connected by
@@ -694,14 +695,18 @@ class AnnotationPanel(QWidget):
     def _emit_annotations(self) -> None:
         """Build per-frame label array and emit ``annotations_changed``."""
         labels = self._bouts_to_labels()
-        if labels is not None:
-            values, counts = np.unique(labels, return_counts=True)
-            log.debug(
-                "Emitting annotations_changed: %d frames, frames per label %s",
-                len(labels),
-                dict(zip(values.tolist(), counts.tolist())),
-            )
-            self.annotations_changed.emit(labels)
+        if labels is None:
+            # Otherwise the Ethogram keeps the labels of the entry shown before.
+            log.debug("Emitting annotations_changed with None: no bouts are listed")
+            self.annotations_changed.emit(None)
+            return
+        values, counts = np.unique(labels, return_counts=True)
+        log.debug(
+            "Emitting annotations_changed: %d frames, frames per label %s",
+            len(labels),
+            dict(zip(values.tolist(), counts.tolist())),
+        )
+        self.annotations_changed.emit(labels)
 
     def _on_export(self) -> None:
         if not self._current_bouts:

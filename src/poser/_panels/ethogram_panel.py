@@ -89,6 +89,8 @@ class EthogramPanel(QWidget):
         self._prediction_names: dict[int, str] = dict(label_names or {})
 
         self._annotations: Optional[np.ndarray] = None
+        # Whether the Annotation panel sent the annotation row, not a browsed file.
+        self._annotations_from_panel = False
         self._predictions: Optional[np.ndarray] = None
         self._cursor_lines: list = []   # matplotlib Line2D references
 
@@ -262,9 +264,29 @@ class EthogramPanel(QWidget):
         )
         self._refresh()
 
-    def load_annotations(self, annotations: np.ndarray) -> None:
-        """Show the per-frame labels sent by the Annotation panel."""
+    def load_annotations(self, annotations: np.ndarray | None) -> None:
+        """Show the per-frame labels sent by the Annotation panel.
+
+        None, sent when that panel lists no bouts, clears the labels it sent
+        before; a labels file browsed here stays.
+        """
+        if annotations is None:
+            if not self._annotations_from_panel:
+                log.debug(
+                    "No labels from the Annotation panel to clear; the annotation "
+                    "row stays as it is"
+                )
+                return
+            log.info(
+                "Ethogram annotation row cleared: the Annotation panel lists no bouts"
+            )
+            self._annotations = None
+            self._annotations_from_panel = False
+            self._ann_label.setText("None")
+            self._refresh()
+            return
         self._annotations = annotations.astype(np.int64)
+        self._annotations_from_panel = True
         self._ann_label.setText("Annotation panel")
         log.debug(
             "load_annotations: %s array of shape %s, annotation names %s",
@@ -324,6 +346,7 @@ class EthogramPanel(QWidget):
         log.debug("Annotations file dialog: %s", path or "cancelled")
         if path:
             self._annotations = np.load(path).astype(np.int64)
+            self._annotations_from_panel = False
             labels_present, frame_counts = np.unique(
                 self._annotations, return_counts=True
             )
@@ -422,7 +445,8 @@ class EthogramPanel(QWidget):
         if T > 0:
             self._ax_ann.set_xlim(0, T)
         else:
-            log.warning("Nothing to draw: no annotation or prediction frames loaded")
+            # Normal for a recording with no bouts and no predictions yet.
+            log.debug("Nothing to draw: no annotation or prediction frames loaded")
 
         # Cursor
         try:

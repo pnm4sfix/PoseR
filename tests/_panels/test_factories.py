@@ -284,3 +284,37 @@ def test_an_ethogram_opened_after_labelling_shows_the_labels_by_name(
         "1: swim",
         "2: turn",
     ]
+
+
+def test_showing_a_recording_without_bouts_clears_the_ethograms_labels(
+    tmp_path, monkeypatch, qtbot
+):
+    # The Ethogram kept drawing the labels of the recording shown before.
+    session = SessionManager()
+    session.add(tmp_path / "a_DLC.h5")
+    session.add(tmp_path / "b_DLC.h5")
+    session.activate(0)
+    session.active.bouts = [{"start": 2, "end": 5, "label": 1}]
+    viewer = SimpleNamespace(
+        dims=SimpleNamespace(
+            current_step=(3,),
+            set_point=lambda axis, frame: None,
+            events=SimpleNamespace(current_step=_Signal()),
+        )
+    )
+    annotation = AnnotationPanel(viewer, session=session)
+    ethogram = EthogramPanel(viewer)
+    qtbot.addWidget(annotation)
+    qtbot.addWidget(ethogram)
+    monkeypatch.setattr(_factories, "_annotation_cache", {id(viewer): annotation})
+    monkeypatch.setattr(_factories, "_ethogram_cache", {id(viewer): ethogram})
+    monkeypatch.setattr(_factories, "_wired", set())
+    _factories._wire_panels(viewer)
+    annotation.show_entry(session.entries[0])
+    shown = ethogram._annotations
+
+    annotation.show_entry(session.entries[1])
+
+    assert shown.tolist() == [0, 0, 1, 1, 1, 0]  # no coords: up to the last bout end
+    assert ethogram._annotations is None
+    assert ethogram._ann_label.text() == "None"
