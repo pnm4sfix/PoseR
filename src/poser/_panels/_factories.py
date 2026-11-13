@@ -25,6 +25,7 @@ log = logging.getLogger(__name__)
 # One instance of each wirable panel per viewer. Panels talk to each other
 # through Qt signals, which SessionManager cannot carry because core must stay
 # free of Qt (STYLEGUIDE 1.2), so the connections are made out here instead.
+_data_cache: dict = {}
 _annotation_cache: dict = {}
 _ethogram_cache: dict = {}
 _inference_cache: dict = {}
@@ -113,17 +114,20 @@ def _wire_panels(viewer) -> None:
     reached the ethogram.
     """
     key = id(viewer)
+    data = _data_cache.get(key)
     annotation = _annotation_cache.get(key)
     ethogram = _ethogram_cache.get(key)
     inference = _inference_cache.get(key)
     metrics = _metrics_cache.get(key)
     log.debug(
-        "Panels open for viewer %s: annotation=%s ethogram=%s inference=%s metrics=%s",
+        "Panels open for viewer %s: annotation=%s ethogram=%s inference=%s metrics=%s "
+        "data=%s",
         key,
         annotation is not None,
         ethogram is not None,
         inference is not None,
         metrics is not None,
+        data is not None,
     )
 
     if annotation is not None and ethogram is not None:
@@ -147,13 +151,23 @@ def _wire_panels(viewer) -> None:
             _wired.add(pair)
             log.info("Connected the Inference panel's predictions to the Metrics panel")
 
+    if data is not None and annotation is not None:
+        pair = (id(data), id(annotation), "active_entry")
+        if pair not in _wired:
+            data.active_entry_changed.connect(annotation.show_entry)
+            _wired.add(pair)
+            log.info("Connected the Data panel's active entry to the Annotation panel")
+
 
 def make_data_panel() -> DataPanel:
     _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
     log.debug("Opening the data panel for viewer %s", id(v))
-    return DataPanel(v, session=get_session(v))
+    panel = DataPanel(v, session=get_session(v))
+    _data_cache[id(v)] = panel
+    _wire_panels(v)
+    return panel
 
 
 def make_annotation_panel() -> AnnotationPanel:
@@ -161,7 +175,10 @@ def make_annotation_panel() -> AnnotationPanel:
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
     log.debug("Opening the annotation panel for viewer %s", id(v))
-    panel = AnnotationPanel(v, session=get_session(v))
+    session = get_session(v)
+    panel = AnnotationPanel(v, session=session)
+    # Bouts found before the panel was opened are listed without Load Bouts.
+    panel.show_entry(session.active)
     _annotation_cache[id(v)] = panel
     _wire_panels(v)
     return panel

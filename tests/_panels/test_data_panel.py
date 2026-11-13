@@ -117,3 +117,72 @@ def test_a_folder_without_pose_files_logs_why_nothing_was_added(
         and record.levelno == logging.WARNING
     ]
     assert f"under {tmp_path}; nothing added" in warning.getMessage()
+
+
+def test_activating_an_entry_sends_it_to_the_other_panels(tmp_path):
+    # The Annotation panel kept listing and labelling the previous file's bouts.
+    session = SessionManager()
+    session.add(tmp_path / "fish1_DLC.h5")
+    session.add(tmp_path / "fish2_DLC.h5")
+    zeros = np.zeros((3, 30))  # (V, T)
+    sent = []
+    panel = SimpleNamespace(
+        _session=session,
+        _session_list=SimpleNamespace(currentRow=lambda: 1),
+        _load_entry_layers=lambda entry: setattr(
+            entry, "coords_data", {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
+        ),
+        _refresh_table=lambda: None,
+        active_entry_changed=SimpleNamespace(
+            emit=lambda entry: sent.append((entry, bool(entry.coords_data)))
+        ),
+    )
+
+    DataPanel._on_activate(panel)
+    DataPanel._on_next_pending(panel)  # fish1 is still pending
+
+    # Sent after the layers load, as the Annotation panel takes T from the coords.
+    assert sent == [(session.entries[1], True), (session.entries[0], False)]
+
+
+def test_removing_an_entry_sends_the_active_entry_or_none(tmp_path):
+    session = SessionManager()
+    session.add(tmp_path / "fish1_DLC.h5")
+    fish2 = session.add(tmp_path / "fish2_DLC.h5")
+    session.activate(1)
+    sent = []
+    panel = SimpleNamespace(
+        _session=session,
+        _session_list=SimpleNamespace(currentRow=lambda: 0),
+        _refresh_table=lambda: None,
+        active_entry_changed=SimpleNamespace(emit=sent.append),
+    )
+
+    DataPanel._on_remove(panel)  # fish1; the active fish2 moves up to row 0
+    DataPanel._on_remove(panel)  # fish2, so no entry is active
+
+    assert sent == [fish2, None]
+
+
+def test_loading_a_session_sends_its_active_entry(tmp_path, monkeypatch):
+    saved = SessionManager()
+    saved.add(tmp_path / "fish1_DLC.h5")
+    saved.add(tmp_path / "fish2_DLC.h5")
+    saved.activate(1)
+    saved.save(tmp_path / "day1.json")
+    chosen = (str(tmp_path / "day1.json"), "")
+    monkeypatch.setattr(
+        data_panel, "QFileDialog", SimpleNamespace(getOpenFileName=lambda *a: chosen)
+    )
+    session = SessionManager()
+    sent = []
+    panel = SimpleNamespace(
+        _session=session,
+        _refresh_table=lambda: None,
+        active_entry_changed=SimpleNamespace(emit=sent.append),
+    )
+
+    DataPanel._on_load_session(panel)
+
+    assert sent == [session.entries[1]]
+    assert sent[0].pose_path == str(tmp_path / "fish2_DLC.h5")

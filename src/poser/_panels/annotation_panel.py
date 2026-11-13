@@ -35,7 +35,7 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
-from poser.core.session import SessionManager
+from poser.core.session import SessionEntry, SessionManager
 from poser.core.settings import resolve_output_dir
 
 log = logging.getLogger(__name__)
@@ -63,6 +63,7 @@ class AnnotationPanel(QWidget):
         super().__init__()
         self._viewer = viewer
         self._session = session or SessionManager(viewer=viewer)
+        self._entry: SessionEntry | None = None
         self._current_bouts: List[dict] = []
 
         self._build_ui()
@@ -179,6 +180,21 @@ class AnnotationPanel(QWidget):
     # Public API called by other panels
     # ------------------------------------------------------------------
 
+    def show_entry(self, entry: SessionEntry | None) -> None:
+        """List the bouts of entry, or none; labels go to the entry's own bouts."""
+        log.debug(
+            "Showing the %d bouts of %s; showed %s before",
+            len(entry.bouts) if entry is not None else 0,
+            entry.pose_path if entry is not None else None,
+            self._entry.pose_path if self._entry is not None else None,
+        )
+        if entry is not self._entry:
+            # A bout of another recording over the same frames is another bout, so
+            # it must not stay selected.
+            self._bout_list.clear()
+        self._entry = entry
+        self.load_bouts(entry.bouts if entry is not None else [])
+
     def load_bouts(self, bouts: List[dict]) -> None:
         """Populate the bout list from detected bouts and select one.
 
@@ -258,6 +274,7 @@ class AnnotationPanel(QWidget):
     def _on_load_from_session(self) -> None:
         """Load bouts saved by the Analysis panel onto the active session entry."""
         entry = self._session.active
+        self.show_entry(entry)
         if entry is None or not entry.bouts:
             log.warning(
                 "No bouts to load: none on the active session entry (%s); detect or "
@@ -269,11 +286,6 @@ class AnnotationPanel(QWidget):
                 "No bouts found on the active session entry.\n"
                 "Use the Analysis panel to detect or manually define bouts first."
             )
-            return
-        log.debug(
-            "Loading %d bouts from session entry %s", len(entry.bouts), entry.pose_path
-        )
-        self.load_bouts(entry.bouts)
 
     def _on_add_label(self) -> None:
         name = self._new_label_edit.text().strip()
@@ -409,7 +421,7 @@ class AnnotationPanel(QWidget):
             return None
         # Try to get total frame count from the session entry first
         T: Optional[int] = None
-        entry = self._session.active
+        entry = self._entry
         if entry is not None and entry.coords_data:
             try:
                 individual = next(iter(entry.coords_data))
@@ -488,10 +500,10 @@ class AnnotationPanel(QWidget):
                 )
                 return
 
-        entry = self._session.active
+        entry = self._entry
         if entry is None or not entry.coords_data:
             log.warning(
-                "Training data not exported: no pose data on the active entry (%s)",
+                "Training data not exported: no pose data on the shown entry (%s)",
                 entry.pose_path if entry else None,
             )
             QMessageBox.warning(self, "No pose data", "No pose data on the active entry.")

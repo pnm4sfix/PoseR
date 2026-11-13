@@ -27,6 +27,7 @@ def _panel(tmp_path) -> SimpleNamespace:
     session.active.coords_data = {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
     return SimpleNamespace(
         _session=session,
+        _entry=session.active,
         _current_bouts=[{"start": 2, "end": 5, "label": 1}],
     )
 
@@ -321,3 +322,81 @@ def test_label_track_is_as_long_as_a_data_panel_recording(tmp_path):
     labels = AnnotationPanel._bouts_to_labels(panel)
 
     assert labels.tolist() == [0, 0, 1, 1, 1, 0, 0, 0, 0, 0]
+
+
+def test_labels_are_written_to_the_bouts_of_the_entry_shown(tmp_path, qtbot):
+    # After another file was activated, the panel kept listing and labelling the
+    # previous file's bouts.
+    session = SessionManager()
+    fish1 = session.add(tmp_path / "fish1_DLC.h5")
+    fish2 = session.add(tmp_path / "fish2_DLC.h5")
+    fish1.bouts = [{"start": 2, "end": 5}, {"start": 10, "end": 12}]
+    fish2.bouts = [{"start": 0, "end": 4}, {"start": 10, "end": 12}]
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=session)
+    qtbot.addWidget(panel)
+    panel.show_entry(fish1)
+    panel._bout_list.setCurrentRow(1)
+
+    panel.show_entry(fish2)
+
+    # fish2's bout over the same frames is another bout, so it is not kept selected.
+    assert panel._bout_list.currentRow() == 0
+    layout = panel._label_buttons_layout
+    layout.itemAt(1).widget().click()  # [1] behaviour_1
+    assert fish2.bouts[0] == {"start": 0, "end": 4, "label": 1}
+    assert fish1.bouts == [{"start": 2, "end": 5}, {"start": 10, "end": 12}]
+
+    panel.show_entry(None)
+    assert panel._bout_list.count() == 0
+
+
+def test_load_bouts_lists_the_active_entry_even_without_bouts(
+    tmp_path, qtbot, monkeypatch
+):
+    # The list kept the bouts of the entry activated before.
+    shown = []
+    monkeypatch.setattr(
+        annotation_panel,
+        "QMessageBox",
+        SimpleNamespace(information=lambda *args: shown.append(args[1])),
+    )
+    session = SessionManager()
+    fish1 = session.add(tmp_path / "fish1_DLC.h5")
+    fish1.bouts = [{"start": 2, "end": 5}]
+    session.add(tmp_path / "fish2_DLC.h5")
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=session)
+    qtbot.addWidget(panel)
+    session.activate(0)
+    panel._on_load_from_session()
+    session.activate(1)  # no bouts on fish2 yet
+
+    panel._on_load_from_session()
+
+    assert panel._bout_list.count() == 0
+    assert shown == ["No bouts"]
+
+
+def test_label_track_and_training_data_come_from_the_entry_shown(
+    tmp_path, monkeypatch
+):
+    # Both read the active entry, which need not be the one whose bouts are listed.
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    dialogs = Dialogs(answer=str(tmp_path / "fish1"))
+    monkeypatch.setattr(annotation_panel, "QFileDialog", dialogs)
+    monkeypatch.setattr(
+        annotation_panel, "QMessageBox", SimpleNamespace(information=lambda *a: None)
+    )
+    panel = _panel(tmp_path)  # lists a bout of a 10-frame recording
+    longer = panel._session.add(tmp_path / "long_DLC.h5")
+    zeros = np.zeros((3, 30))  # (V, T)
+    longer.coords_data = {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
+    panel._session.activate(1)
+
+    labels = AnnotationPanel._bouts_to_labels(panel)
+    AnnotationPanel._on_export(panel)
+
+    assert len(labels) == 10
+    assert dialogs.opened == [tmp_path / "data" / "training" / "rec_DLC_pose.npy"]
+    assert np.load(tmp_path / "fish1_pose.npy").shape == (3, 10, 3, 1)  # (C, T, V, M)

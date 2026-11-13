@@ -17,7 +17,7 @@ from typing import List, Optional
 
 import napari
 import numpy as np
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QFileDialog,
     QGroupBox,
@@ -203,6 +203,8 @@ class DataPanel(QWidget):
         A shared :class:`~poser.core.session.SessionManager` instance.
         If ``None`` a new one is created.
     """
+
+    active_entry_changed = Signal(object)  # the active SessionEntry, or None
 
     def __init__(
         self,
@@ -390,6 +392,7 @@ class DataPanel(QWidget):
         entry = self._session.activate(idx)
         self._load_entry_layers(entry)
         self._refresh_table()
+        self.active_entry_changed.emit(entry)
 
     def _load_entry_layers(self, entry) -> None:
         """Load video and/or pose layers for *entry* if not already present."""
@@ -543,6 +546,7 @@ class DataPanel(QWidget):
             return
         self._session.remove(idx)
         self._refresh_table()
+        self.active_entry_changed.emit(self._session.active)
 
     def _on_next_pending(self) -> None:
         next_idx = self._session.next_pending()
@@ -560,6 +564,7 @@ class DataPanel(QWidget):
             next_idx,
         )
         self._refresh_table()
+        self.active_entry_changed.emit(self._session.active)
 
     def _on_save_session(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -580,6 +585,7 @@ class DataPanel(QWidget):
         if path:
             self._session.load(Path(path))
             self._refresh_table()
+            self.active_entry_changed.emit(self._session.active)
 
     def _refresh_table(self) -> None:
         self._session_list.clear()
