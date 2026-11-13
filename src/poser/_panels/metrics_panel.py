@@ -168,23 +168,40 @@ class MetricsPanel(QWidget):
     ) -> None:
         """Take predictions from the Inference panel, and its class names if any."""
         self._predictions = np.asarray(predictions, dtype=np.int64)
+        log.debug(
+            "load_predictions: shape %s, checkpoint %s, class names browsed %s",
+            self._predictions.shape,
+            checkpoint,
+            self._classes_browsed,
+        )
         self._predictions_path = None
         source = f" ({Path(checkpoint).name})" if checkpoint is not None else ""
         self._predictions_label.setText(
             f"From the Inference panel{source}: {len(self._predictions):,} frames."
         )
+        labels_present, frame_counts = np.unique(self._predictions, return_counts=True)
+        log.info(
+            "Metrics received %d frames of predictions (checkpoint %s); "
+            "frames per class %s",
+            len(self._predictions),
+            checkpoint,
+            dict(zip(labels_present.tolist(), frame_counts.tolist())),
+        )
         if checkpoint is not None and not self._classes_browsed:
             classes = self._classes_from_checkpoint(Path(checkpoint))
+            log.debug("Class names stored in %s: %s", checkpoint, classes)
             if classes is not None:
                 self._set_classes(classes, f"From {Path(checkpoint).name}")
         self._score_if_ready()
 
     def _classes_from_checkpoint(self, checkpoint: Path) -> ClassNames | None:
         """The class names a checkpoint stores, or None if it stores none."""
+        log.debug("Reading class names from checkpoint %s", checkpoint)
         try:
             raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
         except Exception as exc:
             # The scores do not need the checkpoint, only its class names.
+            log.exception("Could not read class names from %s", checkpoint)
             self._status.append(
                 f"Could not read class names from {checkpoint.name}: {exc}"
             )
@@ -195,12 +212,20 @@ class MetricsPanel(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, "Select predictions", "", "Predictions (*_predictions.npy *.npy)"
         )
+        log.debug("Predictions file dialog: %s", path or "cancelled")
         if not path:
             return
         self._predictions = np.load(path).astype(np.int64)
         self._predictions_path = Path(path)
         self._predictions_label.setText(
             f"{Path(path).name}: {len(self._predictions):,} frames."
+        )
+        labels_present, frame_counts = np.unique(self._predictions, return_counts=True)
+        log.info(
+            "Loaded %d frames of predictions from %s; frames per class %s",
+            len(self._predictions),
+            path,
+            dict(zip(labels_present.tolist(), frame_counts.tolist())),
         )
         self._score_if_ready()
 
@@ -211,6 +236,7 @@ class MetricsPanel(QWidget):
             "",
             "Classification files (*classification*.h5);;All .h5 files (*.h5)",
         )
+        log.debug("Hand labels file dialog: %s", path or "cancelled")
         if not path:
             return
         name = Path(path).name
@@ -228,6 +254,12 @@ class MetricsPanel(QWidget):
             )
             return
         self._labels_label.setText(f"{name}: {len(self._bouts)} bouts.")
+        log.info(
+            "Loaded %d hand-labelled bouts from %s; classes %s",
+            len(self._bouts),
+            path,
+            sorted({bout.name for bout in self._bouts}),
+        )
         self._score_if_ready()
 
     def _on_names_clicked(self) -> None:
@@ -239,12 +271,18 @@ class MetricsPanel(QWidget):
             "",
             "Checkpoint (*.ckpt);;Decoder config (*.yml *.yaml);;All files (*)",
         )
+        log.debug("Class names file dialog: %s", path or "cancelled")
         if not path:
             return
         path = Path(path)
         if path.suffix == ".ckpt":
             classes = self._classes_from_checkpoint(path)
             if classes is None:
+                log.warning(
+                    "%s stores no class names; pick the decoder_config.yml it was "
+                    "trained with",
+                    path,
+                )
                 self._status.append(
                     f"{path.name} stores no class names. Pick the "
                     "decoder_config.yml it was trained with instead."
@@ -256,6 +294,7 @@ class MetricsPanel(QWidget):
             except Exception as exc:
                 self._show_error(f"Could not read class names from {path.name}", exc)
                 return
+        log.info("Read class names from %s", path)
         self._classes_browsed = True
         self._set_classes(classes, path.name)
         self._score_if_ready()
@@ -266,6 +305,12 @@ class MetricsPanel(QWidget):
         ignored = f" (ignores {', '.join(sorted(classes.ignored))})"
         self._names_label.setText(
             f"{source}: {names}{ignored if classes.ignored else ''}."
+        )
+        log.info(
+            "Metrics class names set (%s): %s, ignored %s",
+            source,
+            classes.names,
+            sorted(classes.ignored),
         )
 
     def _on_score_clicked(self) -> None:
@@ -278,7 +323,9 @@ class MetricsPanel(QWidget):
             )
             if value is None
         ]
+        log.debug("Score clicked; missing inputs: %s", missing)
         if missing:
+            log.warning("Cannot score: load %s first", ", ".join(missing))
             self._status.append(f"Load {', '.join(missing)} first.")
             return
         self._score_now()
@@ -286,13 +333,48 @@ class MetricsPanel(QWidget):
     def _score_if_ready(self) -> None:
         """Score as soon as all three inputs are there, so new predictions update."""
         inputs = (self._predictions, self._bouts, self._classes)
+        log.debug(
+            "Score if ready: predictions %s, hand labels %s, class names %s",
+            self._predictions is not None,
+            self._bouts is not None,
+            self._classes is not None,
+        )
         if all(value is not None for value in inputs):
             self._score_now()
 
     def _score_now(self) -> None:
+        log.debug(
+            "Scoring %d frames of predictions against %d hand-labelled bouts; "
+            "class names %s, ignored %s",
+            self._predictions.size,
+            len(self._bouts),
+            self._classes.names,
+            sorted(self._classes.ignored),
+        )
+        unknown = sorted(
+            {bout.name for bout in self._bouts}
+            - set(self._classes.names.values())
+            - self._classes.ignored
+        )
+        if unknown:
+            log.warning(
+                "Hand-labelled classes %s are not among the class names %s; "
+                "their bouts are skipped",
+                unknown,
+                sorted(self._classes.names.values()),
+            )
+        last_stop = max((bout.stop for bout in self._bouts), default=0)
+        if last_stop > self._predictions.size:
+            log.warning(
+                "Predictions cover %d frames but the last hand-labelled bout ends "
+                "at frame %d",
+                self._predictions.size,
+                last_stop,
+            )
         try:
             score = score_bouts(self._predictions, self._bouts, self._classes)
         except ValueError as exc:
+            log.exception("Could not score the predictions")
             self._status.append(str(exc))
             return
         self._score = score
@@ -301,6 +383,15 @@ class MetricsPanel(QWidget):
         self._draw_matrix()
         self._export_button.setEnabled(True)
         self._status.append(f"Scored. {self._summary_text(score)}")
+        log.info(
+            "Scored %d bouts: accuracy %.3f, balanced accuracy %.3f "
+            "(%d ignored, %d skipped)",
+            score.n_scored,
+            score.accuracy,
+            score.balanced_accuracy,
+            score.n_ignored,
+            score.n_skipped,
+        )
 
     def _summary_text(self, score: DecoderScore) -> str:
         parts = [f"{score.n_scored} bouts scored"]
@@ -329,6 +420,11 @@ class MetricsPanel(QWidget):
                 self._table.setItem(row, column, QTableWidgetItem(text))
 
     def _on_view_changed(self) -> None:
+        log.debug(
+            "Matrix view set to %s; a score to redraw: %s",
+            self._view_combo.currentText(),
+            self._score is not None,
+        )
         if self._score is not None:
             self._draw_matrix()
 
@@ -373,6 +469,7 @@ class MetricsPanel(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self, "Export confusion matrix", str(default), "PNG image (*.png)"
         )
+        log.debug("Export dialog (default %s): %s", default, path or "cancelled")
         if not path:
             return
         path = Path(path).with_suffix(".png")
@@ -382,6 +479,10 @@ class MetricsPanel(QWidget):
         except OSError as exc:
             self._show_error("Could not export", exc)
             return
+        log.info(
+            "Exported the confusion matrix and scores to %s",
+            ", ".join(str(p) for p in written),
+        )
         self._status.append("Exported " + ", ".join(p.name for p in written) + ".")
 
     def _show_error(self, message: str, exc: Exception) -> None:

@@ -9,10 +9,13 @@ Feature 4 of the redesign: session table / multi-layer annotation management.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+log = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -29,6 +32,11 @@ def get_session(viewer) -> "SessionManager":
     always operates on the same session.
     """
     key = id(viewer)
+    log.debug(
+        "Session for viewer %s: %s",
+        key,
+        "reused" if key in _SESSION_REGISTRY else "created",
+    )
     if key not in _SESSION_REGISTRY:
         _SESSION_REGISTRY[key] = SessionManager(viewer=viewer)
     return _SESSION_REGISTRY[key]
@@ -90,11 +98,21 @@ class SessionEntry:
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (omits large arrays)."""
+        bouts = []
+        for bout in self.bouts:
+            # Only these keys: a manual bout also holds coords and ci arrays.
+            kept = {
+                key: int(bout[key]) for key in ("start", "end", "label") if key in bout
+            }
+            if "label_source" in bout:
+                kept["label_source"] = str(bout["label_source"])
+            bouts.append(kept)
         return {
             "pose_path": self.pose_path,
             "video_path": self.video_path,
             "status": self.status,
             "layer_names": self.layer_names,
+            "bouts": bouts,
             "meta": self.meta,
         }
 
@@ -105,6 +123,7 @@ class SessionEntry:
             video_path=d.get("video_path", ""),
             status=d.get("status", "loaded"),
             layer_names=d.get("layer_names", []),
+            bouts=d.get("bouts", []),
             meta=d.get("meta", {}),
         )
 
@@ -120,6 +139,7 @@ class SessionManager:
     * Add / remove entries.
     * Activate one entry at a time (hides other entries' napari layers).
     * Persist to / restore from ``session.json`` in the project directory.
+    * Hold the behaviour label map (behaviour_labels) that all entries share.
 
     Parameters
     ----------
@@ -136,6 +156,12 @@ class SessionManager:
         self.viewer = viewer
         self.entries: List[SessionEntry] = []
         self._active_idx: Optional[int] = None
+        # Label 0 is also every frame outside a bout, so behaviours start at 1.
+        self.behaviour_labels: dict[int, str] = {
+            0: "other",
+            1: "behaviour_1",
+            2: "behaviour_2",
+        }
 
     # ------------------------------------------------------------------
     # Entry management
@@ -149,26 +175,52 @@ class SessionManager:
             meta=meta or {},
         )
         self.entries.append(entry)
+        log.info(
+            "Added entry %d (%s): pose %s, video %s",
+            len(self.entries) - 1,
+            entry.stem,
+            entry.pose_path or "(none)",
+            entry.video_path or "(none)",
+        )
         self.save()
         return entry
 
     def remove(self, idx: int) -> None:
         """Remove entry *idx* from the queue."""
+        log.debug(
+            "Removing entry %s of %d (active index %s)",
+            idx,
+            len(self.entries),
+            self._active_idx,
+        )
         if self._active_idx == idx:
             self._active_idx = None
         elif self._active_idx is not None and 0 <= idx < self._active_idx:
             # Every entry after idx moves down one place.
             self._active_idx -= 1
-        self.entries.pop(idx)
+        removed = self.entries.pop(idx)
+        log.info(
+            "Removed entry %s (%s); %d left, active index now %s",
+            idx,
+            removed.stem,
+            len(self.entries),
+            self._active_idx,
+        )
         self.save()
 
     def add_batch(self, pairs: List[tuple]) -> None:
         """Add multiple ``(pose_path, video_path)`` pairs at once."""
+        n_before = len(self.entries)
         for pair in pairs:
             pose = pair[0]
             vid = pair[1] if len(pair) > 1 else ""
             meta = pair[2] if len(pair) > 2 else {}
             self.add(pose, vid, meta)
+        log.debug(
+            "Batch added %d entries; the session has %d",
+            len(self.entries) - n_before,
+            len(self.entries),
+        )
 
     # ------------------------------------------------------------------
     # Activation (single-active model)
@@ -187,6 +239,12 @@ class SessionManager:
         If a napari viewer is attached, hides all other entries' layers and
         makes this entry's layers visible.
         """
+        log.debug(
+            "Activating entry %s of %d (active index was %s)",
+            idx,
+            len(self.entries),
+            self._active_idx,
+        )
         if idx < 0 or idx >= len(self.entries):
             raise IndexError(f"No session entry at index {idx}")
         self._active_idx = idx
@@ -200,6 +258,11 @@ class SessionManager:
                 if i != idx:
                     other_names.update(e.layer_names)
             active_names = set(entry.layer_names)
+            log.debug(
+                "Showing layers %s; hiding the %d layer(s) of other entries",
+                entry.layer_names,
+                len(other_names),
+            )
 
             for layer in self.viewer.layers:
                 if layer.name in active_names:
@@ -207,15 +270,29 @@ class SessionManager:
                 elif layer.name in other_names:
                     layer.visible = False
 
+        log.info(
+            "Activated entry %s (%s): pose %s, video %s, %d bouts, "
+            "coords for %d individual(s)",
+            idx,
+            entry.stem,
+            entry.pose_path or "(none)",
+            entry.video_path or "(none)",
+            len(entry.bouts),
+            len(entry.coords_data),
+        )
         self.save()
         return entry
 
     def mark_done(self, idx: Optional[int] = None) -> None:
         """Mark *idx* (or the active entry) as done."""
+        log.debug("Mark done: index %s, active index %s", idx, self._active_idx)
         target = idx if idx is not None else self._active_idx
         if target is not None:
             self.entries[target].status = "done"
+            log.info("Marked entry %s (%s) done", target, self.entries[target].stem)
             self.save()
+        else:
+            log.warning("Mark done: no index given and no active entry; nothing marked")
 
     # ------------------------------------------------------------------
     # Iteration helpers
@@ -225,10 +302,17 @@ class SessionManager:
         """Return the index of the next entry that is not ``"done"``."""
         for i, e in enumerate(self.entries):
             if e.status != "done":
+                log.debug("Next pending entry: %d (%s, %s)", i, e.stem, e.status)
                 return i
+        log.debug("No pending entry: all %d entries are done", len(self.entries))
         return None
 
     def all_done(self) -> bool:
+        log.debug(
+            "All done check: %d of %d entries done",
+            sum(e.status == "done" for e in self.entries),
+            len(self.entries),
+        )
         return all(e.status == "done" for e in self.entries)
 
     # ------------------------------------------------------------------
@@ -239,27 +323,76 @@ class SessionManager:
         """Write current session to *path* or ``session.json`` in project_dir."""
         if path is None:
             if not self.project_dir:
+                log.debug("Session not autosaved: no project_dir set")
                 return
             path = os.path.join(self.project_dir, self._SESSION_FILE)
         data = {
             "entries": [e.to_dict() for e in self.entries],
             "active_idx": self._active_idx,
+            "behaviour_labels": {
+                str(i): name for i, name in self.behaviour_labels.items()
+            },
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
+        log.info(
+            "Saved session to %s: %d entries, active=%s",
+            path,
+            len(self.entries),
+            self._active_idx,
+        )
+        bouts = [b for e in self.entries for b in e.bouts]
+        log.debug(
+            "Saved %d bouts (%d labelled) and behaviour labels %s; coords are not "
+            "saved",
+            len(bouts),
+            sum(b.get("label", -1) >= 0 for b in bouts),
+            self.behaviour_labels,
+        )
 
     def load(self, path=None) -> None:
         """Restore session from *path* or ``session.json`` in project_dir."""
         if path is None:
             path = os.path.join(self.project_dir, self._SESSION_FILE)
+        log.debug(
+            "Loading session from %s (replacing %d entries)", path, len(self.entries)
+        )
         if not os.path.exists(str(path)):
+            log.warning("Session file %s does not exist; nothing loaded", path)
             return
         with open(path) as f:
             data = json.load(f)
         self.entries = [SessionEntry.from_dict(d) for d in data.get("entries", [])]
         self._active_idx = data.get("active_idx")
-        print(f"Session restored: {len(self.entries)} entries, "
-              f"active={self._active_idx}")
+        names = data.get("behaviour_labels")
+        if names is None:
+            log.debug(
+                "%s has no behaviour labels; keeping %s", path, self.behaviour_labels
+            )
+        else:
+            labels = {int(i): name for i, name in names.items()}
+            name_0 = labels.pop(0, "other")
+            if name_0 != "other":
+                log.warning(
+                    "Label 0 is always other; the name %r in %s is not used",
+                    name_0,
+                    path,
+                )
+            self.behaviour_labels = {0: "other", **labels}
+        log.info(
+            "Session restored from %s: %d entries, active=%s",
+            path,
+            len(self.entries),
+            self._active_idx,
+        )
+        bouts = [b for e in self.entries for b in e.bouts]
+        log.debug(
+            "Restored %d bouts (%d labelled) and behaviour labels %s; session files "
+            "hold no coords",
+            len(bouts),
+            sum(b.get("label", -1) >= 0 for b in bouts),
+            self.behaviour_labels,
+        )
 
     # ------------------------------------------------------------------
     # String representation

@@ -9,9 +9,11 @@ import pytest
 
 from poser.core.schemas.scoring import ClassNames, LabelledBout
 from poser.core.scoring import (
+    bout_classes,
     class_names_from_checkpoint,
     class_names_from_config,
     labelled_bouts,
+    labels_for_classes,
     save_score_csv,
     score_bouts,
 )
@@ -75,6 +77,36 @@ def test_unknown_and_empty_bouts_are_skipped():
     ]
     score = score_bouts(predictions, bouts, CLASSES)
     assert (score.n_scored, score.n_skipped) == (1, 2)
+
+
+def test_each_bout_gets_the_class_predicted_most_in_its_frames():
+    predictions = np.array([0, 2, 2, 0, 0, 0])
+    bouts = [
+        {"start": 0, "end": 3},  # end is exclusive: counting frame 3 would tie
+        {"start": 4, "end": 9},  # runs past the predictions
+        {"start": 6, "end": 9},  # no predicted frame
+    ]
+    assert bout_classes(predictions, bouts) == [2, 0, None]
+
+
+def test_decoder_classes_become_the_labels_of_the_same_name():
+    labels = {0: "other", 1: "swim"}
+    names = {0: "other", 1: "turn", 2: "swim"}
+    # Class 7 is predicted, but the checkpoint does not name it.
+    assert labels_for_classes(names, {1, 7}, labels) == {0: 0, 1: 2, 2: 1, 7: 3}
+    assert labels == {0: "other", 1: "swim", 2: "turn", 3: "class_7"}
+
+
+def test_a_name_repeated_in_the_labels_gives_its_lowest_index():
+    # Add accepts a name already in the map, and other must stay label 0.
+    labels = {0: "other", 1: "swim", 2: "other"}
+    assert labels_for_classes({0: "other", 1: "swim"}, {0}, labels) == {0: 0, 1: 1}
+
+
+def test_without_class_names_class_c_is_label_c():
+    labels = {0: "other", 1: "swim"}
+    assert labels_for_classes(None, {0, 3}, labels) == {0: 0, 3: 3}
+    assert labels == {0: "other", 1: "swim", 3: "class_3"}
 
 
 def test_no_scoreable_bout_raises():

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import numpy as np
@@ -120,3 +121,64 @@ def test_second_video_with_the_same_file_name_is_refused(tmp_path):
 
     assert first.error is None
     assert "rec.avi_poser_coords.h5" in str(second.error)
+
+
+def _messages(caplog, level: int) -> list[str]:
+    """What pose_page logged at level, in order."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "poser._panels.helpers.pose_page" and record.levelno == level
+    ]
+
+
+def test_run_without_an_active_video_logs_why_nothing_ran(
+    tmp_path, monkeypatch, caplog
+):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "data")
+    monkeypatch.setattr(pose_page, "QFileDialog", Dialogs(answer=""))
+    session = SessionManager()
+    session.add(tmp_path / "rec_DLC.h5")  # a pose file, but no video
+    session.activate(0)
+    page = _page(session)
+
+    PosePage._on_run_active_clicked(page)
+
+    [message] = _messages(caplog, logging.WARNING)
+    assert "no active video" in message
+    assert "rec_DLC" in message
+    assert page.runs == []
+
+
+def test_a_saved_pose_file_is_logged_with_its_full_path(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    session = SessionManager()
+    entry = session.add("", tmp_path / "rec.avi")
+    page = SimpleNamespace(
+        _n_videos=1,
+        _status=SimpleNamespace(append=lambda text: None),
+        _add_points_layer=lambda entry, pose_path, coords: None,
+    )
+    zeros = np.zeros((3, 2))
+    coords = {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
+    pose_path = str(tmp_path / "fish1.h5")
+    result = _VideoResult(0, entry, pose_path=pose_path, coords=coords)
+
+    PosePage._show_result(page, result)
+
+    [message] = _messages(caplog, logging.INFO)
+    assert pose_path in message
+    assert "1 individual(s)" in message
+
+
+def test_the_worker_logs_the_model_it_loaded_and_the_end_of_the_run(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    session = SessionManager()
+    session.add("", tmp_path / "rec.avi")
+
+    _estimate(session.entries, [tmp_path / "fish1.h5"])
+
+    loaded, finished = _messages(caplog, logging.INFO)
+    assert "model.pt" in loaded
+    assert "finished on 1 video" in finished

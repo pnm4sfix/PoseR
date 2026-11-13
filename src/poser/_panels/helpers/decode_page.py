@@ -123,10 +123,16 @@ class DecodePage(QWidget):
             self, "Select decoder checkpoint", "", "Checkpoints (*.ckpt);;All files (*)"
         )
         if not path:
+            log.debug("Decoder checkpoint dialog cancelled")
             return
         path = Path(path)
         self._status.append(f"Loading decoder {path.name} …")
         worker = thread_worker(self._inference.model_load)(path, resolve_device())
+        log.info(
+            "Loading decoder checkpoint %s onto device %s",
+            path,
+            resolve_device(),
+        )
         worker.returned.connect(lambda settings: self._on_model_loaded(path, settings))
         self._start(worker)
 
@@ -138,13 +144,25 @@ class DecodePage(QWidget):
             f"{settings['num_class']} classes"
         )
         self._status.append(f"Loaded decoder {path.name}.")
+        log.info("Loaded decoder checkpoint %s with settings %s", path, settings)
 
     def _on_predict_clicked(self) -> None:
         entry = self._session.active
         if entry is None:
+            log.warning("Predict clicked with no active file; nothing decoded")
             self._status.append("No active file. Activate one in the Data panel first.")
             return
+        log.debug(
+            "Predict clicked: active file %s (pose %r, video %r), decoder %s",
+            entry.stem,
+            entry.pose_path,
+            entry.video_path,
+            self._checkpoint,
+        )
         if self._checkpoint is None:
+            log.warning(
+                "Predict clicked with no decoder checkpoint loaded; nothing decoded"
+            )
             self._status.append("Load a decoder checkpoint first.")
             return
         name = predictions_file_name(entry.pose_path or entry.video_path)
@@ -154,22 +172,38 @@ class DecodePage(QWidget):
             str(resolve_output_dir("predictions") / name),
             "NumPy (*.npy)",
         )
+        log.debug(
+            "Save predictions dialog (suggested %s): %s", name, path or "cancelled"
+        )
         if path:
             self._run([entry], [Path(path)])
 
     def _on_predict_all_clicked(self) -> None:
         entries = [e for e in self._session.entries if e.pose_path or e.coords_data]
+        log.debug(
+            "Predict all clicked: %d of %d session files have pose data, decoder %s",
+            len(entries),
+            len(self._session.entries),
+            self._checkpoint,
+        )
         if not entries:
+            log.warning(
+                "Predict all clicked with no pose data in the session; nothing decoded"
+            )
             self._status.append(
                 "No session file has pose data. Add some in the Data panel."
             )
             return
         if self._checkpoint is None:
+            log.warning(
+                "Predict all clicked with no decoder checkpoint loaded; nothing decoded"
+            )
             self._status.append("Load a decoder checkpoint first.")
             return
         folder = QFileDialog.getExistingDirectory(
             self, "Save predictions in", str(resolve_output_dir("predictions"))
         )
+        log.debug("Save predictions folder dialog: %s", folder or "cancelled")
         if folder:
             outputs = [
                 Path(folder) / predictions_file_name(e.pose_path or e.video_path)
@@ -178,6 +212,11 @@ class DecodePage(QWidget):
             self._run(entries, outputs)
 
     def _run(self, entries: list[SessionEntry], outputs: list[Path]) -> None:
+        log.info(
+            "Decoding behaviour in %d file(s) with decoder %s",
+            len(entries),
+            self._checkpoint,
+        )
         worker = thread_worker(self._predict)(entries, outputs)
         worker.yielded.connect(self._on_worker_yielded)
         self._start(worker)
@@ -191,12 +230,20 @@ class DecodePage(QWidget):
         Yields status lines, the progress across all files as a percentage, and
         one _FileResult per file. A file that fails does not stop the rest.
         """
+        log.debug("Decode worker started on %d file(s)", len(entries))
         n_failed = 0
         for index, (entry, output) in enumerate(zip(entries, outputs)):
             name = Path(entry.pose_path).name if entry.pose_path else "in-memory pose"
             prefix = name
             if len(entries) > 1:
                 prefix = f"[{index + 1}/{len(entries)}] {name}"
+            log.debug(
+                "Decoding %s: pose %r, coords in memory %s, output %s",
+                prefix,
+                entry.pose_path,
+                bool(entry.coords_data),
+                output,
+            )
             try:
                 if output in outputs[:index]:
                     raise ValueError(
@@ -205,6 +252,7 @@ class DecodePage(QWidget):
                     )
                 form = self._inference.input_load(entry.pose_path, entry.coords_data)
                 n_frames = self._inference.n_frames
+                log.debug("%s: pose loaded as %s, %d frames", prefix, form, n_frames)
                 yield f"{prefix}: loaded as {form}, {n_frames:,} frames. Predicting …"
                 for message in self._inference.input_adapt():
                     yield f"{prefix}: Warning: {message}"
@@ -216,8 +264,28 @@ class DecodePage(QWidget):
                     files_done = index + n_done / max(n_frames, 1)
                     yield int(100 * files_done / len(entries))
                 predictions = np.concatenate(batches)
+                log.debug(
+                    "%s: %d batches gave labels of shape %s, dtype %s",
+                    prefix,
+                    len(batches),
+                    predictions.shape,
+                    predictions.dtype,
+                )
+                if len(predictions) != n_frames:
+                    log.warning(
+                        "%s: %d labels for %d frames; expected one label per frame",
+                        prefix,
+                        len(predictions),
+                        n_frames,
+                    )
 
                 saved = self._inference.predictions_save(predictions, output)
+                log.info(
+                    "Saved predictions for %s to %s and its .csv (%d frames)",
+                    prefix,
+                    saved,
+                    len(predictions),
+                )
                 yield f"{prefix}: saved {saved.name} and its .csv."
                 yield _FileResult(
                     entry, prefix, predictions=predictions, saved_path=saved
@@ -228,6 +296,7 @@ class DecodePage(QWidget):
             # Step on even when a file failed part way, so the bar reaches 100.
             yield int(100 * (index + 1) / len(entries))
         if len(entries) > 1:
+            log.info("Finished decoding %d files, %d failed", len(entries), n_failed)
             yield f"Finished {len(entries)} files, {n_failed} failed."
 
     def _on_worker_yielded(self, item: int | str | _FileResult) -> None:
@@ -254,26 +323,51 @@ class DecodePage(QWidget):
         self._status.append(
             f"{result.prefix}: done, {len(result.predictions):,} frames. {summary}."
         )
-        # The Ethogram and Metrics follow the file on screen, so a batch run
-        # does not leave them showing whichever file happened to finish last.
+        log.info(
+            "Decoded %s: %d frames, frames per class %s",
+            result.prefix,
+            len(result.predictions),
+            dict(zip(labels.tolist(), counts.tolist())),
+        )
+        log.debug(
+            "%s is the active file: %s",
+            result.prefix,
+            result.entry is self._session.active,
+        )
+        # The Ethogram, Metrics and Annotation panels follow the file on screen, so a
+        # batch run does not leave them showing whichever file happened to finish last.
         if result.entry is self._session.active:
+            log.info(
+                "Sending predictions for %s to the Ethogram, Metrics and Annotation "
+                "panels",
+                result.prefix,
+            )
             self._shown = result
             self.predictions_ready.emit(result.predictions, self._checkpoint)
 
     def _on_export_clicked(self) -> None:
         default = self._shown.saved_path.with_suffix(".json")
+        log.debug("Export clicked for %s, suggesting %s", self._shown.prefix, default)
         path, _ = QFileDialog.getSaveFileName(
             self, "Export predictions", str(default), "JSON (*.json)"
         )
         if not path:
+            log.debug("Export predictions dialog cancelled")
             return
         frames = {str(f): int(label) for f, label in enumerate(self._shown.predictions)}
         try:
             Path(path).write_text(json.dumps(frames, indent=2))
         except OSError as exc:
+            log.error("Could not export predictions to %s: %s", path, exc)
             self._on_worker_errored(exc)
             return
         self._status.append(f"Exported {Path(path).name}.")
+        log.info(
+            "Exported predictions for %s to %s (%d frames)",
+            self._shown.prefix,
+            path,
+            len(frames),
+        )
 
     def _start(self, worker: FunctionWorker | GeneratorWorker) -> None:
         """Run a background job, with the buttons off until it ends either way."""
@@ -284,6 +378,7 @@ class DecodePage(QWidget):
         worker.start()
 
     def _set_busy(self, busy: bool) -> None:
+        log.debug("Decode page busy: %s", busy)
         self._browse_button.setEnabled(not busy)
         self._predict_button.setEnabled(not busy)
         self._predict_all_button.setEnabled(not busy)

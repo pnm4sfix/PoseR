@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from types import SimpleNamespace
 
 import numpy as np
 
 from poser._panels import analysis_panel
 from poser._panels.analysis_panel import AnalysisPanel
+from poser.core import bout_detection
 from poser.core.session import SessionManager
 from poser.core.settings import settings
 
@@ -58,3 +60,209 @@ def test_classification_frame_is_added_to_the_chosen_file(tmp_path, monkeypatch)
     expected = tmp_path / "data" / "frames" / "classification_frames.h5"
     assert dialogs.opened == [expected]
     assert (tmp_path / "swims.h5").is_file()
+
+
+def _recording(tmp_path, frames: int) -> SessionManager:
+    """A session whose active entry holds ind1: 3 nodes over the given frames."""
+    session = SessionManager()
+    session.add(tmp_path / "rec_DLC.h5")
+    session.activate(0)
+    zeros = np.zeros((3, frames))  # (V, T)
+    session.active.coords_data = {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
+    return session
+
+
+def _bout_panel(session: SessionManager) -> SimpleNamespace:
+    """A stand-in panel on frame 8, with the default bout detection parameters."""
+    panel = SimpleNamespace(
+        _viewer=SimpleNamespace(dims=SimpleNamespace(current_step=(8, 0, 0))),
+        _session=session,
+        _individual_combo=SimpleNamespace(
+            currentText=lambda: "ind1", count=lambda: 1, itemText=lambda i: "ind1"
+        ),
+        _method_combo=SimpleNamespace(currentText=lambda: "orthogonal"),
+        _fps_spin=SimpleNamespace(value=lambda: 25),
+        _center_node_spin=SimpleNamespace(value=lambda: 0),
+        _thresh_spin=SimpleNamespace(value=lambda: 5.0),
+        _min_frames_spin=SimpleNamespace(value=lambda: 10),
+        _max_frames_spin=SimpleNamespace(value=lambda: 300),
+        _manual_start=None,
+        bouts_changed=SimpleNamespace(emit=lambda entry: None),
+        _bout_count_label=SimpleNamespace(setText=lambda text: None),
+        _manual_range_label=SimpleNamespace(setText=lambda text: None),
+        _btn_set_end=SimpleNamespace(setEnabled=lambda enabled: None),
+    )
+    panel._save_bouts_to_session = lambda bouts: (
+        AnalysisPanel._save_bouts_to_session(panel, bouts)
+    )
+    panel._update_bout_count = lambda *args: AnalysisPanel._update_bout_count(
+        panel, *args
+    )
+    return panel
+
+
+def _messages(caplog, level: int) -> list[str]:
+    """What the analysis panel logged at level."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "poser._panels.analysis_panel" and record.levelno == level
+    ]
+
+
+def test_detection_logs_its_parameters_and_the_labelled_bouts_it_keeps(
+    tmp_path, monkeypatch, caplog
+):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    # The second bout is under 10 frames long and the third over 300.
+    found = [(2, 20), (30, 35), (40, 400)]
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: (found, None, None, None),
+    )
+    session = _recording(tmp_path, frames=500)
+    # 2-20 was labelled in the Annotation panel before detection was run again.
+    session.active.bouts = [
+        {"start": 2, "end": 20, "label": 1},
+        {"start": 30, "end": 35},
+    ]
+
+    AnalysisPanel._on_detect(_bout_panel(session))
+
+    [message] = _messages(caplog, logging.INFO)
+    assert f"Detected 1 bouts on {tmp_path / 'rec_DLC.h5'} " in message
+    assert "method orthogonal, fps 25, centre node 0, 10-300 frames long" in message
+    assert (
+        f"Stored 1 bouts on session entry {tmp_path / 'rec_DLC.h5'}: kept its 1 "
+        "labelled bouts, replaced its 1 unlabelled bouts, added 0 detected bouts "
+        "and dropped 1 that overlap a labelled bout"
+    ) in _messages(caplog, logging.DEBUG)
+
+
+def test_detecting_again_keeps_the_labelled_bouts_and_adds_the_others(
+    tmp_path, monkeypatch
+):
+    # Detect replaced the entry's bouts with unlabelled ones, so every label was lost.
+    found = [(5, 20), (30, 45), (62, 80), (90, 110)]
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: (found, None, None, None),
+    )
+    session = _recording(tmp_path, frames=200)
+    session.active.bouts = [
+        {"start": 10, "end": 30, "label": 1, "label_source": "hand"},
+        {"start": 40, "end": 55},
+        {"start": 60, "end": 75, "label": 0},
+        {"start": 85, "end": 95, "label": -1},
+    ]
+    panel = _bout_panel(session)
+    shown = []
+    panel._bout_count_label = SimpleNamespace(setText=shown.append)
+
+    AnalysisPanel._on_detect(panel)
+
+    # 5-20 and 62-80 overlap a labelled bout; 30-45 only starts where one ends;
+    # -1 is unlabelled, so 85-95 is replaced and 90-110 added.
+    assert session.active.bouts == [
+        {"start": 10, "end": 30, "label": 1, "label_source": "hand"},
+        {"start": 30, "end": 45},
+        {"start": 60, "end": 75, "label": 0},
+        {"start": 90, "end": 110},
+    ]
+    assert shown == ["Bouts detected: 4 (2 labelled kept)"]
+
+
+def test_detected_and_added_bouts_are_sent_with_their_entry(tmp_path, monkeypatch):
+    # They reached the Annotation panel only through its Load Bouts button.
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: ([(2, 20)], None, None, None),
+    )
+    session = _recording(tmp_path, frames=50)
+    panel = _bout_panel(session)
+    sent = []
+
+    def record(entry):
+        sent.append((entry, sorted((b["start"], b["end"]) for b in entry.bouts)))
+
+    panel.bouts_changed = SimpleNamespace(emit=record)
+
+    AnalysisPanel._on_detect(panel)
+    panel._manual_start = 2
+    AnalysisPanel._on_set_end(panel)  # the viewer is on frame 8
+
+    assert sent == [
+        (session.active, [(2, 20)]),
+        (session.active, [(2, 8), (2, 20)]),
+    ]
+
+
+def test_a_manual_bout_goes_into_the_active_entrys_own_bouts_in_start_order(
+    tmp_path, monkeypatch
+):
+    # Set End wrote the panel's own list over them: here the bouts it had detected
+    # on another recording, and after reopening the panel only the new bout.
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: ([(30, 45)], None, None, None),
+    )
+    session = _recording(tmp_path, frames=50)
+    panel = _bout_panel(session)
+    shown = []
+    panel._bout_count_label = SimpleNamespace(setText=shown.append)
+    AnalysisPanel._on_detect(panel)
+    fish2 = session.add(tmp_path / "fish2_DLC.h5")
+    fish2.coords_data = session.entries[0].coords_data
+    bouts = [{"start": 0, "end": 4, "label": 1}, {"start": 12, "end": 20}]
+    fish2.bouts = bouts
+    session.activate(1)
+    ranges = []
+    panel._manual_range_label = SimpleNamespace(setText=ranges.append)
+    panel._manual_start = 5
+
+    AnalysisPanel._on_set_end(panel)  # the viewer is on frame 8
+
+    assert fish2.bouts is bouts
+    assert [(b["start"], b["end"], b.get("label")) for b in bouts] == [
+        (0, 4, 1),
+        (5, 8, None),
+        (12, 20, None),
+    ]
+    assert [(b["start"], b["end"]) for b in session.entries[0].bouts] == [(30, 45)]
+    assert shown == ["Bouts detected: 1", "Bouts detected: 3"]
+    assert ranges == ["Added: 5 → 8  (total 3 bouts)"]
+    listed = AnalysisPanel.bouts.fget(panel)
+    assert listed is not bouts
+    assert [(b["start"], b["end"]) for b in listed] == [(0, 4), (5, 8), (12, 20)]
+
+
+def test_added_manual_bout_is_logged(tmp_path, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    panel = _bout_panel(_recording(tmp_path, frames=10))
+    panel._manual_start = 2
+
+    AnalysisPanel._on_set_end(panel)  # the viewer is on frame 8
+
+    [message] = _messages(caplog, logging.INFO)
+    assert "Added manual bout 2-8 for ind1 on " in message
+    assert "1 bouts in total" in message
+
+
+def test_detection_without_pose_data_logs_why_nothing_happened(monkeypatch, caplog):
+    caplog.set_level(logging.DEBUG, logger="poser")
+    shown = []
+    monkeypatch.setattr(
+        analysis_panel,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *args: shown.append(args[-1])),
+    )
+
+    AnalysisPanel._on_detect(_bout_panel(SessionManager()))
+
+    [message] = _messages(caplog, logging.WARNING)
+    assert "Bout detection skipped: no pose data loaded" in message
+    assert shown == ["Load a pose file first."]

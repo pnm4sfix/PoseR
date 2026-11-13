@@ -4,6 +4,9 @@ Using napari.current_viewer() avoids dependency injection entirely: napari
 guarantees a viewer exists before any widget command can be triggered.
 """
 
+import logging
+from logging.handlers import RotatingFileHandler
+
 import napari
 from qtpy.QtWidgets import QApplication
 
@@ -15,10 +18,15 @@ from poser._panels.train_panel import TrainPanel
 from poser._panels.ethogram_panel import EthogramPanel
 from poser._panels.metrics_panel import MetricsPanel
 from poser.core.session import get_session
+from poser.core.settings import resolve_output_dir, settings
+
+log = logging.getLogger(__name__)
 
 # One instance of each wirable panel per viewer. Panels talk to each other
 # through Qt signals, which SessionManager cannot carry because core must stay
 # free of Qt (STYLEGUIDE 1.2), so the connections are made out here instead.
+_data_cache: dict = {}
+_analysis_cache: dict = {}
 _annotation_cache: dict = {}
 _ethogram_cache: dict = {}
 _inference_cache: dict = {}
@@ -41,6 +49,55 @@ _TITLEBAR_QSS = f"""
 """
 
 
+# The terminal shows settings.log_level and up; the file keeps everything.
+_LOG_FORMAT = "%(asctime)s %(levelname)-7s %(name)s: %(message)s"
+_LOG_FILE_BYTES = 5 * 1024 * 1024
+_LOG_FILE_BACKUPS = 3
+
+
+def _configure_logging() -> None:
+    """Send poser's log messages to the terminal and to data/logs/poser.log, once.
+
+    The poser logger stops passing messages up to the root logger: the napari
+    launcher gives that one a handler which prints everything it receives, so
+    every message would appear twice, DEBUG included.
+    """
+    logger = logging.getLogger("poser")
+    if any(handler.get_name() == "poser-terminal" for handler in logger.handlers):
+        return
+    formatter = logging.Formatter(_LOG_FORMAT)
+    terminal = logging.StreamHandler()
+    terminal.set_name("poser-terminal")
+    terminal.setLevel(settings.log_level)
+    terminal.setFormatter(formatter)
+    logger.addHandler(terminal)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+
+    try:
+        log_file = resolve_output_dir("logs") / "poser.log"
+        to_file = RotatingFileHandler(
+            log_file,
+            maxBytes=_LOG_FILE_BYTES,
+            backupCount=_LOG_FILE_BACKUPS,
+            encoding="utf-8",
+        )
+    except OSError:
+        log.warning(
+            "Cannot write a log file under %s; logging to the terminal only",
+            settings.data_dir,
+            exc_info=True,
+        )
+        return
+    to_file.set_name("poser-file")
+    to_file.setLevel(logging.DEBUG)
+    to_file.setFormatter(formatter)
+    logger.addHandler(to_file)
+    log.info(
+        "Logging to %s; the terminal shows %s and up", log_file, settings.log_level
+    )
+
+
 def _enlarge_titlebar_buttons() -> None:
     """Scale up the dock title-bar buttons, once per application."""
     app = QApplication.instance()
@@ -58,54 +115,118 @@ def _wire_panels(viewer) -> None:
     reached the ethogram.
     """
     key = id(viewer)
+    data = _data_cache.get(key)
+    analysis = _analysis_cache.get(key)
     annotation = _annotation_cache.get(key)
     ethogram = _ethogram_cache.get(key)
     inference = _inference_cache.get(key)
     metrics = _metrics_cache.get(key)
+    log.debug(
+        "Panels open for viewer %s: annotation=%s ethogram=%s inference=%s metrics=%s "
+        "data=%s analysis=%s",
+        key,
+        annotation is not None,
+        ethogram is not None,
+        inference is not None,
+        metrics is not None,
+        data is not None,
+        analysis is not None,
+    )
 
     if annotation is not None and ethogram is not None:
         pair = (id(annotation), id(ethogram), "annotations")
         if pair not in _wired:
             annotation.annotations_changed.connect(ethogram.load_annotations)
             _wired.add(pair)
+            log.info("Connected the Annotation panel's labels to the Ethogram")
+        pair = (id(annotation), id(ethogram), "label_names")
+        if pair not in _wired:
+            annotation.labels_changed.connect(ethogram.set_annotation_names)
+            _wired.add(pair)
+            log.info("Connected the Annotation panel's label names to the Ethogram")
+            # Labels made before this pair was connected would otherwise not show
+            # until the next change, so open order does not matter.
+            annotation.resend()
 
     if inference is not None and ethogram is not None:
         pair = (id(inference), id(ethogram), "predictions")
         if pair not in _wired:
             inference.predictions_ready.connect(ethogram.load_predictions)
             _wired.add(pair)
+            log.info("Connected the Inference panel's predictions to the Ethogram")
 
     if inference is not None and metrics is not None:
         pair = (id(inference), id(metrics), "metrics_predictions")
         if pair not in _wired:
             inference.predictions_ready.connect(metrics.load_predictions)
             _wired.add(pair)
+            log.info("Connected the Inference panel's predictions to the Metrics panel")
+
+    if data is not None and annotation is not None:
+        pair = (id(data), id(annotation), "active_entry")
+        if pair not in _wired:
+            data.active_entry_changed.connect(annotation.show_entry)
+            _wired.add(pair)
+            log.info("Connected the Data panel's active entry to the Annotation panel")
+
+    if analysis is not None and annotation is not None:
+        pair = (id(analysis), id(annotation), "bouts")
+        if pair not in _wired:
+            analysis.bouts_changed.connect(annotation.show_entry)
+            _wired.add(pair)
+            log.info("Connected the Analysis panel's bouts to the Annotation panel")
+
+    if inference is not None and annotation is not None:
+        pair = (id(inference), id(annotation), "annotation_predictions")
+        if pair not in _wired:
+            inference.predictions_ready.connect(annotation.set_predictions)
+            _wired.add(pair)
+            log.info(
+                "Connected the Inference panel's predictions to the Annotation panel"
+            )
 
 
 def make_data_panel() -> DataPanel:
+    _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
-    return DataPanel(v, session=get_session(v))
+    log.debug("Opening the data panel for viewer %s", id(v))
+    panel = DataPanel(v, session=get_session(v))
+    _data_cache[id(v)] = panel
+    _wire_panels(v)
+    return panel
 
 
 def make_annotation_panel() -> AnnotationPanel:
+    _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
-    panel = AnnotationPanel(v, session=get_session(v))
+    log.debug("Opening the annotation panel for viewer %s", id(v))
+    session = get_session(v)
+    panel = AnnotationPanel(v, session=session)
+    # Bouts found before the panel was opened are listed without Load Bouts.
+    panel.show_entry(session.active)
     _annotation_cache[id(v)] = panel
     _wire_panels(v)
     return panel
 
 
 def make_analysis_panel() -> AnalysisPanel:
+    _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
-    return AnalysisPanel(v, session=get_session(v))
+    log.debug("Opening the analysis panel for viewer %s", id(v))
+    panel = AnalysisPanel(v, session=get_session(v))
+    _analysis_cache[id(v)] = panel
+    _wire_panels(v)
+    return panel
 
 
 def make_inference_panel() -> InferencePanel:
+    _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the inference panel for viewer %s", id(v))
     panel = InferencePanel(v, session=get_session(v))
     _inference_cache[id(v)] = panel
     _wire_panels(v)
@@ -113,14 +234,18 @@ def make_inference_panel() -> InferencePanel:
 
 
 def make_train_panel() -> TrainPanel:
+    _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the train panel for viewer %s", id(v))
     return TrainPanel(v, session=get_session(v))
 
 
 def make_ethogram_panel() -> EthogramPanel:
+    _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the ethogram panel for viewer %s", id(v))
     panel = EthogramPanel(v)
     _ethogram_cache[id(v)] = panel
     _wire_panels(v)
@@ -128,8 +253,10 @@ def make_ethogram_panel() -> EthogramPanel:
 
 
 def make_metrics_panel() -> MetricsPanel:
+    _configure_logging()
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
+    log.debug("Opening the metrics panel for viewer %s", id(v))
     panel = MetricsPanel(v, session=get_session(v))
     _metrics_cache[id(v)] = panel
     _wire_panels(v)

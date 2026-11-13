@@ -21,10 +21,13 @@ Usage
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+
+log = logging.getLogger(__name__)
 
 
 class PointsLayerManager:
@@ -77,6 +80,15 @@ class PointsLayerManager:
         layer : napari.layers.Points
         """
         layer_name = name or f"pose_{key}"
+        log.debug(
+            "Adding individual %s as layer %s: %s nodes, %s, size %s, symbol %s",
+            key,
+            layer_name,
+            n_nodes,
+            color,
+            size,
+            symbol,
+        )
 
         # Remove old layer if it exists
         self.remove_individual(key)
@@ -98,17 +110,34 @@ class PointsLayerManager:
                 "n_nodes": n_nodes,
                 "visible_frame": None,
             }
+        log.info(
+            "Added points layer %s for individual %s (%s nodes)",
+            layer_name,
+            key,
+            n_nodes,
+        )
         return layer
 
     def remove_individual(self, key: str) -> None:
         """Remove a managed layer and its buffer."""
         with self._lock:
             entry = self._entries.pop(key, None)
+        log.debug(
+            "Removing individual %s: %s",
+            key,
+            "nothing registered" if entry is None else "dropping its layer and buffer",
+        )
         if entry is not None:
             try:
                 self._viewer.layers.remove(entry["layer"])
+                log.info("Removed the points layer of individual %s", key)
             except Exception:
-                pass
+                log.debug(
+                    "Could not remove the points layer of individual %s from the "
+                    "viewer; it is no longer managed either way",
+                    key,
+                    exc_info=True,
+                )
 
     def layer(self, key: str):
         """Return the napari ``Points`` layer for *key*."""
@@ -161,6 +190,12 @@ class PointsLayerManager:
                 raise KeyError(f"No layer registered for individual '{key}'.")
             for t in range(T):
                 self._entries[key]["buffer"][t] = all_coords[t]
+        log.debug(
+            "Buffered %d frames for individual %s from a %s array",
+            T,
+            key,
+            all_coords.shape,
+        )
 
     # ------------------------------------------------------------------
     # Flush
@@ -182,6 +217,12 @@ class PointsLayerManager:
             for k in keys:
                 entry = self._entries.get(k)
                 if entry is None or not entry["buffer"]:
+                    log.log(
+                        logging.WARNING if entry is None else logging.DEBUG,
+                        "Nothing to flush for individual %s: %s",
+                        k,
+                        "no layer registered" if entry is None else "nothing buffered",
+                    )
                     continue
                 self._flush_one(entry)
 
@@ -202,6 +243,13 @@ class PointsLayerManager:
             rows.append(np.hstack([frame_col, xy[:, [1, 0]]]))  # napari: [z, y, x]
 
         all_points = np.vstack(rows)  # (T*V, 3)
+        log.debug(
+            "Writing %d buffered frames of %s nodes to layer %s as a %s array",
+            len(frame_indices),
+            n_nodes,
+            getattr(entry["layer"], "name", None),
+            all_points.shape,
+        )
 
         entry["layer"].data = all_points
         entry["buffer"].clear()
@@ -232,10 +280,14 @@ class PointsLayerManager:
         with self._lock:
             entry = self._entries.get(key)
         if entry is None:
+            log.warning(
+                "Cannot show the points of individual %s: no layer registered", key
+            )
             return
         layer = entry["layer"]
         layer.shown = np.ones(len(layer.data), dtype=bool)
         entry["visible_frame"] = None
+        log.debug("Showing all %d points of individual %s", len(layer.data), key)
 
     # ------------------------------------------------------------------
     # Misc
@@ -248,7 +300,18 @@ class PointsLayerManager:
     def clear_buffer(self, key: Optional[str] = None) -> None:
         """Discard buffered (un-flushed) updates without applying them."""
         keys = [key] if key is not None else list(self._entries)
+        log.log(
+            logging.DEBUG if key is None or key in self._entries else logging.WARNING,
+            "Clearing the point buffers of %s%s",
+            keys,
+            "" if key is None or key in self._entries else ": no layer registered",
+        )
         with self._lock:
             for k in keys:
                 if k in self._entries:
+                    log.debug(
+                        "Discarding %d buffered frames of individual %s",
+                        len(self._entries[k]["buffer"]),
+                        k,
+                    )
                     self._entries[k]["buffer"].clear()
