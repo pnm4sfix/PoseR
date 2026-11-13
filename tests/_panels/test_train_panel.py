@@ -143,3 +143,30 @@ def test_starting_without_training_files_logs_why_nothing_ran(monkeypatch, caplo
     assert record.name == "poser._panels.train_panel"
     assert record.levelno == logging.WARNING
     assert len(warned) == 1
+
+
+def test_a_schema_with_a_removed_label_sets_num_class_past_its_highest_index(
+    tmp_path, monkeypatch
+):
+    # Removing a behaviour label leaves a gap, so counting the names gave too few.
+    for name in ("fish1_pose.npy", "fish1_labels.npy"):
+        (tmp_path / name).write_bytes(b"")
+    (tmp_path / "fish1_schema.json").write_text('{"0": "other", "3": "swim"}')
+    monkeypatch.setattr(
+        train_panel,
+        "QFileDialog",
+        SimpleNamespace(getExistingDirectory=lambda *args: str(tmp_path)),
+    )
+    chosen = []
+    panel = SimpleNamespace(
+        _file_list_label=_Label(),
+        _num_class_spin=SimpleNamespace(
+            setValue=chosen.append, value=lambda: chosen[-1]
+        ),
+        _log_signal=SimpleNamespace(emit=lambda text: None),
+    )
+    panel._update_file_label = lambda: TrainPanel._update_file_label(panel)
+
+    TrainPanel._on_add_numpy_folder(panel)
+
+    assert chosen == [4]  # labels 0 to 3

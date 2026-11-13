@@ -226,8 +226,14 @@ class TrainPanel(QWidget):
                 import json
                 try:
                     schema = json.loads(schema_path.read_text())
-                    n = len(schema)
-                    log.debug("%s lists %d class(es)", schema_path, n)
+                    # A removed label leaves a gap, so classes run to the highest index.
+                    n = max((int(k) for k in schema), default=0) + 1
+                    log.debug(
+                        "%s lists %d class(es); highest index %d",
+                        schema_path,
+                        len(schema),
+                        n - 1,
+                    )
                     if n >= 2:
                         self._num_class_spin.setValue(n)
                         self._log_signal.emit(
@@ -237,7 +243,7 @@ class TrainPanel(QWidget):
                             "num_class set to %d from %s (schema lists %d)",
                             self._num_class_spin.value(),
                             schema_path,
-                            n,
+                            len(schema),
                         )
                 except Exception:
                     log.debug(
