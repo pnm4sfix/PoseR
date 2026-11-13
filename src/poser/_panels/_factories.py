@@ -139,6 +139,14 @@ def _wire_panels(viewer) -> None:
             annotation.annotations_changed.connect(ethogram.load_annotations)
             _wired.add(pair)
             log.info("Connected the Annotation panel's labels to the Ethogram")
+        pair = (id(annotation), id(ethogram), "label_names")
+        if pair not in _wired:
+            annotation.labels_changed.connect(ethogram.set_annotation_names)
+            _wired.add(pair)
+            log.info("Connected the Annotation panel's label names to the Ethogram")
+            # Labels made before this pair was connected would otherwise not show
+            # until the next change, so open order does not matter.
+            annotation.resend()
 
     if inference is not None and ethogram is not None:
         pair = (id(inference), id(ethogram), "predictions")

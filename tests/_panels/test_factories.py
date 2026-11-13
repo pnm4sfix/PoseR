@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,6 +12,7 @@ import pytest
 from poser._panels import _factories
 from poser._panels.analysis_panel import AnalysisPanel
 from poser._panels.annotation_panel import AnnotationPanel
+from poser._panels.ethogram_panel import EthogramPanel
 from poser.core import bout_detection
 from poser.core.session import SessionManager
 from poser.core.settings import settings
@@ -96,14 +98,19 @@ class _Signal:
 def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
     caplog.set_level(logging.DEBUG, logger="poser")
     viewer = object()
+    resent = []
     panels = {
         "_data_cache": SimpleNamespace(active_entry_changed=_Signal()),
         "_analysis_cache": SimpleNamespace(bouts_changed=_Signal()),
         "_annotation_cache": SimpleNamespace(
-            annotations_changed=_Signal(), show_entry=lambda entry: None
+            annotations_changed=_Signal(),
+            labels_changed=_Signal(),
+            show_entry=lambda entry: None,
+            resend=lambda: resent.append(True),
         ),
         "_ethogram_cache": SimpleNamespace(
             load_annotations=lambda labels: None,
+            set_annotation_names=lambda names: None,
             load_predictions=lambda predictions, checkpoint: None,
         ),
         "_inference_cache": SimpleNamespace(predictions_ready=_Signal()),
@@ -125,6 +132,7 @@ def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
     ]
     assert connected == [
         "Connected the Annotation panel's labels to the Ethogram",
+        "Connected the Annotation panel's label names to the Ethogram",
         "Connected the Inference panel's predictions to the Ethogram",
         "Connected the Inference panel's predictions to the Metrics panel",
         "Connected the Data panel's active entry to the Annotation panel",
@@ -136,6 +144,10 @@ def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
     assert panels["_analysis_cache"].bouts_changed.slots == [
         panels["_annotation_cache"].show_entry
     ]
+    assert panels["_annotation_cache"].labels_changed.slots == [
+        panels["_ethogram_cache"].set_annotation_names
+    ]
+    assert resent == [True]  # once, when the pair was connected
 
 
 def test_the_panels_open_for_a_viewer_are_logged(monkeypatch, caplog):
@@ -222,3 +234,48 @@ def test_detected_bouts_are_listed_in_an_open_annotation_panel(
     assert annotation._bout_list.count() == 2
     assert annotation._bout_list.currentRow() == 0
     assert annotation._current_bouts is session.active.bouts
+
+
+def test_an_ethogram_opened_after_labelling_shows_the_labels_by_name(
+    tmp_path, monkeypatch, qtbot
+):
+    # It showed nothing until the next label click, then cls1 with an empty legend,
+    # and its Annotations source still read None.
+    session = SessionManager()
+    session.add(tmp_path / "rec_DLC.h5")
+    session.activate(0)
+    zeros = np.zeros((3, 10))  # (V, T)
+    session.active.coords_data = {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
+    session.active.bouts = [{"start": 2, "end": 5}]
+    viewer = SimpleNamespace(
+        dims=SimpleNamespace(
+            current_step=(3,),
+            set_point=lambda axis, frame: None,
+            events=SimpleNamespace(current_step=_Signal()),
+        )
+    )
+    annotation = AnnotationPanel(viewer, session=session, behaviour_labels={1: "swim"})
+    qtbot.addWidget(annotation)
+    annotation.show_entry(session.active)
+    annotation._label_buttons_layout.itemAt(1).widget().click()  # [1] swim
+    ethogram = EthogramPanel(viewer)
+    qtbot.addWidget(ethogram)
+    monkeypatch.setattr(_factories, "_annotation_cache", {id(viewer): annotation})
+    monkeypatch.setattr(_factories, "_ethogram_cache", {id(viewer): ethogram})
+    monkeypatch.setattr(_factories, "_wired", set())
+
+    _factories._wire_panels(viewer)
+
+    assert np.array_equal(ethogram._annotations, [0, 0, 1, 1, 1, 0, 0, 0, 0, 0])
+    assert ethogram._ann_label.text() == "Annotation panel"
+    status = re.sub(r"<[^>]+>|&nbsp;", " ", ethogram._frame_status.text()).split()
+    assert status[:5] == ["Frame", "3", "|", "Ann:", "swim"]
+    annotation._new_label_edit.setText("turn")
+    annotation._on_add_label()
+    legend = ethogram._ann_legend._lay
+    names = [legend.itemAt(i).widget() for i in range(legend.count())]
+    assert [w.text() for w in names if w is not None and w.text()] == [
+        "0: other",
+        "1: swim",
+        "2: turn",
+    ]

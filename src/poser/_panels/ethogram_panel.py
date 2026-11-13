@@ -32,6 +32,8 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from poser.core.scoring import class_names_from_checkpoint
+
 log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -81,7 +83,10 @@ class EthogramPanel(QWidget):
     ):
         super().__init__()
         self._viewer = viewer
-        self._label_names: Dict[int, str] = label_names or {}
+        # One name map per row: annotation labels and decoder classes are numbered
+        # independently. label_names names both, as it did when they shared one.
+        self._annotation_names: dict[int, str] = dict(label_names or {})
+        self._prediction_names: dict[int, str] = dict(label_names or {})
 
         self._annotations: Optional[np.ndarray] = None
         self._predictions: Optional[np.ndarray] = None
@@ -138,8 +143,16 @@ class EthogramPanel(QWidget):
         root.addWidget(ctrl_grp)
 
         # ── Legend ─────────────────────────────────────────────────────
-        self._legend_widget = _LegendWidget(self._label_names)
-        root.addWidget(self._legend_widget)
+        self._ann_legend = _LegendWidget(self._annotation_names)
+        self._pred_legend = _LegendWidget(self._prediction_names)
+        for title, legend in (
+            ("Annotations:", self._ann_legend),
+            ("Predictions:", self._pred_legend),
+        ):
+            legend_row = QHBoxLayout()
+            legend_row.addWidget(QLabel(title))
+            legend_row.addWidget(legend, 1)
+            root.addLayout(legend_row)
 
         # ── Matplotlib canvas ─────────────────────────────────────────
         try:
@@ -218,26 +231,25 @@ class EthogramPanel(QWidget):
         self._pred_label.setText(name)
         # Try to pull class names out of the checkpoint
         if checkpoint is not None:
+            # Names kept from another decoder or a browsed schema would misname this
+            # decoder's classes.
+            self._prediction_names = {}
             try:
-                import torch
+                import torch  # lazy: torch is slow to import
                 raw = torch.load(str(checkpoint), map_location="cpu", weights_only=False)
-                hp = raw.get("hyper_parameters", {})
-                cn = hp.get("class_names") or hp.get("data_cfg", {}).get("class_names")
-                if cn and isinstance(cn, dict):
-                    self._label_names = {int(k): v for k, v in cn.items()}
-                elif cn and isinstance(cn, (list, tuple)):
-                    self._label_names = {i: v for i, v in enumerate(cn)}
+                classes = class_names_from_checkpoint(raw)
+                if classes is not None:
+                    self._prediction_names = dict(classes.names)
                 log.debug(
-                    "Checkpoint %s stores class names %s; label names now %s",
+                    "Checkpoint %s stores class names %s; prediction names now %s",
                     checkpoint,
-                    cn,
-                    self._label_names,
+                    classes.names if classes is not None else None,
+                    self._prediction_names,
                 )
             except Exception:
                 log.debug(
-                    "Could not read class names from %s; label names stay %s",
+                    "Could not read class names from %s; its classes show as cls<N>",
                     checkpoint,
-                    self._label_names,
                     exc_info=True,
                 )
         labels_present, frame_counts = np.unique(self._predictions, return_counts=True)
@@ -251,12 +263,14 @@ class EthogramPanel(QWidget):
         self._refresh()
 
     def load_annotations(self, annotations: np.ndarray) -> None:
+        """Show the per-frame labels sent by the Annotation panel."""
         self._annotations = annotations.astype(np.int64)
+        self._ann_label.setText("Annotation panel")
         log.debug(
-            "load_annotations: %s array of shape %s, label names %s",
+            "load_annotations: %s array of shape %s, annotation names %s",
             annotations.dtype,
             annotations.shape,
-            self._label_names,
+            self._annotation_names,
         )
         labels_present, frame_counts = np.unique(self._annotations, return_counts=True)
         log.info(
@@ -268,12 +282,34 @@ class EthogramPanel(QWidget):
         )
         self._refresh()
 
-    def set_label_names(self, label_names: Dict[int, str]) -> None:
+    def set_annotation_names(self, names: dict[int, str]) -> None:
+        """Name the labels of the annotation row, as the Annotation panel sends them."""
+        if names == self._annotation_names:
+            log.debug("Ethogram annotation names unchanged: %s", names)
+            return
         log.info(
-            "Ethogram class names set: %s (were %s)", label_names, self._label_names
+            "Ethogram annotation names set: %s (were %s)",
+            names,
+            self._annotation_names,
         )
-        self._label_names = label_names
-        self._legend_widget.update_names(label_names)
+        self._annotation_names = dict(names)
+        self._ann_legend.update_names(self._annotation_names)
+        # Names change only the legend and the status strip, never the bars. A redraw
+        # here drew the previous track under the new names, which arrive first.
+        self._update_frame_status()
+
+    def set_label_names(self, label_names: Dict[int, str]) -> None:
+        """Name the values of both rows; set_annotation_names names only one."""
+        log.info(
+            "Ethogram class names set for both rows: %s (were %s and %s)",
+            label_names,
+            self._annotation_names,
+            self._prediction_names,
+        )
+        self._annotation_names = dict(label_names)
+        self._prediction_names = dict(label_names)
+        self._ann_legend.update_names(self._annotation_names)
+        self._pred_legend.update_names(self._prediction_names)
         self._refresh()
 
     # ------------------------------------------------------------------
@@ -298,7 +334,10 @@ class EthogramPanel(QWidget):
                 dict(zip(labels_present.tolist(), frame_counts.tolist())),
             )
             self._ann_label.setText(Path(path).name)
-            self._try_load_schema(path)
+            names = self._try_load_schema(path)
+            if names is not None:
+                self._annotation_names = names
+                self._ann_legend.update_names(names)
             self._refresh()
 
     def _on_browse_predictions(self) -> None:
@@ -319,11 +358,14 @@ class EthogramPanel(QWidget):
                 dict(zip(labels_present.tolist(), frame_counts.tolist())),
             )
             self._pred_label.setText(Path(path).name)
-            self._try_load_schema(path)
+            names = self._try_load_schema(path)
+            if names is not None:
+                self._prediction_names = names
+                self._pred_legend.update_names(names)
             self._refresh()
 
-    def _try_load_schema(self, npy_path: str) -> None:
-        """Look for a sibling *_schema.json and load class names from it."""
+    def _try_load_schema(self, npy_path: str) -> dict[int, str] | None:
+        """Return the class names in a sibling *_schema.json, or None."""
         p = Path(npy_path)
         # Strip common suffixes to find the base stem
         for suffix in ("_labels", "_predictions", "_pose"):
@@ -333,20 +375,19 @@ class EthogramPanel(QWidget):
                     try:
                         with open(base) as fh:
                             raw = json.load(fh)
-                        self._label_names = {int(k): v for k, v in raw.items()}
-                        self._legend_widget.update_names(self._label_names)
-                        log.info(
-                            "Loaded class names from %s: %s", base, self._label_names
-                        )
+                        names = {int(k): v for k, v in raw.items()}
+                        log.info("Loaded class names from %s: %s", base, names)
+                        return names
                     except Exception:
                         log.debug(
-                            "Could not read class names from %s; label names stay %s",
+                            "Could not read class names from %s; the row keeps its "
+                            "names",
                             base,
-                            self._label_names,
                             exc_info=True,
                         )
-                    return
-        log.debug("No class-name schema found for %s; label names unchanged", p)
+                    return None
+        log.debug("No class-name schema found for %s; the row keeps its names", p)
+        return None
 
     # ------------------------------------------------------------------
     # Redraw
@@ -354,10 +395,12 @@ class EthogramPanel(QWidget):
 
     def _refresh(self) -> None:
         log.debug(
-            "Refreshing ethogram: annotations %s, predictions %s, label names %s",
+            "Refreshing ethogram: annotations %s, predictions %s, annotation names %s, "
+            "prediction names %s",
             getattr(self._annotations, "shape", None),
             getattr(self._predictions, "shape", None),
-            self._label_names,
+            self._annotation_names,
+            self._prediction_names,
         )
         if self._canvas is None:
             log.warning("No matplotlib canvas; the ethogram is not drawn")
@@ -400,12 +443,14 @@ class EthogramPanel(QWidget):
         )
 
         self._canvas.draw()
-        self._legend_widget.update_names(self._label_names)
+        self._ann_legend.update_names(self._annotation_names)
+        self._pred_legend.update_names(self._prediction_names)
         self._update_frame_status()  # populate status strip immediately
 
     def _draw_track(self, ax, labels: np.ndarray) -> None:
         """Draw one ethogram row using broken_barh (one call per class)."""
         row = "annotations" if ax is self._ax_ann else "predictions"
+        names = self._annotation_names if ax is self._ax_ann else self._prediction_names
         if len(labels) == 0:
             log.warning("Empty %s track (0 frames); nothing drawn", row)
             return
@@ -423,16 +468,13 @@ class EthogramPanel(QWidget):
             len(labels),
             {c: len(r) for c, r in sorted(class_runs.items())},
         )
-        unnamed = [
-            c for c in sorted(class_runs) if c >= 0 and c not in self._label_names
-        ]
+        unnamed = [c for c in sorted(class_runs) if c >= 0 and c not in names]
         if unnamed:
             log.warning(
-                "Classes %s in the %s row are not in the label names %s; "
-                "shown as cls<N>",
+                "Classes %s in the %s row are not in its names %s; shown as cls<N>",
                 unnamed,
                 row,
-                self._label_names,
+                names,
             )
 
         for cls_id, runs in sorted(class_runs.items()):
@@ -446,11 +488,11 @@ class EthogramPanel(QWidget):
     # Frame cursor sync + live status
     # ------------------------------------------------------------------
 
-    def _label_name(self, cls_id: int) -> str:
-        """Return display name for a class id, with color markup."""
+    def _label_name(self, cls_id: int, names: dict[int, str]) -> str:
+        """Return the name of cls_id in names (its row's), with colour markup."""
         if cls_id < 0:
             return '<span style="color:#888888">unlabelled</span>'
-        name = self._label_names.get(cls_id, f"cls{cls_id}")
+        name = names.get(cls_id, f"cls{cls_id}")
         color = _CLASS_COLORS[cls_id % len(_CLASS_COLORS)]
         return f'<span style="color:{color}; font-weight:bold">{name}</span>'
 
@@ -466,12 +508,14 @@ class EthogramPanel(QWidget):
         parts = [f"Frame <b>{frame}</b>"]
 
         if self._annotations is not None and frame < len(self._annotations):
-            parts.append(f"Ann: {self._label_name(int(self._annotations[frame]))}")
+            value = int(self._annotations[frame])
+            parts.append(f"Ann: {self._label_name(value, self._annotation_names)}")
         else:
             parts.append("Ann: <span style='color:#555'>—</span>")
 
         if self._predictions is not None and frame < len(self._predictions):
-            parts.append(f"Pred: {self._label_name(int(self._predictions[frame]))}")
+            value = int(self._predictions[frame])
+            parts.append(f"Pred: {self._label_name(value, self._prediction_names)}")
         else:
             parts.append("Pred: <span style='color:#555'>—</span>")
 

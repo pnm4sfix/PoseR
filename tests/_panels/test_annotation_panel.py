@@ -31,6 +31,7 @@ def _panel(tmp_path) -> SimpleNamespace:
         _session=session,
         _entry=session.active,
         _current_bouts=[{"start": 2, "end": 5, "label": 1}],
+        labels_changed=SimpleNamespace(emit=lambda names: None),
     )
 
 
@@ -370,6 +371,27 @@ def test_the_last_behaviour_label_is_not_removed(tmp_path, monkeypatch, caplog):
     )
 
 
+def test_every_change_to_the_label_names_is_sent(tmp_path):
+    # The Ethogram never got the names, so hand labels showed there as cls1, cls2.
+    panel = _removing_panel(tmp_path, chosen=2)  # labels swim (1) and turn (2)
+    sent = []
+    panel.labels_changed = SimpleNamespace(emit=sent.append)
+    panel._new_label_edit = SimpleNamespace(text=lambda: "rest", clear=lambda: None)
+
+    AnnotationPanel._on_add_label(panel)
+    AnnotationPanel._on_remove_label(panel)  # turn, which no bout carries
+    AnnotationPanel.set_behaviour_labels(panel, {1: "swim", 2: "dart"})
+    AnnotationPanel.show_entry(panel, panel._entry)  # as Load Session sends it
+
+    assert sent == [
+        {0: "other", 1: "swim", 2: "turn", 3: "rest"},
+        {0: "other", 1: "swim", 3: "rest"},
+        {0: "other", 1: "swim", 2: "dart"},
+        {0: "other", 1: "swim", 2: "dart"},
+    ]
+    assert sent[-1] is not panel._session.behaviour_labels  # receivers get a copy
+
+
 def test_remove_lists_the_behaviour_labels_and_keeps_the_one_chosen(qtbot):
     # Label 0 (other) is never listed; rebuilding the list must not change the choice.
     viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
@@ -553,13 +575,14 @@ def test_a_loaded_session_shows_its_bouts_under_its_label_names(tmp_path):
     saved.active.bouts = [{"start": 2, "end": 5, "label": 3}, {"start": 6, "end": 9}]
     saved.save(tmp_path / "day1.json")
     session = SessionManager()
-    listed, buttons = [], []
+    listed, buttons, sent = [], [], []
     panel = SimpleNamespace(
         _session=session,
         _entry=None,
         _bout_list=SimpleNamespace(clear=lambda: None),
         load_bouts=listed.append,
         _rebuild_label_buttons=lambda: buttons.append(dict(session.behaviour_labels)),
+        labels_changed=SimpleNamespace(emit=sent.append),
     )
     session.load(tmp_path / "day1.json")
 
@@ -567,6 +590,7 @@ def test_a_loaded_session_shows_its_bouts_under_its_label_names(tmp_path):
 
     assert listed == [[{"start": 2, "end": 5, "label": 3}, {"start": 6, "end": 9}]]
     assert buttons == [{0: "other", 1: "behaviour_1", 2: "behaviour_2", 3: "swim"}]
+    assert sent == buttons  # the restored names, for the Ethogram
 
 
 def test_label_track_and_training_data_come_from_the_entry_shown(

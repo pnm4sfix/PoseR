@@ -53,9 +53,14 @@ class AnnotationPanel(QWidget):
         Emitted with a per-frame label array (dtype int64) whenever a bout
         label is assigned or the bout list is reloaded.  Connected by the
         factory to ``EthogramPanel.load_annotations``.
+    labels_changed(dict)
+        Emitted with a copy of the label map {index: name} whenever it changes,
+        and whenever an entry is shown, which Load Session does. Connected by
+        the factory to EthogramPanel.set_annotation_names.
     """
 
     annotations_changed = Signal(object)
+    labels_changed = Signal(object)
 
     def __init__(
         self,
@@ -224,6 +229,7 @@ class AnnotationPanel(QWidget):
         # Load Session replaces the session's label map and then sends its active
         # entry here, so the buttons are rebuilt from the map now in use.
         self._rebuild_label_buttons()
+        self.labels_changed.emit(dict(self._session.behaviour_labels))
         self.load_bouts(entry.bouts if entry is not None else [])
 
     def load_bouts(self, bouts: List[dict]) -> None:
@@ -297,6 +303,17 @@ class AnnotationPanel(QWidget):
             "Behaviour labels set to %s from %s", self._session.behaviour_labels, labels
         )
         self._rebuild_label_buttons()
+        self.labels_changed.emit(dict(self._session.behaviour_labels))
+
+    def resend(self) -> None:
+        """Send the names, then the per-frame labels, to a panel just connected."""
+        log.debug(
+            "Sending the label names %s and the labels of %d bouts again",
+            self._session.behaviour_labels,
+            len(self._current_bouts),
+        )
+        self.labels_changed.emit(dict(self._session.behaviour_labels))
+        self._emit_annotations()
 
     # ------------------------------------------------------------------
     # Slots
@@ -327,6 +344,7 @@ class AnnotationPanel(QWidget):
         self._session.behaviour_labels[next_idx] = name
         self._new_label_edit.clear()
         self._rebuild_label_buttons()
+        self.labels_changed.emit(dict(self._session.behaviour_labels))
         log.info(
             "Added behaviour label %s (%s); labels are now %s",
             next_idx,
@@ -385,6 +403,9 @@ class AnnotationPanel(QWidget):
         )
         self._rebuild_label_buttons()
         self.load_bouts(self._current_bouts)
+        # Sent after the bouts' new labels: the other way round, the Ethogram would
+        # draw the removed label under names that no longer have it.
+        self.labels_changed.emit(dict(self._session.behaviour_labels))
 
     def _on_bout_selected(self, row: int, seek: bool = True) -> None:
         if row < 0 or row >= len(self._current_bouts):
