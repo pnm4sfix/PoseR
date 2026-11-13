@@ -98,11 +98,21 @@ class SessionEntry:
 
     def to_dict(self) -> dict:
         """Serialise to a JSON-safe dict (omits large arrays)."""
+        bouts = []
+        for bout in self.bouts:
+            # Only these keys: a manual bout also holds coords and ci arrays.
+            kept = {
+                key: int(bout[key]) for key in ("start", "end", "label") if key in bout
+            }
+            if "label_source" in bout:
+                kept["label_source"] = str(bout["label_source"])
+            bouts.append(kept)
         return {
             "pose_path": self.pose_path,
             "video_path": self.video_path,
             "status": self.status,
             "layer_names": self.layer_names,
+            "bouts": bouts,
             "meta": self.meta,
         }
 
@@ -113,6 +123,7 @@ class SessionEntry:
             video_path=d.get("video_path", ""),
             status=d.get("status", "loaded"),
             layer_names=d.get("layer_names", []),
+            bouts=d.get("bouts", []),
             meta=d.get("meta", {}),
         )
 
@@ -318,6 +329,9 @@ class SessionManager:
         data = {
             "entries": [e.to_dict() for e in self.entries],
             "active_idx": self._active_idx,
+            "behaviour_labels": {
+                str(i): name for i, name in self.behaviour_labels.items()
+            },
         }
         with open(path, "w") as f:
             json.dump(data, f, indent=2)
@@ -327,9 +341,13 @@ class SessionManager:
             len(self.entries),
             self._active_idx,
         )
+        bouts = [b for e in self.entries for b in e.bouts]
         log.debug(
-            "Session files keep no bouts or coords; bouts of %d entries not saved",
-            sum(len(e.bouts) > 0 for e in self.entries),
+            "Saved %d bouts (%d labelled) and behaviour labels %s; coords are not "
+            "saved",
+            len(bouts),
+            sum(b.get("label", -1) >= 0 for b in bouts),
+            self.behaviour_labels,
         )
 
     def load(self, path=None) -> None:
@@ -346,13 +364,35 @@ class SessionManager:
             data = json.load(f)
         self.entries = [SessionEntry.from_dict(d) for d in data.get("entries", [])]
         self._active_idx = data.get("active_idx")
+        names = data.get("behaviour_labels")
+        if names is None:
+            log.debug(
+                "%s has no behaviour labels; keeping %s", path, self.behaviour_labels
+            )
+        else:
+            labels = {int(i): name for i, name in names.items()}
+            name_0 = labels.pop(0, "other")
+            if name_0 != "other":
+                log.warning(
+                    "Label 0 is always other; the name %r in %s is not used",
+                    name_0,
+                    path,
+                )
+            self.behaviour_labels = {0: "other", **labels}
         log.info(
             "Session restored from %s: %d entries, active=%s",
             path,
             len(self.entries),
             self._active_idx,
         )
-        log.debug("Restored entries have no bouts or coords: session files omit them")
+        bouts = [b for e in self.entries for b in e.bouts]
+        log.debug(
+            "Restored %d bouts (%d labelled) and behaviour labels %s; session files "
+            "hold no coords",
+            len(bouts),
+            sum(b.get("label", -1) >= 0 for b in bouts),
+            self.behaviour_labels,
+        )
 
     # ------------------------------------------------------------------
     # String representation

@@ -193,6 +193,9 @@ class AnnotationPanel(QWidget):
             # it must not stay selected.
             self._bout_list.clear()
         self._entry = entry
+        # Load Session replaces the session's label map and then sends its active
+        # entry here, so the buttons are rebuilt from the map now in use.
+        self._rebuild_label_buttons()
         self.load_bouts(entry.bouts if entry is not None else [])
 
     def load_bouts(self, bouts: List[dict]) -> None:

@@ -378,6 +378,31 @@ def test_load_bouts_lists_the_active_entry_even_without_bouts(
     assert shown == ["No bouts"]
 
 
+def test_a_loaded_session_shows_its_bouts_under_its_label_names(tmp_path):
+    # Session files kept neither, so Load Session lost the bouts, labels and names.
+    saved = SessionManager()
+    saved.add(tmp_path / "fish1_DLC.h5")
+    saved.activate(0)
+    saved.behaviour_labels[3] = "swim"
+    saved.active.bouts = [{"start": 2, "end": 5, "label": 3}, {"start": 6, "end": 9}]
+    saved.save(tmp_path / "day1.json")
+    session = SessionManager()
+    listed, buttons = [], []
+    panel = SimpleNamespace(
+        _session=session,
+        _entry=None,
+        _bout_list=SimpleNamespace(clear=lambda: None),
+        load_bouts=listed.append,
+        _rebuild_label_buttons=lambda: buttons.append(dict(session.behaviour_labels)),
+    )
+    session.load(tmp_path / "day1.json")
+
+    AnnotationPanel.show_entry(panel, session.active)  # as Load Session sends it
+
+    assert listed == [[{"start": 2, "end": 5, "label": 3}, {"start": 6, "end": 9}]]
+    assert buttons == [{0: "other", 1: "behaviour_1", 2: "behaviour_2", 3: "swim"}]
+
+
 def test_label_track_and_training_data_come_from_the_entry_shown(
     tmp_path, monkeypatch
 ):

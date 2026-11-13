@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
+
+import numpy as np
 
 from poser.core.session import SessionManager
 
@@ -104,11 +107,12 @@ def test_restoring_a_session_is_logged_not_printed(tmp_path, caplog, capsys):
     saved.activate(1)
     saved.entries[1].bouts = [{"start": 0, "end": 5}]
     saved.save(path)
-    # Session files hold no bouts, so the Annotation panel finds none after a reload.
+    labels = "{0: 'other', 1: 'behaviour_1', 2: 'behaviour_2'}"
     assert (
         "poser.core.session",
         logging.DEBUG,
-        "Session files keep no bouts or coords; bouts of 1 entries not saved",
+        f"Saved 1 bouts (0 labelled) and behaviour labels {labels}; coords are not "
+        "saved",
     ) in caplog.record_tuples
     caplog.clear()
 
@@ -124,5 +128,70 @@ def test_restoring_a_session_is_logged_not_printed(tmp_path, caplog, capsys):
     assert (
         "poser.core.session",
         logging.DEBUG,
-        "Restored entries have no bouts or coords: session files omit them",
+        f"Restored 1 bouts (0 labelled) and behaviour labels {labels}; session files "
+        "hold no coords",
     ) in caplog.record_tuples
+
+
+def test_a_saved_session_keeps_its_bouts_labels_and_label_names(tmp_path):
+    # Session files left them out, so Load Session lost every label.
+    path = tmp_path / "day1.json"
+    saved = _session(2)
+    saved.behaviour_labels[3] = "swim"
+    manual = {
+        "start": np.int64(10),
+        "end": np.int64(14),
+        "coords": np.zeros((8, 3)),
+        "ci": np.zeros(8),
+        "classification": "",
+        "bout_method": "manual",
+    }
+    saved.entries[1].bouts = [
+        {"start": 2, "end": 5, "label": 3, "label_source": "hand"},
+        {"start": 6, "end": 9},
+        manual,
+    ]
+    saved.save(path)
+    session = SessionManager()
+
+    session.load(path)
+
+    assert session.entries[0].bouts == []
+    assert session.entries[1].bouts == [
+        {"start": 2, "end": 5, "label": 3, "label_source": "hand"},
+        {"start": 6, "end": 9},
+        {"start": 10, "end": 14},
+    ]
+    assert session.behaviour_labels == {
+        0: "other",
+        1: "behaviour_1",
+        2: "behaviour_2",
+        3: "swim",
+    }
+
+
+def test_loaded_label_names_always_name_label_0_other(tmp_path, caplog):
+    caplog.set_level(logging.WARNING, logger="poser")
+    path = tmp_path / "day1.json"
+    path.write_text(
+        json.dumps({"entries": [], "behaviour_labels": {"0": "rest", "1": "swim"}})
+    )
+    session = SessionManager()
+
+    session.load(path)
+
+    assert session.behaviour_labels == {0: "other", 1: "swim"}
+    [warning] = [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "poser.core.session" and record.levelno == logging.WARNING
+    ]
+    assert f"Label 0 is always other; the name 'rest' in {path} is not used" in (
+        warning
+    )
+
+    # A file saved before bouts and label names were kept leaves the names as they are.
+    path.write_text(json.dumps({"entries": [{"pose_path": "fish1_DLC.h5"}]}))
+    session.load(path)
+    assert session.behaviour_labels == {0: "other", 1: "swim"}
+    assert session.entries[0].bouts == []
