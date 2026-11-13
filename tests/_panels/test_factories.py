@@ -5,9 +5,13 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from poser._panels import _factories
+from poser._panels.analysis_panel import AnalysisPanel
+from poser._panels.annotation_panel import AnnotationPanel
+from poser.core import bout_detection
 from poser.core.session import SessionManager
 from poser.core.settings import settings
 
@@ -94,6 +98,7 @@ def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
     viewer = object()
     panels = {
         "_data_cache": SimpleNamespace(active_entry_changed=_Signal()),
+        "_analysis_cache": SimpleNamespace(bouts_changed=_Signal()),
         "_annotation_cache": SimpleNamespace(
             annotations_changed=_Signal(), show_entry=lambda entry: None
         ),
@@ -123,8 +128,12 @@ def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
         "Connected the Inference panel's predictions to the Ethogram",
         "Connected the Inference panel's predictions to the Metrics panel",
         "Connected the Data panel's active entry to the Annotation panel",
+        "Connected the Analysis panel's bouts to the Annotation panel",
     ]
     assert panels["_data_cache"].active_entry_changed.slots == [
+        panels["_annotation_cache"].show_entry
+    ]
+    assert panels["_analysis_cache"].bouts_changed.slots == [
         panels["_annotation_cache"].show_entry
     ]
 
@@ -134,6 +143,7 @@ def test_the_panels_open_for_a_viewer_are_logged(monkeypatch, caplog):
     viewer = object()
     for cache in (
         "_data_cache",
+        "_analysis_cache",
         "_annotation_cache",
         "_ethogram_cache",
         "_inference_cache",
@@ -151,8 +161,8 @@ def test_the_panels_open_for_a_viewer_are_logged(monkeypatch, caplog):
     [record] = [r for r in caplog.records if r.name == "poser._panels._factories"]
     assert record.levelno == logging.DEBUG
     assert (
-        "annotation=True ethogram=False inference=False metrics=False data=False"
-        in record.getMessage()
+        "annotation=True ethogram=False inference=False metrics=False data=False "
+        "analysis=False" in record.getMessage()
     )
 
 
@@ -180,3 +190,35 @@ def test_an_annotation_panel_opened_after_detection_lists_the_bouts(
 
     assert panel._bout_list.count() == 2
     assert panel._bout_list.currentRow() == 1  # the first unlabelled bout
+
+
+def test_detected_bouts_are_listed_in_an_open_annotation_panel(
+    tmp_path, monkeypatch, qtbot
+):
+    # They were listed only after a click on Load Bouts.
+    found = [(2, 20), (30, 45)]
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: (found, None, None, None),
+    )
+    session = SessionManager()
+    session.add(tmp_path / "rec_DLC.h5")
+    session.activate(0)
+    zeros = np.zeros((3, 50))  # (V, T)
+    session.active.coords_data = {"ind1": {"x": zeros, "y": zeros, "ci": zeros}}
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    analysis = AnalysisPanel(viewer, session=session)
+    annotation = AnnotationPanel(viewer, session=session)
+    qtbot.addWidget(analysis)
+    qtbot.addWidget(annotation)
+    monkeypatch.setattr(_factories, "_analysis_cache", {id(viewer): analysis})
+    monkeypatch.setattr(_factories, "_annotation_cache", {id(viewer): annotation})
+    monkeypatch.setattr(_factories, "_wired", set())
+    _factories._wire_panels(viewer)
+
+    analysis._on_detect()
+
+    assert annotation._bout_list.count() == 2
+    assert annotation._bout_list.currentRow() == 0
+    assert annotation._current_bouts is session.active.bouts

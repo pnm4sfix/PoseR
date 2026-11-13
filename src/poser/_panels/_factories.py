@@ -26,6 +26,7 @@ log = logging.getLogger(__name__)
 # through Qt signals, which SessionManager cannot carry because core must stay
 # free of Qt (STYLEGUIDE 1.2), so the connections are made out here instead.
 _data_cache: dict = {}
+_analysis_cache: dict = {}
 _annotation_cache: dict = {}
 _ethogram_cache: dict = {}
 _inference_cache: dict = {}
@@ -115,19 +116,21 @@ def _wire_panels(viewer) -> None:
     """
     key = id(viewer)
     data = _data_cache.get(key)
+    analysis = _analysis_cache.get(key)
     annotation = _annotation_cache.get(key)
     ethogram = _ethogram_cache.get(key)
     inference = _inference_cache.get(key)
     metrics = _metrics_cache.get(key)
     log.debug(
         "Panels open for viewer %s: annotation=%s ethogram=%s inference=%s metrics=%s "
-        "data=%s",
+        "data=%s analysis=%s",
         key,
         annotation is not None,
         ethogram is not None,
         inference is not None,
         metrics is not None,
         data is not None,
+        analysis is not None,
     )
 
     if annotation is not None and ethogram is not None:
@@ -157,6 +160,13 @@ def _wire_panels(viewer) -> None:
             data.active_entry_changed.connect(annotation.show_entry)
             _wired.add(pair)
             log.info("Connected the Data panel's active entry to the Annotation panel")
+
+    if analysis is not None and annotation is not None:
+        pair = (id(analysis), id(annotation), "bouts")
+        if pair not in _wired:
+            analysis.bouts_changed.connect(annotation.show_entry)
+            _wired.add(pair)
+            log.info("Connected the Analysis panel's bouts to the Annotation panel")
 
 
 def make_data_panel() -> DataPanel:
@@ -189,7 +199,10 @@ def make_analysis_panel() -> AnalysisPanel:
     _enlarge_titlebar_buttons()
     v = napari.current_viewer()
     log.debug("Opening the analysis panel for viewer %s", id(v))
-    return AnalysisPanel(v, session=get_session(v))
+    panel = AnalysisPanel(v, session=get_session(v))
+    _analysis_cache[id(v)] = panel
+    _wire_panels(v)
+    return panel
 
 
 def make_inference_panel() -> InferencePanel:

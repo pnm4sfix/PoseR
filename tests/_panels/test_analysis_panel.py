@@ -88,7 +88,7 @@ def _bout_panel(session: SessionManager) -> SimpleNamespace:
         _max_frames_spin=SimpleNamespace(value=lambda: 300),
         _manual_start=None,
         _detected_bouts=[],
-        _on_bouts_updated=None,
+        bouts_changed=SimpleNamespace(emit=lambda entry: None),
         _update_bout_count=lambda: None,
         _manual_range_label=SimpleNamespace(setText=lambda text: None),
         _btn_set_end=SimpleNamespace(setEnabled=lambda enabled: None),
@@ -132,6 +132,32 @@ def test_detection_logs_its_parameters_and_the_labelled_bouts_it_replaces(
         f"Stored 1 bouts (0 labelled) on session entry {tmp_path / 'rec_DLC.h5'}; "
         "it had 1 labelled before"
     ) in _messages(caplog, logging.DEBUG)
+
+
+def test_detected_and_added_bouts_are_sent_with_their_entry(tmp_path, monkeypatch):
+    # They reached the Annotation panel only through its Load Bouts button.
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: ([(2, 20)], None, None, None),
+    )
+    session = _recording(tmp_path, frames=50)
+    panel = _bout_panel(session)
+    sent = []
+
+    def record(entry):
+        sent.append((entry, sorted((b["start"], b["end"]) for b in entry.bouts)))
+
+    panel.bouts_changed = SimpleNamespace(emit=record)
+
+    AnalysisPanel._on_detect(panel)
+    panel._manual_start = 2
+    AnalysisPanel._on_set_end(panel)  # the viewer is on frame 8
+
+    assert sent == [
+        (session.active, [(2, 20)]),
+        (session.active, [(2, 8), (2, 20)]),
+    ]
 
 
 def test_added_manual_bout_is_logged(tmp_path, caplog):

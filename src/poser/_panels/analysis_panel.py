@@ -14,11 +14,11 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Callable, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import napari
 import numpy as np
-from qtpy.QtCore import Qt
+from qtpy.QtCore import Qt, Signal
 from qtpy.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -51,26 +51,22 @@ class AnalysisPanel(QWidget):
         The running ``napari.Viewer`` instance.
     session:
         Shared :class:`~poser.core.session.SessionManager`.
-    on_bouts_updated:
-        Optional callback ``(bouts: list) -> None`` called whenever the
-        bout list changes (e.g. to populate the AnnotationPanel).
     """
+
+    bouts_changed = Signal(object)  # the SessionEntry whose bouts changed
 
     def __init__(
         self,
         viewer: napari.Viewer,
         session: Optional[SessionManager] = None,
-        on_bouts_updated: Optional[Callable[[List[dict]], None]] = None,
     ):
         super().__init__()
         self._viewer = viewer
         self._session = session or SessionManager(viewer=viewer)
-        self._on_bouts_updated = on_bouts_updated
         self._detected_bouts: List[dict] = []
         self._manual_start: Optional[int] = None
 
         self._build_ui()
-        log.debug("Analysis panel created with on_bouts_updated=%s", on_bouts_updated)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -317,16 +313,12 @@ class AnalysisPanel(QWidget):
         )
         self._update_bout_count()
         self._save_bouts_to_session(self._detected_bouts)
-        if self._on_bouts_updated:
-            log.debug(
-                "Passing %d bouts to on_bouts_updated", len(self._detected_bouts)
-            )
-            self._on_bouts_updated(list(self._detected_bouts))
-        else:
-            log.debug(
-                "No on_bouts_updated callback; the Annotation panel gets these bouts "
-                "only from its Load Bouts button"
-            )
+        log.debug(
+            "Emitting bouts_changed for %s (%d bouts)",
+            entry.pose_path,
+            len(entry.bouts),
+        )
+        self.bouts_changed.emit(entry)
 
         self._manual_range_label.setText(
             f"Added: {self._manual_start} → {end_frame}  "
@@ -447,14 +439,12 @@ class AnalysisPanel(QWidget):
         self._detected_bouts = bouts
         self._update_bout_count()
         self._save_bouts_to_session(bouts)
-        if self._on_bouts_updated:
-            log.debug("Passing %d bouts to on_bouts_updated", len(bouts))
-            self._on_bouts_updated(list(bouts))
-        else:
-            log.debug(
-                "No on_bouts_updated callback; the Annotation panel gets these bouts "
-                "only from its Load Bouts button"
-            )
+        log.debug(
+            "Emitting bouts_changed for %s (%d bouts)",
+            entry.pose_path,
+            len(entry.bouts),
+        )
+        self.bouts_changed.emit(entry)
 
     def _save_bouts_to_session(self, bouts: list) -> None:
         """Persist bouts onto the active SessionEntry so other panels can read them."""
