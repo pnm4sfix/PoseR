@@ -1,0 +1,58 @@
+# NTU RGB+D human skeleton — 25 nodes
+
+name: ntu_rgbd
+num_nodes: 25
+node_names:
+  - base_of_spine
+  - mid_spine
+  - neck
+  - head
+  - l_shoulder
+  - l_elbow
+  - l_wrist
+  - l_hand
+  - r_shoulder
+  - r_elbow
+  - r_wrist
+  - r_hand
+  - l_hip
+  - l_knee
+  - l_ankle
+  - l_foot
+  - r_hip
+  - r_knee
+  - r_ankle
+  - r_foot
+  - spine_shoulder
+  - l_handtip
+  - l_thumbtip
+  - r_handtip
+  - r_thumbtip
+edges:
+  - [1, 0]
+  - [20, 1]
+  - [2, 20]
+  - [3, 2]
+  - [4, 20]
+  - [5, 4]
+  - [6, 5]
+  - [7, 6]
+  - [8, 20]
+  - [9, 8]
+  - [10, 9]
+  - [11, 10]
+  - [12, 0]
+  - [13, 12]
+  - [14, 13]
+  - [15, 14]
+  - [16, 0]
+  - [17, 16]
+  - [18, 17]
+  - [19, 18]
+  - [21, 7]
+  - [22, 7]
+  - [23, 11]
+  - [24, 11]
+center_node: 20
+head_node: 3
+partition_strategy: spatial

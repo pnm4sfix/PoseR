@@ -1,0 +1,602 @@
+"""
+_panels/data_panel.py
+~~~~~~~~~~~~~~~~~~~~~
+Data Panel — session management and file loading.
+
+Provides:
+* Drag-and-drop / browse for multiple pose files and videos (Feature 1)
+* A session table showing all loaded files with their status
+* Per-file activation (hides/shows napari layers for the active entry)
+* Save / resume session functionality (Feature 4 / :class:`SessionManager`)
+"""
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import List, Optional
+
+import napari
+import numpy as np
+from qtpy.QtCore import Qt, Signal
+from qtpy.QtWidgets import (
+    QFileDialog,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from poser.core.pose_estimation import PoseEstimator
+from poser.core.session import SessionManager, SessionEntry
+from poser.core.settings import resolve_output_dir
+from poser.core.video import read_video
+
+log = logging.getLogger(__name__)
+
+
+def _parse_dlc_df(dlc_data):
+    """Parse a DLC DataFrame (from pd.read_hdf / pd.read_csv) into coords_data.
+
+    Returns dict:  individual_name → {"x": DataFrame, "y": DataFrame, "ci": DataFrame}
+    where each DataFrame is shape (n_bodyparts, n_frames) with frame-index columns.
+    Mirrors widget.read_dlc_h5.
+    """
+    import pandas as pd
+
+    data_t = dlc_data.transpose()
+    try:
+        _ = data_t["individuals"]
+        data_t = data_t.reset_index()
+    except (KeyError, TypeError):
+        log.debug(
+            "DLC levels %s: 'individuals' lookup failed; reading it as one animal",
+            list(data_t.index.names),
+        )
+        data_t["individuals"] = ["individual1"] * data_t.shape[0]
+        data_t = (
+            data_t.reset_index()
+            .set_index(["scorer", "individuals", "bodyparts", "coords"])
+            .reset_index()
+        )
+
+    coords_data = {}
+    for individual in data_t.individuals.unique():
+        indv1 = data_t[data_t.individuals == individual].copy()
+        # Columns after reset_index are strings / ints for frame numbers;
+        # the original widget uses `0:` slice (selects columns >= 0 i.e. frame cols)
+        x = indv1.loc[indv1.coords == "x", 0:].reset_index(drop=True)
+        y = indv1.loc[indv1.coords == "y", 0:].reset_index(drop=True)
+        ci = indv1.loc[indv1.coords == "likelihood", 0:].reset_index(drop=True)
+        if x.empty:
+            log.debug("DLC individual %s has no x rows; skipped", individual)
+            continue
+        coords_data[individual] = {"x": x, "y": y, "ci": ci}
+    log.debug(
+        "DLC table of shape %s parsed into %d individual(s): %s",
+        dlc_data.shape,
+        len(coords_data),
+        list(coords_data),
+    )
+    return coords_data
+
+
+def _load_pose_as_points(path: str):
+    """Parse a DLC / SLEAP / PoseR pose file into napari-ready arrays.
+
+    Returns
+    -------
+    points : ndarray, shape (N, 3)  — columns (frame, y, x)
+    properties : dict — keys: confidence, ind, node
+    coords_data : dict — raw per-individual DataFrames, for Analysis Panel
+    """
+    import pandas as pd
+
+    path = str(path)
+    log.debug("Parsing pose file %s", path)
+
+    # ── 1. PoseR pytables format (filename contains "poser", or fallback try) ──
+    try:
+        import tables as tb  # type: ignore
+        coords_data = {}
+        with tb.open_file(path, mode="r") as coords_file:
+            for ind in coords_file.list_nodes("/"):
+                arr = ind.coords[:]  # shape (3, n_nodes, n_frames): [0]=x,[1]=y,[2]=ci
+                coords_data[ind._v_name] = {
+                    "x": pd.DataFrame(arr[0]),
+                    "y": pd.DataFrame(arr[1]),
+                    "ci": pd.DataFrame(arr[2]),
+                }
+        log.debug("PoseR reader found %d individual(s) in %s", len(coords_data), path)
+        if coords_data:
+            points, props = PoseEstimator.points_from_coords(coords_data)
+            log.debug("Read %s as PoseR coords: %d points", path, len(points))
+            return points, props, coords_data
+    except Exception:
+        log.debug(
+            "PoseR reader failed on %s; trying the next format", path, exc_info=True
+        )
+
+    # ── 2. DLC h5 format ──────────────────────────────────────────────────────
+    if ".h5" in path or ".hdf5" in path:
+        try:
+            dlc_data = pd.read_hdf(path)
+            coords_data = _parse_dlc_df(dlc_data)
+            if coords_data:
+                points, props = PoseEstimator.points_from_coords(coords_data)
+                log.debug("Read %s as DLC h5: %d points", path, len(points))
+                return points, props, coords_data
+        except Exception:
+            log.debug(
+                "DLC h5 reader failed on %s; trying the next format",
+                path,
+                exc_info=True,
+            )
+
+    # ── 3. DLC CSV format ─────────────────────────────────────────────────────
+    if ".csv" in path:
+        try:
+            dlc_data = pd.read_csv(path, header=[0, 1, 2], index_col=0)
+            coords_data = _parse_dlc_df(dlc_data)
+            if coords_data:
+                points, props = PoseEstimator.points_from_coords(coords_data)
+                log.debug("Read %s as DLC CSV: %d points", path, len(points))
+                return points, props, coords_data
+        except Exception:
+            log.debug(
+                "DLC CSV reader failed on %s; trying the next format",
+                path,
+                exc_info=True,
+            )
+
+    # ── 4. SLEAP analysis h5 format ───────────────────────────────────────────
+    # Layout: /tracks (n_tracks, 2, n_nodes, n_frames) where axis-1 is [x, y]
+    #         /point_scores (n_tracks, n_nodes, n_frames)
+    if ".h5" in path or ".hdf5" in path:
+        try:
+            import pandas as pd
+            import tables as tb  # type: ignore
+            coords_data = {}
+            with tb.open_file(path, mode="r") as f:
+                node_names = list(f.root._v_children.keys())
+                if "tracks" in node_names:
+                    tracks = f.root.tracks[:]          # (n_tracks, 2, n_nodes, n_frames)
+                    n_tracks, _, n_nodes, n_frames = tracks.shape
+                    if "point_scores" in node_names:
+                        scores = f.root.point_scores[:]  # (n_tracks, n_nodes, n_frames)
+                    else:
+                        scores = np.ones((n_tracks, n_nodes, n_frames), dtype=np.float32)
+                    for t in range(n_tracks):
+                        x_arr = tracks[t, 0, :, :].astype(float)  # (n_nodes, n_frames)
+                        y_arr = tracks[t, 1, :, :].astype(float)
+                        ci_arr = scores[t, :, :].astype(float)
+                        ind_name = f"ind{t + 1}"
+                        coords_data[ind_name] = {
+                            "x": pd.DataFrame(x_arr),
+                            "y": pd.DataFrame(y_arr),
+                            "ci": pd.DataFrame(ci_arr),
+                        }
+            log.debug("SLEAP reader found %d track(s) in %s", len(coords_data), path)
+            if coords_data:
+                points, props = PoseEstimator.points_from_coords(coords_data)
+                log.debug("Read %s as SLEAP tracks: %d points", path, len(points))
+                return points, props, coords_data
+        except Exception:
+            log.debug("SLEAP reader failed on %s; no format left", path, exc_info=True)
+
+    raise ValueError(f"Could not parse pose file: {path}")
+
+
+class DataPanel(QWidget):
+    """Napari dock widget for session / file management.
+
+    Parameters
+    ----------
+    viewer:
+        The running ``napari.Viewer`` instance.
+    session:
+        A shared :class:`~poser.core.session.SessionManager` instance.
+        If ``None`` a new one is created.
+    """
+
+    active_entry_changed = Signal(object)  # the active SessionEntry, or None
+
+    def __init__(
+        self,
+        viewer: napari.Viewer,
+        session: Optional[SessionManager] = None,
+    ):
+        super().__init__()
+        self._viewer = viewer
+        self._session: SessionManager = session or SessionManager(viewer=viewer)
+
+        self._build_ui()
+        self._refresh_table()
+
+    def _build_ui(self) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 8, 8, 8)
+
+        # ── File loading group ─────────────────────────────────────────
+        load_grp = QGroupBox("Load Files")
+        load_lay = QVBoxLayout(load_grp)
+
+        btn_add_pose = QPushButton("Add Pose File(s)…")
+        btn_add_pose.setToolTip("Load DLC / SLEAP / PoseR HDF5 files.")
+        btn_add_pose.clicked.connect(self._on_add_pose)
+        load_lay.addWidget(btn_add_pose)
+
+        btn_add_video = QPushButton("Add Video(s)…")
+        btn_add_video.setToolTip("Load video files to run pose estimation on.")
+        btn_add_video.clicked.connect(self._on_add_video)
+        load_lay.addWidget(btn_add_video)
+
+        btn_add_zarr = QPushButton("Add Zarr Video…")
+        btn_add_zarr.setToolTip(
+            "Load a .zarr array store as video.\n"
+            "Expected shape: (frames, cameras, H, W, C) or (frames, H, W, C) or (frames, H, W).\n"
+            "Multi-camera arrays are split into one Image layer per camera."
+        )
+        btn_add_zarr.clicked.connect(self._on_add_zarr)
+        load_lay.addWidget(btn_add_zarr)
+
+        btn_add_batch = QPushButton("Add Folder of Pose Files…")
+        btn_add_batch.clicked.connect(self._on_add_folder)
+        load_lay.addWidget(btn_add_batch)
+
+        root.addWidget(load_grp)
+
+        # ── Session table ──────────────────────────────────────────────
+        session_grp = QGroupBox("Session")
+        session_lay = QVBoxLayout(session_grp)
+
+        self._session_list = QListWidget()
+        self._session_list.setMinimumHeight(140)
+        self._session_list.itemDoubleClicked.connect(self._on_activate)
+        session_lay.addWidget(self._session_list)
+
+        # Status key
+        key_label = QLabel("🟢 done   🟡 active   ⚪ pending")
+        key_label.setStyleSheet("font-size: 10px; color: grey;")
+        session_lay.addWidget(key_label)
+
+        btn_row = QHBoxLayout()
+        btn_activate = QPushButton("Activate")
+        btn_activate.setToolTip("Switch to the selected file.")
+        btn_activate.clicked.connect(self._on_activate)
+
+        btn_mark_done = QPushButton("Mark Done")
+        btn_mark_done.clicked.connect(self._on_mark_done)
+
+        btn_remove = QPushButton("Remove")
+        btn_remove.clicked.connect(self._on_remove)
+
+        btn_next = QPushButton("Next Pending ▶")
+        btn_next.setToolTip("Jump to the next un-annotated file.")
+        btn_next.clicked.connect(self._on_next_pending)
+
+        for btn in (btn_activate, btn_mark_done, btn_remove, btn_next):
+            btn_row.addWidget(btn)
+        session_lay.addLayout(btn_row)
+
+        root.addWidget(session_grp)
+
+        # ── Persistence ───────────────────────────────────────────────
+        persist_grp = QGroupBox("Session File")
+        persist_lay = QHBoxLayout(persist_grp)
+
+        btn_save = QPushButton("Save Session")
+        btn_save.clicked.connect(self._on_save_session)
+        btn_load = QPushButton("Load Session")
+        btn_load.clicked.connect(self._on_load_session)
+
+        persist_lay.addWidget(btn_save)
+        persist_lay.addWidget(btn_load)
+        root.addWidget(persist_grp)
+
+        root.addStretch()
+
+    def _on_add_pose(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select pose files", "",
+            "HDF5 / CSV files (*.h5 *.hdf5 *.csv);;All files (*)"
+        )
+        if not files:
+            log.debug("Add pose files: dialog cancelled")
+            return
+        log.debug("Add pose files: %d chosen: %s", len(files), files)
+        self._session.add_batch([(Path(f),) for f in files])
+        log.info(
+            "Added %d pose file(s) to the session (%d entries)",
+            len(files),
+            len(self._session.entries),
+        )
+        self._refresh_table()
+
+    def _on_add_zarr(self) -> None:
+        folder = QFileDialog.getExistingDirectory(
+            self, "Select zarr store (.zarr folder)"
+        )
+        if not folder:
+            log.debug("Add zarr video: dialog cancelled")
+            return
+        log.debug("Add zarr video: chosen %s", folder)
+        path = Path(folder)
+        # Quick validation: must be openable as a zarr array
+        try:
+            import zarr  # type: ignore
+            zarr.open_array(str(path), mode="r")
+        except Exception as exc:
+            log.exception("Cannot open %s as a zarr array; not added", path)
+            QMessageBox.warning(self, "Invalid zarr", str(exc))
+            return
+        self._session.add_batch([("", path)])
+        log.info("Added zarr video %s to the session", path)
+        self._refresh_table()
+
+    def _on_add_video(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Select video files", "",
+            "Video files (*.mp4 *.avi *.mov *.mkv *.tif *.tiff);;All files (*)"
+        )
+        if not files:
+            log.debug("Add videos: dialog cancelled")
+            return
+        log.debug("Add videos: %d chosen: %s", len(files), files)
+        # Video-only entries: pose_path is empty, video_path is set.
+        # Pose estimation can then be run from the Inference Panel.
+        self._session.add_batch([("", Path(f)) for f in files])
+        log.info(
+            "Added %d video(s) to the session (%d entries)",
+            len(files),
+            len(self._session.entries),
+        )
+        self._refresh_table()
+
+    def _on_add_folder(self) -> None:
+        folder = QFileDialog.getExistingDirectory(self, "Select folder")
+        if not folder:
+            log.debug("Add folder: dialog cancelled")
+            return
+        log.debug("Add folder: chosen %s", folder)
+        folder_path = Path(folder)
+        pose_files = (
+            list(folder_path.glob("**/*.h5"))
+            + list(folder_path.glob("**/*.hdf5"))
+            + list(folder_path.glob("**/*.csv"))
+        )
+        if not pose_files:
+            log.warning("No .h5/.hdf5/.csv files under %s; nothing added", folder_path)
+            QMessageBox.information(self, "No files", "No .h5/.hdf5/.csv files found.")
+            return
+        self._session.add_batch([(f,) for f in pose_files])
+        log.info(
+            "Added %d pose file(s) from %s to the session (%d entries)",
+            len(pose_files),
+            folder_path,
+            len(self._session.entries),
+        )
+        self._refresh_table()
+
+    def _on_activate(self, _item=None) -> None:
+        idx = self._session_list.currentRow()
+        log.debug("Activate: selected row %s", idx)
+        if idx < 0:
+            log.warning("Activate: no session row selected; nothing activated")
+            return
+        entry = self._session.activate(idx)
+        self._load_entry_layers(entry)
+        self._refresh_table()
+        self.active_entry_changed.emit(entry)
+
+    def _load_entry_layers(self, entry) -> None:
+        """Load video and/or pose layers for *entry* if not already present."""
+        existing = {layer.name for layer in self._viewer.layers}
+        log.debug(
+            "Loading layers for %s: pose %s, video %s, coords cached for %d "
+            "individual(s), video layer present %s, points layer present %s",
+            entry.stem,
+            entry.pose_path or "(none)",
+            entry.video_path or "(none)",
+            len(entry.coords_data),
+            entry.layer_name("video") in existing,
+            entry.layer_name("points") in existing,
+        )
+
+        # ── Video ────────────────────────────────────────────────────
+        if entry.video_path:
+            if str(entry.video_path).endswith(".zarr"):
+                # ── Zarr branch ──────────────────────────────────────
+                try:
+                    import zarr          # type: ignore
+                    import dask.array as da  # type: ignore
+
+                    z = zarr.open_array(str(entry.video_path), mode="r")
+                    zarr_da = da.from_zarr(z)
+                    stem = Path(entry.video_path).stem
+                    log.debug(
+                        "Zarr store %s: shape %s, dtype %s",
+                        entry.video_path,
+                        zarr_da.shape,
+                        zarr_da.dtype,
+                    )
+
+                    if zarr_da.ndim == 5:
+                        # (frames, cameras, H, W, C)  — split by camera
+                        n_cams = zarr_da.shape[1]
+                        for cam in range(n_cams):
+                            cam_name = f"{stem}_cam{cam}"
+                            if cam_name not in existing:
+                                self._viewer.add_image(
+                                    zarr_da[:, cam, ...],
+                                    name=cam_name,
+                                    rgb=True,
+                                )
+                                entry.layer_names.append(cam_name)
+                                log.info("Added zarr camera layer %s", cam_name)
+                    else:
+                        # (frames, H, W) or (frames, H, W, C)
+                        vid_name = entry.layer_name("video")
+                        if vid_name not in existing:
+                            self._viewer.add_image(
+                                zarr_da,
+                                name=vid_name,
+                                rgb=(zarr_da.ndim == 4),
+                            )
+                            entry.layer_names.append(vid_name)
+                            log.info("Added zarr video layer %s", vid_name)
+                except Exception as _e:
+                    log.exception("Could not load zarr video %s", entry.video_path)
+                    QMessageBox.warning(self, "Zarr load error", str(_e))
+            else:
+                # ── Standard video (av / imageio) ────────────────────
+                vid_name = entry.layer_name("video")
+                if vid_name not in existing:
+                    _vid_loaded = False
+                    try:
+                        vid_arr = read_video(entry.video_path)
+                        is_rgb = vid_arr.ndim == 4
+                        self._viewer.add_image(vid_arr, name=vid_name, rgb=is_rgb)
+                        _vid_loaded = True
+                        log.info(
+                            "Loaded video %s as layer %s: shape %s, dtype %s",
+                            entry.video_path,
+                            vid_name,
+                            vid_arr.shape,
+                            vid_arr.dtype,
+                        )
+                    except Exception as e:
+                        log.exception("Could not load video %s", entry.video_path)
+                        QMessageBox.warning(self, "Video load error", str(e))
+                    if _vid_loaded and vid_name not in entry.layer_names:
+                        entry.layer_names.append(vid_name)
+
+        # ── Pose file ────────────────────────────────────────────────
+        if entry.pose_path:
+            pts_name = entry.layer_name("points")
+            # Parse the file if coords_data is not yet populated so other panels
+            # (Analysis) can access it even when the Points layer already exists.
+            _points_result = None
+            if not entry.coords_data or pts_name not in existing:
+                try:
+                    _points_result = _load_pose_as_points(entry.pose_path)
+                    entry.coords_data = _points_result[2]
+                    log.info(
+                        "Loaded pose file %s: %d individual(s) %s",
+                        entry.pose_path,
+                        len(entry.coords_data),
+                        list(entry.coords_data),
+                    )
+                except Exception as e:
+                    log.exception("Could not load pose file %s", entry.pose_path)
+                    QMessageBox.warning(self, "Pose load error", str(e))
+            if pts_name not in existing and _points_result is not None:
+                try:
+                    points, props, _ = _points_result
+                    # size: ~1 % of frame height if a video layer exists, else 3 px
+                    size = 3
+                    for lyr in self._viewer.layers:
+                        if lyr.name == entry.layer_name("video"):
+                            try:
+                                size = lyr.data.shape[-2] / 100
+                            except Exception:
+                                log.debug(
+                                    "No frame height on layer %s; point size stays %s",
+                                    lyr.name,
+                                    size,
+                                    exc_info=True,
+                                )
+                            break
+                    self._viewer.add_points(
+                        points, properties=props,
+                        name=pts_name, size=size, ndim=3,
+                        out_of_slice_display=False,
+                    )
+                    if pts_name not in entry.layer_names:
+                        entry.layer_names.append(pts_name)
+                    log.info(
+                        "Added points layer %s: %d points, size %s",
+                        pts_name,
+                        len(points),
+                        size,
+                    )
+                except Exception as e:
+                    log.exception("Could not add points layer %s", pts_name)
+                    QMessageBox.warning(self, "Pose load error", str(e))
+
+    def _on_mark_done(self) -> None:
+        idx = self._session_list.currentRow()
+        log.debug("Mark done: selected row %s", idx)
+        if idx < 0:
+            log.warning("Mark done: no session row selected; nothing marked")
+            return
+        self._session.mark_done(idx)
+        self._refresh_table()
+
+    def _on_remove(self) -> None:
+        idx = self._session_list.currentRow()
+        log.debug("Remove: selected row %s", idx)
+        if idx < 0:
+            log.warning("Remove: no session row selected; nothing removed")
+            return
+        self._session.remove(idx)
+        self._refresh_table()
+        self.active_entry_changed.emit(self._session.active)
+
+    def _on_next_pending(self) -> None:
+        next_idx = self._session.next_pending()
+        log.debug("Next pending: entry %s", next_idx)
+        if next_idx is None:
+            log.warning(
+                "Next pending: no entry left to process among %d; nothing activated",
+                len(self._session.entries),
+            )
+            QMessageBox.information(self, "Session complete", "All files have been processed!")
+            return
+        self._session.activate(next_idx)
+        log.debug(
+            "Next pending: activated entry %s without loading its layers or pose file",
+            next_idx,
+        )
+        self._refresh_table()
+        self.active_entry_changed.emit(self._session.active)
+
+    def _on_save_session(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save session",
+            str(resolve_output_dir("sessions") / "session.json"),
+            "JSON (*.json)",
+        )
+        log.debug("Save session: dialog returned %s", path or "(cancelled)")
+        if path:
+            self._session.save(Path(path))
+
+    def _on_load_session(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Load session", "", "JSON (*.json)"
+        )
+        log.debug("Load session: dialog returned %s", path or "(cancelled)")
+        if path:
+            self._session.load(Path(path))
+            self._refresh_table()
+            self.active_entry_changed.emit(self._session.active)
+
+    def _refresh_table(self) -> None:
+        self._session_list.clear()
+        for i, entry in enumerate(self._session.entries):
+            icon = {"done": "🟢", "active": "🟡", "pending": "⚪"}.get(entry.status, "⚪")
+            text = f"{icon}  {entry.stem}"
+            if entry.video_path:
+                text += f"  [{Path(entry.video_path).name}]"
+            item = QListWidgetItem(text)
+            if entry.status == "active":
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
+            self._session_list.addItem(item)

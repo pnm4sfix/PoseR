@@ -1,5 +1,6 @@
 include LICENSE
 include README.md
 
+recursive-include src/poser *.yaml
 recursive-exclude * __pycache__
 recursive-exclude * *.py[co]

@@ -1,0 +1,44 @@
+# OpenPose human body skeleton — 18 nodes
+
+name: openpose
+num_nodes: 18
+node_names:
+  - nose
+  - neck
+  - r_shoulder
+  - r_elbow
+  - r_wrist
+  - l_shoulder
+  - l_elbow
+  - l_wrist
+  - r_hip
+  - r_knee
+  - r_ankle
+  - l_hip
+  - l_knee
+  - l_ankle
+  - r_eye
+  - l_eye
+  - r_ear
+  - l_ear
+edges:
+  - [4, 3]
+  - [3, 2]
+  - [7, 6]
+  - [6, 5]
+  - [13, 12]
+  - [12, 11]
+  - [10, 9]
+  - [9, 8]
+  - [11, 5]
+  - [8, 2]
+  - [5, 1]
+  - [2, 1]
+  - [0, 1]
+  - [15, 0]
+  - [14, 0]
+  - [17, 15]
+  - [16, 14]
+center_node: 1
+head_node: 0
+partition_strategy: spatial

@@ -1,0 +1,53 @@
+# Mouse skeleton (18-node version)
+
+name: mouse2
+num_nodes: 18
+node_names:
+  - nose
+  - l_ear
+  - r_ear
+  - l_foreleg
+  - r_foreleg
+  - neck
+  - l_forefoot
+  - r_forefoot
+  - body_front
+  - l_hindleg
+  - r_hindleg
+  - l_hip
+  - r_hip
+  - l_hindfoot
+  - r_hindfoot
+  - body_rear
+  - tail_base
+  - tail_tip
+edges:
+  - [0, 5]
+  - [1, 5]
+  - [2, 5]
+  - [3, 5]
+  - [4, 5]
+  - [5, 8]
+  - [5, 6]
+  - [5, 9]
+  - [6, 7]
+  - [7, 8]
+  - [7, 9]
+  - [8, 11]
+  - [8, 10]
+  - [9, 12]
+  - [9, 10]
+  - [10, 12]
+  - [10, 11]
+  - [11, 13]
+  - [12, 14]
+  - [10, 13]
+  - [10, 14]
+  - [10, 15]
+  - [14, 15]
+  - [13, 15]
+  - [15, 16]
+  - [16, 17]
+center_node: 10
+head_node: 0
+partition_strategy: spatial

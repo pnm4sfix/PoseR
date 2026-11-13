@@ -24,46 +24,110 @@ https://napari.org/stable/plugins/index.html
 
 ## Installation
 
-Create an anaconda environment:
+### 1. Create a conda environment
 
-    conda create -n PoseR python=3.10
+```bash
+conda create -n PoseR python=3.10 -y
+conda activate PoseR
+```
 
-Activate PoseR environment:
+### 2. Install PyTorch with GPU support
 
-    conda activate PoseR
+PyTorch must be installed **before** PoseR, otherwise pip may resolve a CPU-only build.
 
-Install CUDA if using NVIDIA GPU:
+**GPU (CUDA 12.6 — most current NVIDIA drivers):**
+```bash
+pip install torch torchvision --extra-index-url https://download.pytorch.org/whl/cu126
+```
 
-    conda install -c "nvidia/label/cuda-11.7.0" cuda
+**Other CUDA versions** — pick the matching tag from https://pytorch.org/get-started/locally/  
+e.g. `cu124`, `cu121`, `cu118`.
 
-Install Pytorch:
-For GPU:
+**CPU only:**
+```bash
+pip install torch torchvision
+```
 
-    conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
+### 3. Install PoseR
 
-For CPU only version:
+**Latest development branch from GitHub (recommended):**
+```bash
+pip install "git+https://github.com/pnm4sfix/PoseR.git@multianimal"
+```
 
-    conda install pytorch torchvision torchaudio cpuonly -c pytorch
+**Editable install (for development):**
+```bash
+git clone -b multianimal https://github.com/pnm4sfix/PoseR.git
+cd PoseR
+pip install -e .
+```
 
-Install napari:
+> **Heads up:** Do **not** use `pip install --user` or run the install outside of your conda env — it puts packages in your user site-packages and they will leak into every Python 3.10 environment on your machine.
 
-    pip install napari[all]==0.4.14 npe2==0.6.2 pydantic==1.10.4
+### 4. Launch napari
 
+```bash
+napari
+```
 
-You can install `PoseR` via [pip]:
-
-    pip install PoseR-napari
-
-
-
-To install latest development version :
-
-    pip install git+https://github.com/pnm4sfix/PoseR.git
+Then open the PoseR panels from the **Plugins** menu.
 
 
 ## Quick start
 
 https://github.com/pnm4sfix/PoseR/blob/generalise-species/docs/QuickStart.md
+
+## Feature Status
+
+### Data Panel
+- [x] Add video files to session
+- [x] Add pose files to session (DLC `.h5`, DLC `.csv`, PoseR `.h5`, SLEAP `.h5`)
+- [x] Add a folder of matched video + pose file pairs
+- [x] **Add zarr array store as video** (multi-camera: splits axis-1 into one layer per camera)
+- [x] Activate session entry — loads video and pose layers into napari
+- [x] Lazy video loading via pyav + dask (no RAM spike on open)
+- [x] Mark entry as done / remove entry
+- [x] Navigate to next pending entry
+- [x] Save / load session to JSON
+- [ ] Progress bar during video load
+
+### Inference Panel
+- [x] Pose estimation mode (YOLO-based; bundled zebrafish model + custom `.pt`)
+- [x] Run pose estimation on active session entry
+- [x] **Zarr video inference** — chunk-aligned decompression, predict and track modes
+- [x] Batch pose estimation across all session entries
+- [x] Behaviour decoding mode (ST-GCN skeleton-graph model)
+- [x] Run behaviour prediction on active session entry
+- [x] Batch behaviour prediction across all session entries
+- [x] Export predictions (CSV / HDF5)
+- [ ] GPU device selector
+
+### Annotation Panel
+- [x] Manage behaviour label set (add / edit / remove)
+- [x] Navigate detected bouts (prev / next)
+- [x] Assign label to selected bout
+- [x] Bout-level statistics table
+- [x] Export annotations (CSV / HDF5)
+- [ ] Auto-populate labels from active session entry on load
+
+### Analysis Panel
+- [x] Bout detection — orthogonal movement method
+- [x] Bout detection — egocentric movement method
+- [x] Per-individual analysis
+- [x] Configurable FPS, velocity threshold, and minimum bout length
+- [x] Manual bout marking (set start / end frame)
+- [x] Bout list with napari frame-jump on selection
+- [x] Export frame slices as images
+- [ ] Ethogram visualisation (1-D time series viewer)
+
+### Training Panel
+- [x] Specify training data files manually
+- [x] Use labelled session entries as training data
+- [x] Configure model and hyperparameters via YAML config file
+- [x] Start / stop training subprocess
+- [x] Live training log stream in panel
+- [ ] Fine-tune from a pretrained checkpoint
+- [ ] Evaluate / test a trained model
 
 ## Contributing
 

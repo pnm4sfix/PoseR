@@ -1,0 +1,33 @@
+# Drosophila (fruit fly) skeleton — 12 nodes
+
+name: drosophila
+num_nodes: 12
+node_names:
+  - head
+  - l_foreleg
+  - r_foreleg
+  - abdomen
+  - l_hindleg
+  - r_hindleg
+  - thorax_front
+  - thorax_mid
+  - thorax_rear
+  - l_midleg
+  - r_midleg
+  - abdomen_tip
+edges:
+  - [0, 6]
+  - [6, 7]
+  - [7, 8]
+  - [7, 1]
+  - [7, 5]
+  - [8, 9]
+  - [9, 10]
+  - [10, 11]
+  - [11, 2]
+  - [11, 4]
+  - [2, 3]
+  - [4, 3]
+center_node: 8
+head_node: 0
+partition_strategy: spatial

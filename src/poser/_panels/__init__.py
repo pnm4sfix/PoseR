@@ -1,0 +1,18 @@
+"""_panels/__init__.py — napari panel widgets."""
+from poser._panels.data_panel import DataPanel
+from poser._panels.annotation_panel import AnnotationPanel
+from poser._panels.analysis_panel import AnalysisPanel
+from poser._panels.inference_panel import InferencePanel
+from poser._panels.train_panel import TrainPanel
+from poser._panels.ethogram_panel import EthogramPanel
+from poser._panels.metrics_panel import MetricsPanel
+
+__all__ = [
+    "DataPanel",
+    "AnnotationPanel",
+    "AnalysisPanel",
+    "InferencePanel",
+    "TrainPanel",
+    "EthogramPanel",
+    "MetricsPanel",
+]

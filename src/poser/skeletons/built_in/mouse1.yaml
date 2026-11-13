@@ -1,0 +1,43 @@
+# Mouse skeleton (13-node version) — Open Field Test layout
+
+name: mouse1
+num_nodes: 13
+node_names:
+  - nose
+  - head_centre
+  - neck
+  - ear_l
+  - ear_r
+  - body_centre
+  - hip_l
+  - hip_r
+  - tail_base
+  - tail_mid
+  - tail_centre
+  - tail_end
+  - tail_tip
+edges:
+  - [0, 3]
+  - [0, 1]
+  - [0, 4]
+  - [1, 2]
+  - [2, 3]
+  - [2, 4]
+  - [3, 6]
+  - [3, 5]
+  - [4, 7]
+  - [4, 5]
+  - [5, 7]
+  - [5, 6]
+  - [6, 8]
+  - [7, 9]
+  - [5, 8]
+  - [5, 9]
+  - [5, 10]
+  - [9, 10]
+  - [8, 10]
+  - [10, 11]
+  - [11, 12]
+center_node: 5
+head_node: 0
+partition_strategy: spatial

@@ -57,6 +57,7 @@ from scipy.signal import find_peaks
 from torch.utils.data import DataLoader
 
 from ._loader import HyperParams, ZebData
+from .core.video import read_video
 from .models import c3d, st_gcn_aaai18_pylightning_3block
 
 
@@ -65,12 +66,6 @@ try:
 except:
     print("pygmtools not installed")
 import networkx as nx
-
-try:
-    from napari_video.napari_video import VideoReaderNP
-except:
-    print("no module named napari_video. pip install napari_video")
-    import time
 
 try:
     pass
@@ -526,10 +521,11 @@ class PoserWidget(Container):
                     print(f"shape data shape is {len(shape_data)}")
                     print(f"labels are {labels}")
 
-                    if self.detection_backbone == "YOLOv8":
+                    if self.detection_backbone == "YOLO11":
                         h = self.im_subset.data[self.frame].shape[0]
                         results = self.model(
-                            self.im_subset.data[self.frame], imgsz=h - (h % 32)
+                            np.asarray(self.im_subset.data[self.frame]),
+                            imgsz=h - (h % 32),
                         )
                         for result in results:
                             names = result.names
@@ -556,7 +552,9 @@ class PoserWidget(Container):
                                     shape_data.append(new_shape)
 
                     elif self.detection_backbone == "YOLOv5":
-                        results = self.model(self.im_subset.data[self.frame])
+                        results = self.model(
+                            np.asarray(self.im_subset.data[self.frame])
+                        )
                         result_df = results.pandas().xyxy[0]
                         print(result_df)
 
@@ -604,7 +602,7 @@ class PoserWidget(Container):
                         break
 
                 if exists == False:
-                    im = self.im_subset.data[self.frame]
+                    im = np.asarray(self.im_subset.data[self.frame])
 
                     person_results = []
 
@@ -760,14 +758,12 @@ class PoserWidget(Container):
         self.viewer1d.add_line(
             np.c_[t, self.gauss_filtered],
             color="magenta",
-            label="Movement",
             name="Movement",
         )
         thresh = np.median(self.gauss_filtered) + self.threshold
         self.viewer1d.add_line(
             np.c_[[0, self.gauss_filtered.shape[0]], [thresh, thresh]],
             color="cyan",
-            label="Movement threshold",
             name="Threshold",
         )
         self.viewer1d.reset_view()
@@ -1295,7 +1291,7 @@ class PoserWidget(Container):
             # vid = pims.open(str(self.video_file))
             self.fps = self.config_data["data_cfg"]["fps"]
             try:
-                self.im = VideoReaderNP(str(self.video_file))
+                self.im = read_video(self.video_file)
             except:
                 print("Couldn't read video file")
                 self.im = None
@@ -2089,28 +2085,22 @@ class PoserWidget(Container):
         self.ind_spinbox.max = int(data_t.individuals.unique().shape[0])
 
     def read_sleep_pose_estimation_h5(self, h5_file):
-        import h5py
         """Reads h5 files from sleep pose estimation. Assumes format of x,y,ci for each bodypart in groups for each individual."""
-        sleep_data = h5py.File(h5_file, "r")
+        import tables as tb
 
-        for individual in sleep_data.keys():
-            indv1 = sleep_data[individual]
-
-            x = indv1["x"][:]
-            y = indv1["y"][:]
-            ci = indv1["ci"][:]
-
-            self.coords_data[individual] = {
-                "x": x,
-                "y": y,
-                "ci": ci,
-            }
+        with tb.open_file(str(h5_file), mode="r") as sleep_data:
+            for individual in sleep_data.list_nodes("/", classname="Group"):
+                self.coords_data[individual._v_name] = {
+                    "x": individual.x[:],
+                    "y": individual.y[:],
+                    "ci": individual.ci[:],
+                }
          # set spinbox
         self.ind_spinbox.max = len(self.coords_data)
 
     def read_coords(self, h5_file):
         """Reads coordinates from DLC files (h5 and csv). Optional data cleaning."""
-        if "poser" in str(h5_file):
+        if "poser" in os.path.basename(str(h5_file)):
             self.read_poser_coords_file(h5_file)
 
         else:
@@ -2176,7 +2166,7 @@ class PoserWidget(Container):
         self.initialise_params()
 
         # Load a model
-        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        #    self.model = YOLO("yolo11m.pt")  # load an official model
         self.chkpt = self.chkpt_dropdown.value
          # spinbox
 
@@ -2204,7 +2194,7 @@ class PoserWidget(Container):
             imgsz=h - (h % 32),
             #tracker=os.path.join(self.decoder_data_dir, "botsort.yaml"),
             stream=True,
-            max_det = 1
+            max_det = self.n_inds
         )
 
         # check frame data already exists
@@ -2221,7 +2211,7 @@ class PoserWidget(Container):
         point_properties = self.points_layer.properties.copy()
 
 
-        for frame, result in enumerate(results):
+        """for frame, result in enumerate(results):
             keypoints = result.keypoints
             track_ids = (
                 result.boxes.id.cpu().numpy().astype(int)
@@ -2251,13 +2241,78 @@ class PoserWidget(Container):
                     )
                     point_properties["node"] = np.append(
                         point_properties["node"], node_idx
-                    )
+                    )"""
+        points_list = []
+        conf_list = []
+        ind_list = []
+        node_list = []
 
-        self.points_layer.data = np.concatenate(
-            (self.points_layer.data, np.array(points))
-        )
-        self.points_layer.properties = point_properties
-        self.convert_point_layer_to_coords_data(self.points_layer)
+        for frame, result in enumerate(results):
+
+            keypoints = result.keypoints
+            if keypoints is None:
+                continue
+
+            xy = keypoints.xy
+            device = xy.device  # 🔥 ensure single source of truth
+
+            conf = (
+                keypoints.conf
+                if keypoints.conf is not None
+                else torch.ones(xy.shape[:2], device=device)
+            )
+
+            if result.boxes is not None and result.boxes.id is not None:
+                track_ids = result.boxes.id.to(device).int()
+            else:
+                track_ids = torch.arange(xy.shape[0], device=device)
+
+            P, K, _ = xy.shape
+
+            # Vectorized reshape (still GPU)
+            xy_flat = xy.reshape(-1, 2)
+            conf_flat = conf.reshape(-1)
+
+            node_ids = torch.arange(K, device=device)
+            node_flat = node_ids.repeat(P)
+
+            ind_flat = torch.repeat_interleave(track_ids, K)
+
+            frame_col = torch.full((P * K,), frame, device=device)
+
+            # stack (frame, y, x)
+            pts = torch.stack(
+                (frame_col, xy_flat[:, 1], xy_flat[:, 0]),
+                dim=1
+            )
+
+            # Off the inference device now, or a whole video of them stays on it.
+            points_list.append(pts.cpu())
+            conf_list.append(conf_flat.cpu())
+            ind_list.append(ind_flat.cpu())
+            node_list.append(node_flat.cpu())
+
+
+        # ---- SAFETY CHECK ----
+        if len(points_list) > 0:
+
+            points = torch.cat(points_list, dim=0).cpu().numpy()
+            point_properties["confidence"] = np.append(
+                point_properties["confidence"], torch.cat(conf_list).cpu().numpy()
+            )
+            point_properties["ind"] = np.append(
+                point_properties["ind"], torch.cat(ind_list).cpu().numpy()
+            )
+            point_properties["node"] = np.append(
+                point_properties["node"], torch.cat(node_list).cpu().numpy()
+            )
+
+            self.points_layer.data = np.concatenate(
+                (self.points_layer.data, points)
+            )
+
+            self.points_layer.properties = point_properties
+            self.convert_point_layer_to_coords_data(self.points_layer)
         """        try:
             from mmpose.apis import (
                 init_pose_model,
@@ -2317,7 +2372,7 @@ class PoserWidget(Container):
                                 }
 
                                 person_results.append(bbox_data)
-                                im = self.im_subset.data[frame]
+                                im = np.asarray(self.im_subset.data[frame])
 
                     if len(person_results) > 0:
                         pose_results, _ = inference_top_down_pose_model(
@@ -2362,6 +2417,129 @@ class PoserWidget(Container):
             #    "node"
             # ]
             self.points_layer.properties = point_properties"""
+        
+    
+    def batch_predict_poses(self, vids):
+        from ultralytics import YOLO
+        self.initialise_params()
+
+        # Load a model
+        #    self.model = YOLO("yolo11m.pt")  # load an official model
+        self.chkpt = self.chkpt_dropdown.value
+         # spinbox
+
+        # check its not a yolo pretrainied
+        if "yolo" in self.chkpt:
+            self.model = YOLO(self.chkpt)
+        # it is one of our trained yolo models that need to be downloaded first
+        else:
+            url = "https://github.com/pnm4sfix/PoseR/releases/download/v0.0.1b4/" + self.chkpt
+            self.model = YOLO(url)
+
+        if self.accelerator == "gpu":
+            self.device = torch.device("cuda")
+        elif self.accelerator == "cpu":
+            self.device = torch.device("cpu")
+
+        self.model.to(self.device)
+
+
+        h = self.im.shape[1]
+        nframes = nframes = self.im_subset.data.shape[0]
+        print(h)
+        results = self.model.track(
+        source=vids,
+        imgsz=h - (h % 32),
+        stream=True,
+        max_det=self.n_inds,
+        )
+
+        # ---- Create per-video storage ----
+        video_buffers = {}
+        video_layers = {}
+
+        for vid_path in vids:
+            point_properties = {"confidence": [], "ind": [], "node": []}
+
+            layer = self.viewer.add_points(
+                np.zeros((0, 3)),
+                properties=point_properties,
+                size=self.im_subset.data.shape[2] / 100,
+            )
+
+            video_layers[vid_path] = layer
+            video_buffers[vid_path] = {
+                "points": [],
+                "conf": [],
+                "ind": [],
+                "node": [],
+            }
+
+        # ---- Single pass through generator ----
+        for result in results:
+
+            vid_path = result.path  # identify which video
+            frame = result.frame    # correct per-video frame index
+
+            keypoints = result.keypoints
+            if keypoints is None:
+                continue
+
+            xy = keypoints.xy
+            conf = (
+                keypoints.conf
+                if keypoints.conf is not None
+                else torch.ones(xy.shape[:2], device=xy.device)
+            )
+
+            if result.boxes is not None and result.boxes.id is not None:
+                track_ids = result.boxes.id.int()
+            else:
+                track_ids = torch.arange(xy.shape[0], device=xy.device)
+
+            P, K, _ = xy.shape
+
+            xy_flat = xy.reshape(-1, 2)
+            conf_flat = conf.reshape(-1)
+
+            node_flat = torch.tile(torch.arange(K, device=xy.device), (P,))
+            ind_flat = torch.repeat_interleave(track_ids, K)
+            frame_col = torch.full((P * K,), frame, device=xy.device)
+
+            pts = torch.stack(
+                (frame_col, xy_flat[:, 1], xy_flat[:, 0]),
+                dim=1
+            )
+
+            buf = video_buffers[vid_path]
+            buf["points"].append(pts.cpu())
+            buf["conf"].append(conf_flat.cpu())
+            buf["ind"].append(ind_flat.cpu())
+            buf["node"].append(node_flat.cpu())
+
+        # ---- Finalize per video ----
+        for vid_path, buf in video_buffers.items():
+
+            if not buf["points"]:
+                continue
+
+            points = torch.cat(buf["points"]).cpu().numpy()
+            conf = torch.cat(buf["conf"]).cpu().numpy()
+            ind = torch.cat(buf["ind"]).cpu().numpy()
+            node = torch.cat(buf["node"]).cpu().numpy()
+
+            layer = video_layers[vid_path]
+
+            layer.data = points
+            layer.properties = {
+                "confidence": conf,
+                "ind": ind,
+                "node": node,
+            }
+
+            self.convert_point_layer_to_coords_data(layer)
+
+
     def convert_point_layer_to_coords_data(self, point_layer=None):
         
         if point_layer is None:
@@ -2461,11 +2639,11 @@ class PoserWidget(Container):
         #        "ultralytics/yolov5", "yolov5s", pretrained=True
         #    )
 
-        #elif self.detection_backbone == "YOLOv8":
+        #elif self.detection_backbone == "YOLO11":
         from ultralytics import YOLO
 
             # Load a model
-        #    self.model = YOLO("yolov8m.pt")  # load an official model
+        #    self.model = YOLO("yolo11m.pt")  # load an official model
         self.chkpt = self.chkpt_dropdown.value
          # spinbox
 
@@ -2567,7 +2745,7 @@ class PoserWidget(Container):
             # map ids to boxes
             self.get_individual_ids()"""
 
-        #elif self.detection_backbone == "YOLOv8":
+        #elif self.detection_backbone == "YOLO11":
         h = self.im.shape[1]
         print(h)
         results = self.model.track(
@@ -3288,11 +3466,11 @@ class PoserWidget(Container):
                         "ultralytics/yolov5", "yolov5s", pretrained=True
                     )
 
-                elif self.detection_backbone == "YOLOv8":
+                elif self.detection_backbone == "YOLO11":
                     from ultralytics import YOLO
 
                     # Load a model
-                    self.model = YOLO("yolov8m.pt")
+                    self.model = YOLO("yolo11m.pt")
 
                 if self.accelerator == "gpu":
                     self.device = torch.device("cuda")
@@ -3650,6 +3828,10 @@ class PoserWidget(Container):
             self.preprocess_frame = False
             self.window_size = None
 
+        try:
+            self.n_inds = self.config_data["data_cfg"]["num_inds"]
+        except:
+            self.n_inds = 1
 
         # assign model parameters
         PATH_DATASETS = self.decoder_data_dir

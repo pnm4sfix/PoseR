@@ -1,0 +1,45 @@
+# COCO human pose skeleton — 17 nodes
+
+name: coco
+num_nodes: 17
+node_names:
+  - nose
+  - l_eye
+  - r_eye
+  - l_ear
+  - r_ear
+  - l_shoulder
+  - r_shoulder
+  - l_elbow
+  - r_elbow
+  - l_wrist
+  - r_wrist
+  - l_hip
+  - r_hip
+  - l_knee
+  - r_knee
+  - l_ankle
+  - r_ankle
+edges:
+  - [15, 13]
+  - [13, 11]
+  - [16, 14]
+  - [14, 12]
+  - [11, 12]
+  - [5, 11]
+  - [6, 12]
+  - [5, 6]
+  - [7, 5]
+  - [8, 6]
+  - [9, 7]
+  - [10, 8]
+  - [1, 2]
+  - [1, 0]
+  - [2, 0]
+  - [3, 1]
+  - [4, 2]
+  - [3, 5]
+  - [4, 6]
+center_node: 0
+head_node: 0
+partition_strategy: spatial
