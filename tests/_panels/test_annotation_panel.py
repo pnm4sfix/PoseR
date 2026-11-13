@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+from qtpy.QtWidgets import QPushButton
 
 from poser._panels import annotation_panel
 from poser._panels.annotation_panel import AnnotationPanel
@@ -225,6 +226,133 @@ def test_label_names_stay_in_the_session_when_the_panel_is_reopened(qtbot):
         "[0] other",
         "[1] swim",
         "[2] turn",
+    ]
+
+
+def _removing_panel(tmp_path, chosen: int) -> SimpleNamespace:
+    """The stand-in panel with labels swim (1) and turn (2), chosen picked to remove."""
+    panel = _panel(tmp_path)  # lists the shown entry's one bout, labelled swim
+    panel._session.behaviour_labels[2] = "turn"
+    panel._entry.bouts = panel._current_bouts
+    panel._remove_label_combo = SimpleNamespace(currentData=lambda: chosen)
+    panel._rebuild_label_buttons = lambda: None
+    panel.load_bouts = lambda bouts: None
+    return panel
+
+
+def test_remove_takes_the_chosen_label_and_unlabels_its_bouts(tmp_path, monkeypatch):
+    # Remove always took the highest index, and bouts kept a label that had no name.
+    asked = []
+
+    def answer_yes(parent, title, text, buttons):
+        asked.append(text)
+        return annotation_panel.QMessageBox.Yes
+
+    monkeypatch.setattr(
+        annotation_panel,
+        "QMessageBox",
+        SimpleNamespace(Yes=1, No=2, question=answer_yes),
+    )
+    panel = _removing_panel(tmp_path, chosen=1)
+    fish2 = panel._session.add(tmp_path / "fish2_DLC.h5")
+    fish2.bouts = [
+        {"start": 0, "end": 4, "label": 1, "label_source": "hand"},
+        {"start": 6, "end": 9, "label": 2},
+    ]
+    listed = []
+    panel.load_bouts = listed.append
+
+    AnnotationPanel._on_remove_label(panel)
+
+    assert panel._session.behaviour_labels == {0: "other", 2: "turn"}
+    assert asked == [
+        "2 bouts are labelled swim in this session. Remove the label and leave them "
+        "unlabelled?"
+    ]
+    assert panel._entry.bouts == [{"start": 2, "end": 5}]
+    assert fish2.bouts == [{"start": 0, "end": 4}, {"start": 6, "end": 9, "label": 2}]
+    assert listed == [panel._entry.bouts]
+
+
+def test_removing_a_label_that_bouts_carry_can_be_cancelled(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        annotation_panel,
+        "QMessageBox",
+        SimpleNamespace(Yes=1, No=2, question=lambda *args: 2),
+    )
+    panel = _removing_panel(tmp_path, chosen=1)
+
+    AnnotationPanel._on_remove_label(panel)
+
+    assert panel._session.behaviour_labels == {0: "other", 1: "swim", 2: "turn"}
+    assert panel._current_bouts == [{"start": 2, "end": 5, "label": 1}]
+
+
+def test_removing_a_label_one_bout_carries_asks_about_that_bout(tmp_path, monkeypatch):
+    # The question read "1 bouts in this session are labelled swim".
+    asked = []
+
+    def answer_no(parent, title, text, buttons):
+        asked.append(text)
+        return annotation_panel.QMessageBox.No
+
+    monkeypatch.setattr(
+        annotation_panel,
+        "QMessageBox",
+        SimpleNamespace(Yes=1, No=2, question=answer_no),
+    )
+    panel = _removing_panel(tmp_path, chosen=1)  # its one bout is labelled swim
+
+    AnnotationPanel._on_remove_label(panel)
+
+    assert asked == [
+        "1 bout is labelled swim in this session. Remove the label and leave it "
+        "unlabelled?"
+    ]
+
+
+def test_the_last_behaviour_label_is_not_removed(tmp_path, monkeypatch, caplog):
+    caplog.set_level(logging.WARNING, logger="poser")
+    shown = []
+    monkeypatch.setattr(
+        annotation_panel,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *args: shown.append(args[-1])),
+    )
+    panel = _removing_panel(tmp_path, chosen=1)
+    del panel._session.behaviour_labels[2]
+
+    AnnotationPanel._on_remove_label(panel)
+
+    assert panel._session.behaviour_labels == {0: "other", 1: "swim"}
+    assert shown == ["At least one behaviour label is required."]
+    [warning] = _messages(caplog, logging.WARNING)
+    assert "Behaviour label 1 (swim) not removed: at least one behaviour label is " in (
+        warning
+    )
+
+
+def test_remove_lists_the_behaviour_labels_and_keeps_the_one_chosen(qtbot):
+    # Label 0 (other) is never listed; rebuilding the list must not change the choice.
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=SessionManager())
+    qtbot.addWidget(panel)
+    combo = panel._remove_label_combo
+    combo.setCurrentIndex(1)  # [2] behaviour_2
+    panel._new_label_edit.setText("swim")
+    panel._on_add_label()
+
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "[1] behaviour_1",
+        "[2] behaviour_2",
+        "[3] swim",
+    ]
+    [remove] = [b for b in panel.findChildren(QPushButton) if b.text() == "Remove"]
+    remove.click()
+    assert panel._session.behaviour_labels == {0: "other", 1: "behaviour_1", 3: "swim"}
+    assert [combo.itemText(i) for i in range(combo.count())] == [
+        "[1] behaviour_1",
+        "[3] swim",
     ]
 
 

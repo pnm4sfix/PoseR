@@ -110,7 +110,6 @@ class AnnotationPanel(QWidget):
 
         self._label_buttons_widget = QWidget()
         self._label_buttons_layout = QVBoxLayout(self._label_buttons_widget)
-        self._rebuild_label_buttons()
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
@@ -137,9 +136,17 @@ class AnnotationPanel(QWidget):
         add_row.addWidget(btn_add_label)
         manage_lay.addLayout(add_row)
 
-        btn_remove_label = QPushButton("Remove Selected Label")
+        remove_row = QHBoxLayout()
+        self._remove_label_combo = QComboBox()
+        self._remove_label_combo.setToolTip(
+            "Behaviour label to remove; the bouts it labels become unlabelled."
+        )
+        remove_row.addWidget(self._remove_label_combo)
+        btn_remove_label = QPushButton("Remove")
         btn_remove_label.clicked.connect(self._on_remove_label)
-        manage_lay.addWidget(btn_remove_label)
+        remove_row.addWidget(btn_remove_label)
+        manage_lay.addLayout(remove_row)
+        self._rebuild_label_buttons()
 
         root.addWidget(manage_grp)
 
@@ -164,17 +171,26 @@ class AnnotationPanel(QWidget):
         root.addStretch()
 
     def _rebuild_label_buttons(self) -> None:
+        """Rebuild the label buttons and the list of labels to remove."""
         # Remove old buttons
         for i in reversed(range(self._label_buttons_layout.count())):
             w = self._label_buttons_layout.itemAt(i).widget()
             if w:
                 w.setParent(None)
 
+        chosen = self._remove_label_combo.currentData()
+        self._remove_label_combo.clear()
         for idx, name in sorted(self._session.behaviour_labels.items()):
             btn = QPushButton(f"[{idx}] {name}")
             btn.setProperty("label_idx", idx)
             btn.clicked.connect(self._on_assign_label)
             self._label_buttons_layout.addWidget(btn)
+            if idx >= 1:  # label 0 (other) cannot be removed
+                self._remove_label_combo.addItem(f"[{idx}] {name}", idx)
+        # This runs whenever bouts are shown, so keep the label chosen for removal.
+        self._remove_label_combo.setCurrentIndex(
+            max(self._remove_label_combo.findData(chosen), 0)
+        )
 
     # ------------------------------------------------------------------
     # Public API called by other panels
@@ -307,22 +323,56 @@ class AnnotationPanel(QWidget):
         )
 
     def _on_remove_label(self) -> None:
-        """Remove the highest-index label (simple remove-last approach)."""
-        if not self._session.behaviour_labels:
-            log.warning("No behaviour label removed: there are no labels")
+        """Remove the label chosen in the list and unlabel the bouts it labels."""
+        labels = self._session.behaviour_labels
+        idx = self._remove_label_combo.currentData()
+        behaviours = [i for i in labels if i >= 1]
+        log.debug("Remove label %s chosen; behaviour labels %s", idx, behaviours)
+        if len(behaviours) <= 1:
+            log.warning(
+                "Behaviour label %s (%s) not removed: at least one behaviour label is "
+                "required",
+                idx,
+                labels.get(idx),
+            )
+            QMessageBox.warning(
+                self, "Cannot remove", "At least one behaviour label is required."
+            )
             return
-        if len(self._session.behaviour_labels) == 1:
-            log.warning("Behaviour label not removed: at least one label is required")
-            QMessageBox.warning(self, "Cannot remove", "At least one label is required.")
-            return
-        last_idx = max(self._session.behaviour_labels.keys())
-        del self._session.behaviour_labels[last_idx]
-        self._rebuild_label_buttons()
+        name = labels[idx]
+        # The label map is the session's, so bouts of every entry may carry it.
+        bout_lists = [self._current_bouts, *(e.bouts for e in self._session.entries)]
+        # The listed bouts are usually an entry's own list; keying by id counts once.
+        carrying = {
+            id(b): b for bouts in bout_lists for b in bouts if b.get("label") == idx
+        }
+        if carrying:
+            n = len(carrying)
+            reply = QMessageBox.question(
+                self,
+                "Remove label",
+                f"{n} {'bout is' if n == 1 else 'bouts are'} labelled {name} in this "
+                f"session. Remove the label and leave {'it' if n == 1 else 'them'} "
+                "unlabelled?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                log.debug("Removing label %s (%s) cancelled at the question", idx, name)
+                return
+        for bout in carrying.values():
+            del bout["label"]
+            bout.pop("label_source", None)
+        del labels[idx]
         log.info(
-            "Removed behaviour label %s; labels are now %s",
-            last_idx,
-            self._session.behaviour_labels,
+            "Removed behaviour label %s (%s) and unlabelled its %d bouts; labels are "
+            "now %s",
+            idx,
+            name,
+            len(carrying),
+            labels,
         )
+        self._rebuild_label_buttons()
+        self.load_bouts(self._current_bouts)
 
     def _on_bout_selected(self, row: int, seek: bool = True) -> None:
         if row < 0 or row >= len(self._current_bouts):
