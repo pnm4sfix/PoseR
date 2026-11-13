@@ -33,6 +33,7 @@ from qtpy.QtWidgets import (
 )
 
 from poser.core.session import SessionManager
+from poser.core.settings import resolve_output_dir
 
 
 class TrainPanel(QWidget):
@@ -249,8 +250,7 @@ class TrainPanel(QWidget):
             QMessageBox.warning(self, "Already running", "Training is already in progress.")
             return
 
-        # Default output dir = same folder as the first training file
-        _output_dir = str(self._training_files[0].resolve().parent / "poser_runs")
+        _output_dir = str(resolve_output_dir("runs"))
 
         cmd = [
             sys.executable, "-u", "-m", "poser.cli.main", "train",

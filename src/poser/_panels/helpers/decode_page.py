@@ -26,9 +26,9 @@ from qtpy.QtWidgets import (
 )
 
 from poser._panels.helpers.option_help import help_button
-from poser.core.inference import Inference
+from poser.core.inference import Inference, predictions_file_name
 from poser.core.session import SessionEntry, SessionManager
-from poser.core.settings import resolve_device
+from poser.core.settings import resolve_device, resolve_output_dir
 
 log = logging.getLogger(__name__)
 
@@ -144,7 +144,18 @@ class DecodePage(QWidget):
         if entry is None:
             self._status.append("No active file. Activate one in the Data panel first.")
             return
-        self._run([entry])
+        if self._checkpoint is None:
+            self._status.append("Load a decoder checkpoint first.")
+            return
+        name = predictions_file_name(entry.pose_path or entry.video_path)
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save predictions as",
+            str(resolve_output_dir("predictions") / name),
+            "NumPy (*.npy)",
+        )
+        if path:
+            self._run([entry], [Path(path)])
 
     def _on_predict_all_clicked(self) -> None:
         entries = [e for e in self._session.entries if e.pose_path or e.coords_data]
@@ -153,31 +164,45 @@ class DecodePage(QWidget):
                 "No session file has pose data. Add some in the Data panel."
             )
             return
-        self._run(entries)
-
-    def _run(self, entries: list[SessionEntry]) -> None:
         if self._checkpoint is None:
             self._status.append("Load a decoder checkpoint first.")
             return
-        worker = thread_worker(self._predict)(entries)
+        folder = QFileDialog.getExistingDirectory(
+            self, "Save predictions in", str(resolve_output_dir("predictions"))
+        )
+        if folder:
+            outputs = [
+                Path(folder) / predictions_file_name(e.pose_path or e.video_path)
+                for e in entries
+            ]
+            self._run(entries, outputs)
+
+    def _run(self, entries: list[SessionEntry], outputs: list[Path]) -> None:
+        worker = thread_worker(self._predict)(entries, outputs)
         worker.yielded.connect(self._on_worker_yielded)
         self._start(worker)
 
     def _predict(
-        self, entries: list[SessionEntry]
+        self, entries: list[SessionEntry], outputs: list[Path]
     ) -> Iterator[int | str | _FileResult]:
         """Run in the worker thread, so it reads and writes no widgets.
 
+        Writes each file's predictions to the path at its position in outputs.
         Yields status lines, the progress across all files as a percentage, and
         one _FileResult per file. A file that fails does not stop the rest.
         """
         n_failed = 0
-        for index, entry in enumerate(entries):
+        for index, (entry, output) in enumerate(zip(entries, outputs)):
             name = Path(entry.pose_path).name if entry.pose_path else "in-memory pose"
             prefix = name
             if len(entries) > 1:
                 prefix = f"[{index + 1}/{len(entries)}] {name}"
             try:
+                if output in outputs[:index]:
+                    raise ValueError(
+                        f"{output.name} is also the predictions file of an earlier "
+                        "file in this run, which it would replace."
+                    )
                 form = self._inference.input_load(entry.pose_path, entry.coords_data)
                 n_frames = self._inference.n_frames
                 yield f"{prefix}: loaded as {form}, {n_frames:,} frames. Predicting …"
@@ -192,12 +217,8 @@ class DecodePage(QWidget):
                     yield int(100 * files_done / len(entries))
                 predictions = np.concatenate(batches)
 
-                saved = None
-                try:
-                    saved = self._inference.predictions_save(predictions)
-                    yield f"{prefix}: saved {saved.name} and its .csv."
-                except ValueError as exc:  # the pose came from memory, with no file
-                    yield f"{prefix}: not saved: {exc}"
+                saved = self._inference.predictions_save(predictions, output)
+                yield f"{prefix}: saved {saved.name} and its .csv."
                 yield _FileResult(
                     entry, prefix, predictions=predictions, saved_path=saved
                 )
@@ -240,8 +261,7 @@ class DecodePage(QWidget):
             self.predictions_ready.emit(result.predictions, self._checkpoint)
 
     def _on_export_clicked(self) -> None:
-        saved = self._shown.saved_path
-        default = saved.with_suffix(".json") if saved else Path("predictions.json")
+        default = self._shown.saved_path.with_suffix(".json")
         path, _ = QFileDialog.getSaveFileName(
             self, "Export predictions", str(default), "JSON (*.json)"
         )

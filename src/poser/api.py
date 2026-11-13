@@ -274,7 +274,7 @@ class PoseR:
         *,
         checkpoint: Optional[str | Path] = None,
         mode: str = "behaviour",
-        output_dir: str | Path = "batch_output",
+        output_dir: str | Path | None = None,
         n_individuals: int = 1,
     ) -> List[Any]:
         """Batch-process multiple pose files.
@@ -284,13 +284,14 @@ class PoseR:
         results : list of BatchResult
         """
         from poser.core.batch import BatchJob
+        from poser.core.settings import resolve_output_dir
 
         job = BatchJob(
             pose_files=[Path(f) for f in pose_files],
             mode=mode,
             checkpoint=Path(checkpoint) if checkpoint else None,
             config=self._config,
-            output_dir=Path(output_dir),
+            output_dir=Path(output_dir) if output_dir else resolve_output_dir("batch"),
             n_individuals=n_individuals,
         )
         return job.run()

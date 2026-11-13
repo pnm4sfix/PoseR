@@ -182,8 +182,9 @@ def save_frame_as_classification(
     label: str,
     source_file: str,
     output_dir: str,
+    file_name: str = "classification_frames.h5",
 ) -> str:
-    """Append a single labelled pose frame to ``classification_frames.h5``.
+    """Append a single labelled pose frame to ``output_dir/file_name``.
 
     The saved row contains the full ``(C, n_nodes)`` pose at *frame_idx* and
     can be merged with ``Zebtrain.npy`` during the next training run.
@@ -201,7 +202,9 @@ def save_frame_as_classification(
     source_file:
         Original pose file path (for provenance).
     output_dir:
-        Directory to write / append ``classification_frames.h5``.
+        Directory holding the file.
+    file_name:
+        The ``.h5`` file to create or append to.
 
     Returns
     -------
@@ -216,7 +219,7 @@ def save_frame_as_classification(
         frame_idx = tb.Int32Col()
 
     os.makedirs(output_dir, exist_ok=True)
-    h5_path = os.path.join(output_dir, "classification_frames.h5")
+    h5_path = os.path.join(output_dir, file_name)
     mode = "a" if os.path.exists(h5_path) else "w"
 
     data = coords_data[individual_key]

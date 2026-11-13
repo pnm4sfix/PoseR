@@ -39,6 +39,7 @@ from poser.core.scoring import (
     score_bouts,
 )
 from poser.core.session import SessionManager
+from poser.core.settings import resolve_output_dir
 
 log = logging.getLogger(__name__)
 
@@ -365,11 +366,10 @@ class MetricsPanel(QWidget):
         self._canvas.draw()
 
     def _on_export_clicked(self) -> None:
+        default = resolve_output_dir("metrics") / "confusion_matrix.png"
         if self._predictions_path is not None:
             stem = self._predictions_path.with_suffix("").name
-            default = self._predictions_path.with_name(f"{stem}_confusion_matrix.png")
-        else:
-            default = Path("confusion_matrix.png")
+            default = default.with_name(f"{stem}_confusion_matrix.png")
         path, _ = QFileDialog.getSaveFileName(
             self, "Export confusion matrix", str(default), "PNG image (*.png)"
         )

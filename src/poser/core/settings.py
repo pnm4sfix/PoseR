@@ -14,9 +14,34 @@ rather than constructing Settings, so one object is shared process-wide.
 
 from __future__ import annotations
 
+from pathlib import Path
+from typing import Literal
+
 import torch
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# The data_dir subfolder each kind of generated file goes to by default.
+OutputKind = Literal[
+    "batch",
+    "finetune",
+    "frames",
+    "metrics",
+    "models",
+    "pose",
+    "predictions",
+    "runs",
+    "sessions",
+    "training",
+]
+
+
+def _find_data_dir(package_dir: Path) -> Path:
+    """Return <repository>/data for a source checkout, else ~/.poser/data."""
+    repository = package_dir.parents[1]  # package_dir is <repository>/src/poser
+    if (repository / "pyproject.toml").is_file():
+        return repository / "data"
+    return Path.home() / ".poser" / "data"
 
 
 class Settings(BaseSettings):
@@ -42,6 +67,13 @@ class Settings(BaseSettings):
         "an op is missing from the mps backend.",
     )
 
+    data_dir: Path = Field(
+        default_factory=lambda: _find_data_dir(Path(__file__).resolve().parents[1]),
+        description="Folder generated files default to, one subfolder per kind. "
+        "In a source checkout it is the repository's data/. An installed "
+        "package has no repository, so it is ~/.poser/data.",
+    )
+
 
 settings = Settings()
 
@@ -61,3 +93,10 @@ def resolve_device() -> torch.device:
     if torch.backends.mps.is_available():
         return torch.device("mps")
     return torch.device("cpu")
+
+
+def resolve_output_dir(kind: OutputKind) -> Path:
+    """Return the folder this kind of output defaults to, creating it if missing."""
+    folder = settings.data_dir / kind
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder

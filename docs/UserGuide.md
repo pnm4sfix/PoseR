@@ -105,6 +105,33 @@ Video file                  Pose file (.h5 / .csv)
 | **Skeleton** | A species-specific adjacency graph (edges between keypoints). Built-in or custom YAML. |
 | **Checkpoint** | A `.ckpt` or `.pt` file holding trained model weights. |
 
+### Where generated files are saved
+
+Every file PoseR generates goes into a subfolder of one data folder unless you
+choose otherwise. In a source checkout that folder is `data/` in the
+repository. An installed package has no repository, so it uses
+`~/.poser/data/`. Set the `POSER_DATA_DIR` environment variable to use another
+folder.
+
+In napari, each save opens a dialog already pointing at the default, so
+pressing **Save** accepts it and typing a name changes it. Runs over several
+files ask for a folder once and name each file after its input. On the command
+line, `--output` overrides the default.
+
+| Output | Saved by | Default folder |
+|--------|----------|----------------|
+| `<video>_poser_coords.h5` | Inference Panel, Pose Estimation | `data/pose/` |
+| `<stem>_predictions.npy` and `.csv` | Inference Panel, Behaviour Decoding; `poser predict-npy` | `data/predictions/` |
+| `<stem>.predictions.json` | `poser predict` | `data/predictions/` |
+| `<stem>_pose.npy`, `_labels.npy`, `_schema.json` | Annotation Panel, Save Training Data | `data/training/` |
+| YOLO `images/` and `labels/`, `classification_frames.h5` | Analysis Panel, Save Current Frame | `data/frames/` |
+| Confusion matrix `.png`, `_metrics.csv`, `_matrix.csv` | Metrics Panel, Export | `data/metrics/` |
+| `session.json` | Data Panel, Save Session | `data/sessions/` |
+| `<run name>/` with checkpoints and logs | Train Panel; `poser train` | `data/runs/` |
+| Batch outputs and `batch_manifest.csv` | `poser batch`; `PoseR.batch()` | `data/batch/` |
+| YOLO fine-tuning runs | `poser finetune` | `data/finetune/` |
+| `<checkpoint>.repaired.ckpt` | `poser model repair` | `data/models/` |
+
 ---
 
 ## W1 — I already have pose estimation; I want to annotate behaviours
@@ -132,14 +159,14 @@ Video file                  Pose file (.h5 / .csv)
    - Click a label button (e.g. `[0] swim`, `[1] freeze`) to assign and auto-advance.
    - Keyboard shortcut: press the digit key matching the label index.
 
-6. When all bouts are labelled: **Export Labels → Save Labelled Bouts (HDF5)…**  
-   → saves `classification.h5` in your project folder.
+6. When all bouts are labelled: **Annotation Panel → Save Training Data (.npy)…**  
+   → saves `<stem>_pose.npy`, `<stem>_labels.npy` and `<stem>_schema.json`, in `data/training/` unless you choose another name.
 
 7. Move to the next file: **Data Panel → Next Pending ▶** or double-click the next entry.  
    Repeat steps 4–6 for each file.  
    Mark files as ✅ done when finished.
 
-8. At any point: **Data Panel → Save Session** → `session.json`.  
+8. At any point: **Data Panel → Save Session** → `data/sessions/session.json`, or a name you choose.  
    Resume another day: **Load Session**.
 
 ### Python API
@@ -229,7 +256,7 @@ results = job.run()
    A live log streams subprocess output into the panel.  
    The napari GUI stays fully responsive throughout.
 5. When complete, the best checkpoint path is printed in the log.  
-   Checkpoints are saved to `poser_runs/<run_name>/checkpoints/best-*.ckpt`.
+   Checkpoints are saved to `data/runs/<run_name>/checkpoints/best-*.ckpt`.
 
 ### CLI
 
@@ -306,7 +333,7 @@ In **Analysis Panel**:
 
 1. Load your video and navigate to a representative frame using the viewer slider.
 2. **Export Frame for Finetuning → Format: YOLO (pose estimation)**.
-3. Click **Save Current Frame…** and choose an output directory.  
+3. Click **Save Current Frame…** and choose an output directory (the dialog opens on `data/frames/`).  
    This saves the image and a YOLO-format `.txt` label file.
 4. Repeat for 50–300 frames covering diverse poses.
 
@@ -481,7 +508,7 @@ results/
 1. **Data Panel → Add Folder of Pose Files…** (or raw videos if using YOLO first).
 2. **Inference Panel → Browse for checkpoint** → select your `.ckpt`.
 3. **▶▶ Run Batch Inference** — a progress bar tracks each file.
-4. Results stream into the log; predictions are saved automatically.
+4. Choose the folder to save into (the dialog opens on `data/predictions/`); results stream into the log.
 
 ### Python API
 
@@ -757,7 +784,7 @@ Commands:
 |------|---------|---------|
 | `--config` / `-c` | `decoder_config.yml` | Training configuration YAML |
 | `--checkpoint` / `-w` | — | Model weights (`.ckpt` or `.pt`) |
-| `--output` / `-o` | `batch_output/` | Output directory |
+| `--output` / `-o` | a folder under `data/`, see [Where generated files are saved](#where-generated-files-are-saved) | Output directory or file |
 | `--epochs` / `-e` | from config | Override `trainer.max_epochs` |
 | `--name` / `-n` | `"run"` | Run sub-directory name |
 | `--verbose` / `-v` | off | Enable DEBUG logging |

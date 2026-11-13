@@ -33,6 +33,7 @@ import yaml
 from rich.console import Console
 from rich.table import Table
 
+from poser.core.settings import resolve_output_dir
 from poser.models.registry import describe_checkpoint
 
 app = typer.Typer(
@@ -127,7 +128,7 @@ def install_torch(
 def train(
     files: List[Path] = typer.Argument(..., help="HDF5 or *_pose.npy files to train on."),
     config: Path = typer.Option("decoder_config.yml", "--config", "-c", help="TrainingConfig YAML."),
-    output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Override output directory."),
+    output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Defaults to data/runs."),
     epochs: Optional[int] = typer.Option(None, "--epochs", "-e", help="Override max_epochs."),
     run_name: Optional[str] = typer.Option(None, "--name", "-n", help="Run name / sub-directory."),
     num_class: Optional[int] = typer.Option(None, "--num-class", help="Override model num_class."),
@@ -150,11 +151,7 @@ def train(
         console.print("[yellow]Config file not found - using defaults.[/yellow]")
 
     # Apply CLI overrides
-    if output_dir:
-        cfg.output_dir = output_dir
-    else:
-        # Default: place runs alongside the training data, not in CWD
-        cfg.output_dir = files[0].resolve().parent / "poser_runs"
+    cfg.output_dir = output_dir or resolve_output_dir("runs")
     if epochs:
         cfg.trainer.max_epochs = epochs
     if run_name:
@@ -233,7 +230,7 @@ def predict(
     pose_file: Path = typer.Argument(..., help="Input pose HDF5 or CSV file."),
     checkpoint: Path = typer.Option(..., "--checkpoint", "-w", help="Model .ckpt / .pt file."),
     config: Path = typer.Option("decoder_config.yml", "--config", "-c"),
-    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output HDF5 path."),
+    output: Optional[Path] = typer.Option(None, "--output", "-o", help="Output .json path. Defaults to data/predictions."),
     individual: str = typer.Option("ind1", "--individual", "-i"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -250,7 +247,8 @@ def predict(
         individual=individual,
     )
 
-    out_path = output or pose_file.with_suffix(".predictions.json")
+    name = pose_file.with_suffix(".predictions.json").name
+    out_path = output or resolve_output_dir("predictions") / name
     with open(out_path, "w") as fh:
         json.dump({str(k): int(v) for k, v in result.items()}, fh, indent=2)
     console.print(f"[green]Predictions saved to:[/green] {out_path}")
@@ -266,7 +264,8 @@ def predict_npy(
     ),
     output: Optional[Path] = typer.Option(
         None, "--output", "-o",
-        help="Output path. Defaults to <pose_file>_predictions.npy and .csv."
+        help="Output path. Defaults to data/predictions/<pose_file>_predictions.npy "
+        "and .csv."
     ),
     batch_size: int = typer.Option(64, "--batch", "-b", help="Inference batch size."),
     device: str = typer.Option(
@@ -406,7 +405,7 @@ def predict_npy(
     predictions = np.array(all_preds, dtype=np.int64)  # (T_total,)
 
     # ── Save outputs ──────────────────────────────────────────────────
-    base = output or pose_file.parent / (pose_file.stem + "_predictions")
+    base = output or resolve_output_dir("predictions") / (pose_file.stem + "_predictions")
     npy_path = base.with_suffix(".npy")
     csv_path = base.with_suffix(".csv")
 
@@ -438,12 +437,15 @@ def batch(
                              help="'behaviour' or 'pose_estimation'."),
     checkpoint: Optional[Path] = typer.Option(None, "--checkpoint", "-w"),
     config: Path = typer.Option("decoder_config.yml", "--config", "-c"),
-    output_dir: Path = typer.Option(Path("batch_output"), "--output", "-o"),
+    output_dir: Optional[Path] = typer.Option(
+        None, "--output", "-o", help="Defaults to data/batch."
+    ),
     n_individuals: int = typer.Option(1, "--individuals", "-n"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
     """Batch process multiple pose files."""
     _setup_logging(verbose)
+    output_dir = output_dir or resolve_output_dir("batch")
 
     from poser.core.batch import BatchJob
     from poser.training.config import TrainingConfig
@@ -477,7 +479,9 @@ def finetune(
     num_keypoints: int = typer.Option(9, "--keypoints", "-k"),
     epochs: int = typer.Option(50, "--epochs", "-e"),
     batch_size: int = typer.Option(16, "--batch", "-b"),
-    project: str = typer.Option("poser_yolo_finetune", "--project"),
+    project: Optional[Path] = typer.Option(
+        None, "--project", help="Defaults to data/finetune."
+    ),
     name: str = typer.Option("run", "--name"),
     verbose: bool = typer.Option(False, "--verbose", "-v"),
 ) -> None:
@@ -619,7 +623,7 @@ def model_repair(
     checkpoint: Path = typer.Argument(..., help="Decoder to repair."),
     config: Path = typer.Option(..., "--config", "-c", help="decoder_config.yml."),
     output: Optional[Path] = typer.Option(
-        None, "--output", "-o", help="Defaults to <checkpoint>.repaired.ckpt."
+        None, "--output", "-o", help="Defaults to data/models/<checkpoint>.repaired.ckpt."
     ),
 ) -> None:
     """Embed a decoder's preprocessing settings into the checkpoint.
@@ -677,7 +681,8 @@ def model_repair(
     )
     raw["hyper_parameters"] = hp
 
-    out = output or checkpoint.with_suffix(".repaired.ckpt")
+    name = checkpoint.with_suffix(".repaired.ckpt").name
+    out = output or resolve_output_dir("models") / name
     torch.save(raw, str(out))
     console.print(f"[green]Wrote {out}[/green]")
     console.print(

@@ -36,6 +36,7 @@ from qtpy.QtWidgets import (
 
 from poser.core.bout_detection import manual_bout
 from poser.core.session import SessionManager
+from poser.core.settings import resolve_output_dir
 
 
 class AnalysisPanel(QWidget):
@@ -366,14 +367,15 @@ class AnalysisPanel(QWidget):
 
         entry = self._session.active
         export_type = self._export_type_combo.currentText()
-
-        output_dir = QFileDialog.getExistingDirectory(self, "Select output directory")
-        if not output_dir:
-            return
-
         individual = self._individual_combo.currentText()
 
         if "YOLO" in export_type:
+            output_dir = QFileDialog.getExistingDirectory(
+                self, "Select output directory", str(resolve_output_dir("frames"))
+            )
+            if not output_dir:
+                return
+
             # Need a frame image — try to get from viewer
             frame_image = self._get_frame_image(frame_idx)
             if frame_image is None:
@@ -406,6 +408,17 @@ class AnalysisPanel(QWidget):
             QMessageBox.information(self, "Saved", f"Image: {img_path}\nLabel: {label_path}")
 
         else:  # Classification
+            # Frames are appended, so an existing file is no reason to warn.
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Add the frame to",
+                str(resolve_output_dir("frames") / "classification_frames.h5"),
+                "HDF5 (*.h5)",
+                options=QFileDialog.DontConfirmOverwrite,
+            )
+            if not path:
+                return
+
             if entry is None or entry.coords_data is None:
                 QMessageBox.warning(self, "No data", "No pose data loaded.")
                 return
@@ -421,7 +434,8 @@ class AnalysisPanel(QWidget):
                 frame_idx=frame_idx,
                 label=label,
                 source_file=entry.pose_path,
-                output_dir=Path(output_dir),
+                output_dir=Path(path).parent,
+                file_name=Path(path).name,
             )
             QMessageBox.information(self, "Saved", f"Saved classification frame to:\n{h5_path}")
 
