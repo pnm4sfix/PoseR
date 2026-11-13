@@ -169,6 +169,43 @@ def test_label_click_with_no_bout_selected_says_to_select_one(tmp_path, monkeypa
     assert shown == ["Select a bout first"]
 
 
+def test_behaviours_are_numbered_from_1_after_label_0_other(qtbot):
+    # The first button was "[0] behaviour_0", and 0 is also every frame outside a bout.
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=SessionManager())
+    qtbot.addWidget(panel)
+    panel.load_bouts([{"start": 2, "end": 5}])
+    layout = panel._label_buttons_layout
+    buttons = [layout.itemAt(i).widget() for i in range(layout.count())]
+
+    assert [button.text() for button in buttons] == [
+        "[0] other",
+        "[1] behaviour_1",
+        "[2] behaviour_2",
+    ]
+    buttons[1].click()
+    assert panel._current_bouts == [{"start": 2, "end": 5, "label": 1}]
+
+
+def test_label_0_stays_other_when_the_labels_are_set(tmp_path, caplog):
+    # A behaviour given index 0 would share it with every frame outside a bout.
+    caplog.set_level(logging.WARNING, logger="poser")
+    panel = _panel(tmp_path)
+    panel._rebuild_label_buttons = lambda: None
+
+    AnnotationPanel.set_behaviour_labels(panel, {0: "rest", 1: "swim"})
+
+    assert panel._behaviour_labels == {0: "other", 1: "swim"}
+    [warning] = _messages(caplog, logging.WARNING)
+    assert "Label 0 is always other; the name 'rest' given for it is not used" in (
+        warning
+    )
+
+    AnnotationPanel.set_behaviour_labels(panel, {1: "swim", 2: "turn"})
+
+    assert panel._behaviour_labels == {0: "other", 1: "swim", 2: "turn"}
+
+
 def test_loaded_bouts_are_logged_with_their_label_counts(
     tmp_path, monkeypatch, caplog
 ):

@@ -63,10 +63,16 @@ class AnnotationPanel(QWidget):
         super().__init__()
         self._viewer = viewer
         self._session = session or SessionManager(viewer=viewer)
-        self._behaviour_labels: Dict[int, str] = behaviour_labels or {0: "behaviour_0", 1: "behaviour_1"}
+        self._behaviour_labels: Dict[int, str] = {
+            0: "other",
+            1: "behaviour_1",
+            2: "behaviour_2",
+        }
         self._current_bouts: List[dict] = []
 
         self._build_ui()
+        if behaviour_labels:
+            self.set_behaviour_labels(behaviour_labels)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -236,9 +242,17 @@ class AnnotationPanel(QWidget):
             self._current_label_display.setText("Current: —")
         self._emit_annotations()
     def set_behaviour_labels(self, labels: Dict[int, str]) -> None:
-        """Update label schema and rebuild buttons."""
-        log.debug("Behaviour labels set to %s", labels)
-        self._behaviour_labels = labels
+        """Update label schema and rebuild buttons; label 0 stays other."""
+        if labels.get(0, "other") != "other":
+            log.warning(
+                "Label 0 is always other; the name %r given for it is not used",
+                labels[0],
+            )
+        behaviours = {idx: name for idx, name in labels.items() if idx != 0}
+        self._behaviour_labels = {0: "other", **behaviours}
+        log.debug(
+            "Behaviour labels set to %s from %s", self._behaviour_labels, labels
+        )
         self._rebuild_label_buttons()
 
     # ------------------------------------------------------------------
@@ -523,7 +537,7 @@ class AnnotationPanel(QWidget):
 
             # Build per-frame label array
             # -1 = detected but unlabelled (ignored during training)
-            #  0 = background (not in any bout)
+            #  0 = other (not in any bout, or in a bout labelled other)
             # >0 = class label
             labels = np.zeros(T, dtype=np.int64)
             for b in self._current_bouts:
@@ -532,13 +546,7 @@ class AnnotationPanel(QWidget):
                 end = min(T, int(b["end"]))
                 labels[start:end] = lbl  # -1 preserved for unlabelled bouts
 
-            # Build schema — ensure 0 = "other"
-            schema = {0: "other"}
-            for idx, name in self._behaviour_labels.items():
-                if idx != 0:
-                    schema[idx] = name
-                elif name not in ("behaviour_0", "other"):
-                    schema[0] = name
+            schema = dict(self._behaviour_labels)  # label 0 is always "other"
 
             np.save(str(out / f"{stem}_pose.npy"), pose)
             np.save(str(out / f"{stem}_labels.npy"), labels)
