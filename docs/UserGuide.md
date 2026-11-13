@@ -164,20 +164,28 @@ attached to a bug report.
    - Adjust the *Threshold* slider until the detected bouts align with visible movement.
    - Click **▶ Detect Bouts Automatically**.
 
-5. **Annotation Panel** — the bout list populates.
-   - Double-click a bout → the viewer seeks to that frame.
-   - Click a label button (e.g. `[0] swim`, `[1] freeze`) to assign and auto-advance.
-   - Keyboard shortcut: press the digit key matching the label index.
+5. **Annotation Panel** — the bouts are listed as soon as Detect finishes, with the first unlabelled bout selected.
+   - Click a bout, or use the arrow keys or **◀ Prev** / **Next ▶**, to select it; the viewer moves to its first frame.
+   - Click a label button to label the selected bout; the next bout is then selected.
+     `[0] other` marks a bout that is none of your behaviours. Behaviours are numbered from 1: `[1] behaviour_1` and `[2] behaviour_2`
+     are there by default, and a label you add under **Manage Labels** takes the next number (e.g. `swim` becomes `[3] swim`); the defaults stay until you remove them.
+   - Or press the label's digit key while the Annotation panel has keyboard focus, e.g. after clicking the bout list.
+     With the viewer focused, the digit keys keep their napari shortcuts.
+   - **Manage Labels → Remove** removes the label chosen beside it; after you confirm, the bouts it labels become unlabelled.
+     The other labels keep their numbers, so **Train Panel → Add numpy training folder…** sets *Num classes* to the highest label number + 1.
+   - The **Ethogram** (`Plugins → PoseR`) shows the labels along the recording, by name, in its *Annotations* row.
 
 6. When all bouts are labelled: **Annotation Panel → Save Training Data (.npy)…**  
-   → saves `<stem>_pose.npy`, `<stem>_labels.npy` and `<stem>_schema.json`, in `data/training/` unless you choose another name.
+   → saves `<stem>_pose.npy`, `<stem>_labels.npy` and `<stem>_schema.json`, in `data/training/` unless you choose another name.  
+   Frames outside every bout are saved as 0 (other); frames of bouts still unlabelled as -1, which training ignores.
 
 7. Move to the next file: **Data Panel → Next Pending ▶** or double-click the next entry.  
    Repeat steps 4–6 for each file.  
    Mark files as ✅ done when finished.
 
 8. At any point: **Data Panel → Save Session** → `data/sessions/session.json`, or a name you choose.  
-   Resume another day: **Load Session**.
+   The session keeps each file's bouts, their labels and the label names.  
+   Resume another day: **Load Session** restores them, and the Annotation panel lists the active file's bouts again.
 
 ### Python API
 
@@ -516,9 +524,12 @@ results/
 ### napari GUI
 
 1. **Data Panel → Add Folder of Pose Files…** (or raw videos if using YOLO first).
-2. **Inference Panel → Browse for checkpoint** → select your `.ckpt`.
-3. **▶▶ Run Batch Inference** — a progress bar tracks each file.
+2. **Inference Panel → Behaviour Decoding → Browse for checkpoint (.ckpt)…** → select your decoder.
+3. **▶▶ Predict behaviours (all session files)** — a progress bar tracks each file.
 4. Choose the folder to save into (the dialog opens on `data/predictions/`); results stream into the log.
+5. To label a file's bouts from its predictions: activate it, detect its bouts in the **Analysis Panel**,
+   click **▶ Predict behaviours (active file)**, then **Annotation Panel → Label bouts from predictions** (see W9).
+   Decoder labels never overwrite hand labels.
 
 ### Python API
 
@@ -624,10 +635,17 @@ save_to_h5(bouts, video_file="new_fish.mp4", n_nodes=9,
 
 ### napari GUI flow
 
-1. Run inference on a new file (**Inference Panel**).
-2. The predictions populate the **Annotation Panel** alongside the bout list.
-3. Cycle through bouts, correct mis-labelled ones, then re-export.
-4. Add the corrected file to your next training run.
+1. Activate the new file (**Data Panel**) and detect its bouts (**Analysis Panel**).
+2. **Inference Panel → Behaviour Decoding**: browse for the weak model's checkpoint, then click **▶ Predict behaviours (active file)**.
+3. **Annotation Panel → Label bouts from predictions**: each bout without a hand label gets the class predicted
+   most often across its frames. The list shows it as e.g. `[forward, decoder]`, and the statistics line
+   counts decoder labels apart, e.g. `12/83 labelled (9 by decoder)`.
+   - Class names stored in the checkpoint map to labels by name: `other` is label 0, a name already in the label map keeps its index, and new names are added as labels.
+     A checkpoint with no class names labels class *c* as label *c*, adding `class_c` for an index with no label.
+   - The predictions belong to the active file: activating another file turns the button off until you predict again.
+4. Cycle through the bouts and correct wrong ones with a label button or digit key. A corrected label is a hand label:
+   decoder labels never overwrite hand labels, and labelling from predictions again replaces only the decoder's own.
+5. **Save Training Data (.npy)…** and add the corrected file to your next training run.
 
 ---
 
