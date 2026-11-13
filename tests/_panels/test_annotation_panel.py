@@ -8,7 +8,8 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
-from qtpy.QtWidgets import QPushButton
+from qtpy.QtCore import Qt
+from qtpy.QtWidgets import QApplication, QPushButton, QShortcut
 
 from poser._panels import annotation_panel
 from poser._panels.annotation_panel import AnnotationPanel
@@ -122,6 +123,7 @@ def _labelling_panel(tmp_path, row: int, bouts: list[dict]) -> SimpleNamespace:
         setCurrentRow=lambda r: None,
     )
     panel.sender = lambda: SimpleNamespace(property=lambda name: 1)
+    panel._assign_label = lambda index: AnnotationPanel._assign_label(panel, index)
     panel._current_label_display = SimpleNamespace(setText=lambda text: None)
     panel._update_stats = lambda: None
     panel._emit_annotations = lambda: None
@@ -171,6 +173,40 @@ def test_label_click_with_no_bout_selected_says_to_select_one(tmp_path, monkeypa
     assert shown == ["Select a bout first"]
 
 
+def test_a_digit_key_labels_the_selected_bout_as_its_button_does(qtbot):
+    # The keys were documented but did nothing: the bout list took them as a search.
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=SessionManager())
+    qtbot.addWidget(panel)
+    bouts = [{"start": 2, "end": 5}, {"start": 6, "end": 9}, {"start": 10, "end": 12}]
+    panel.load_bouts(bouts)  # selects the first bout
+    panel.show()
+    QApplication.setActiveWindow(panel)  # shortcuts act only in the active window
+    panel._bout_list.setFocus()
+
+    qtbot.keyClick(panel._bout_list, Qt.Key_2)
+    qtbot.keyClick(panel._bout_list, Qt.Key_0)  # the next bout, selected after a label
+    qtbot.keyClick(panel._bout_list, Qt.Key_7)  # there is no label 7
+
+    assert bouts == [
+        {"start": 2, "end": 5, "label": 2, "label_source": "hand"},
+        {"start": 6, "end": 9, "label": 0, "label_source": "hand"},
+        {"start": 10, "end": 12},
+    ]
+    panel._new_label_edit.setFocus()
+    qtbot.keyClick(panel._new_label_edit, Qt.Key_1)  # part of a new label's name
+    assert panel._new_label_edit.text() == "1"
+    assert bouts[2] == {"start": 10, "end": 12}
+
+    panel.load_bouts([])
+    panel._bout_list.setFocus()
+    qtbot.keyClick(panel._bout_list, Qt.Key_1)
+    assert panel._current_label_display.text() == "Select a bout first"
+    # Each repeat of a held key would label the next bout; QTest cannot send repeats,
+    # so the shortcuts are checked to ignore them.
+    assert not any(s.autoRepeat() for s in panel.findChildren(QShortcut))
+
+
 def test_behaviours_are_numbered_from_1_after_label_0_other(qtbot):
     # The first button was "[0] behaviour_0", and 0 is also every frame outside a bout.
     viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
@@ -186,7 +222,9 @@ def test_behaviours_are_numbered_from_1_after_label_0_other(qtbot):
         "[2] behaviour_2",
     ]
     buttons[1].click()
-    assert panel._current_bouts == [{"start": 2, "end": 5, "label": 1}]
+    assert panel._current_bouts == [
+        {"start": 2, "end": 5, "label": 1, "label_source": "hand"}
+    ]
 
 
 def test_label_0_stays_other_when_the_labels_are_set(tmp_path, caplog):
@@ -472,7 +510,7 @@ def test_labels_are_written_to_the_bouts_of_the_entry_shown(tmp_path, qtbot):
     assert panel._bout_list.currentRow() == 0
     layout = panel._label_buttons_layout
     layout.itemAt(1).widget().click()  # [1] behaviour_1
-    assert fish2.bouts[0] == {"start": 0, "end": 4, "label": 1}
+    assert fish2.bouts[0] == {"start": 0, "end": 4, "label": 1, "label_source": "hand"}
     assert fish1.bouts == [{"start": 2, "end": 5}, {"start": 10, "end": 12}]
 
     panel.show_entry(None)

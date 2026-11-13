@@ -12,12 +12,14 @@ Features:
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 from typing import Dict, List, Optional
 
 import numpy as np
 import napari
 from qtpy.QtCore import Qt, Signal
+from qtpy.QtGui import QKeySequence
 from qtpy.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -30,6 +32,7 @@ from qtpy.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QShortcut,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -118,6 +121,15 @@ class AnnotationPanel(QWidget):
         label_lay.addWidget(scroll)
 
         root.addWidget(label_grp)
+
+        # Digit keys label bouts only while this panel has focus: in the viewer,
+        # napari uses them to switch layer modes.
+        for idx in range(10):
+            shortcut = QShortcut(QKeySequence(str(idx)), self)
+            shortcut.setContext(Qt.WidgetWithChildrenShortcut)
+            # A held key would otherwise label every bout it auto-advances to.
+            shortcut.setAutoRepeat(False)
+            shortcut.activated.connect(partial(self._assign_label, idx))
 
         # ── Manage Labels ─────────────────────────────────────────────
         manage_grp = QGroupBox("Manage Labels")
@@ -419,7 +431,25 @@ class AnnotationPanel(QWidget):
             self._bout_list.setCurrentRow(row + 1)
 
     def _on_assign_label(self) -> None:
+        """Label the selected bout with the clicked button's label."""
+        self._assign_label(self.sender().property("label_idx"))
+
+    def _assign_label(self, label_idx: int) -> None:
+        """Label the selected bout by hand, for a label button or digit key."""
         row = self._bout_list.currentRow()
+        log.debug(
+            "Label %s asked for list row %d (%d bouts listed)",
+            label_idx,
+            row,
+            len(self._current_bouts),
+        )
+        if label_idx not in self._session.behaviour_labels:
+            log.warning(
+                "Label not assigned: there is no label %s in the label map %s",
+                label_idx,
+                self._session.behaviour_labels,
+            )
+            return
         if row < 0 or row >= len(self._current_bouts):
             log.warning(
                 "Label not assigned: no bout selected (row %d, %d bouts loaded)",
@@ -428,17 +458,10 @@ class AnnotationPanel(QWidget):
             )
             self._current_label_display.setText("Select a bout first")
             return
-        btn = self.sender()
-        label_idx = btn.property("label_idx")
-        label_name = self._session.behaviour_labels.get(label_idx, str(label_idx))
-        if label_idx not in self._session.behaviour_labels:
-            log.warning(
-                "Label index %s is not in the label map %s",
-                label_idx,
-                self._session.behaviour_labels,
-            )
+        label_name = self._session.behaviour_labels[label_idx]
 
         self._current_bouts[row]["label"] = label_idx
+        self._current_bouts[row]["label_source"] = "hand"
         item = self._bout_list.item(row)
         b = self._current_bouts[row]
         item.setText(f"Bout {row+1:03d}  frames {b['start']}–{b['end']}  [{label_name}]")
