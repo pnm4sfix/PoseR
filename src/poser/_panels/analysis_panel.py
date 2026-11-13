@@ -12,6 +12,7 @@ Features:
 """
 from __future__ import annotations
 
+import bisect
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -63,7 +64,6 @@ class AnalysisPanel(QWidget):
         super().__init__()
         self._viewer = viewer
         self._session = session or SessionManager(viewer=viewer)
-        self._detected_bouts: List[dict] = []
         self._manual_start: Optional[int] = None
 
         self._build_ui()
@@ -302,17 +302,18 @@ class AnalysisPanel(QWidget):
             coords_data=coords_data,
             individual_key=individual,
         )
-        self._detected_bouts.append(bout)
+        # The entry's own list keeps its other bouts and their labels; the
+        # Annotation panel numbers bouts in list order, so keep it in start order.
+        bisect.insort(entry.bouts, bout, key=lambda b: b["start"])
         log.info(
             "Added manual bout %d-%d for %s on %s; %d bouts in total",
             self._manual_start,
             end_frame,
             individual,
             entry.pose_path,
-            len(self._detected_bouts),
+            len(entry.bouts),
         )
         self._update_bout_count()
-        self._save_bouts_to_session(self._detected_bouts)
         log.debug(
             "Emitting bouts_changed for %s (%d bouts)",
             entry.pose_path,
@@ -322,7 +323,7 @@ class AnalysisPanel(QWidget):
 
         self._manual_range_label.setText(
             f"Added: {self._manual_start} → {end_frame}  "
-            f"(total {len(self._detected_bouts)} bouts)"
+            f"(total {len(entry.bouts)} bouts)"
         )
         self._manual_start = None
         self._btn_set_end.setEnabled(False)
@@ -436,9 +437,8 @@ class AnalysisPanel(QWidget):
             max_f,
         )
 
-        self._detected_bouts = bouts
-        self._update_bout_count()
         self._save_bouts_to_session(bouts)
+        self._update_bout_count()
         log.debug(
             "Emitting bouts_changed for %s (%d bouts)",
             entry.pose_path,
@@ -591,7 +591,9 @@ class AnalysisPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _update_bout_count(self) -> None:
-        self._bout_count_label.setText(f"Bouts detected: {len(self._detected_bouts)}")
+        entry = self._session.active
+        count = len(entry.bouts) if entry is not None else 0
+        self._bout_count_label.setText(f"Bouts detected: {count}")
 
     def _get_frame_image(self, frame_idx: int):
         """Try to extract a 2-D image array from the *visible* active image layer."""
@@ -733,4 +735,6 @@ class AnalysisPanel(QWidget):
 
     @property
     def bouts(self) -> List[dict]:
-        return list(self._detected_bouts)
+        """A copy of the active entry's bouts; empty when no entry is active."""
+        entry = self._session.active
+        return list(entry.bouts) if entry is not None else []

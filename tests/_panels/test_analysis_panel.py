@@ -87,15 +87,15 @@ def _bout_panel(session: SessionManager) -> SimpleNamespace:
         _min_frames_spin=SimpleNamespace(value=lambda: 10),
         _max_frames_spin=SimpleNamespace(value=lambda: 300),
         _manual_start=None,
-        _detected_bouts=[],
         bouts_changed=SimpleNamespace(emit=lambda entry: None),
-        _update_bout_count=lambda: None,
+        _bout_count_label=SimpleNamespace(setText=lambda text: None),
         _manual_range_label=SimpleNamespace(setText=lambda text: None),
         _btn_set_end=SimpleNamespace(setEnabled=lambda enabled: None),
     )
     panel._save_bouts_to_session = lambda bouts: (
         AnalysisPanel._save_bouts_to_session(panel, bouts)
     )
+    panel._update_bout_count = lambda: AnalysisPanel._update_bout_count(panel)
     return panel
 
 
@@ -158,6 +158,46 @@ def test_detected_and_added_bouts_are_sent_with_their_entry(tmp_path, monkeypatc
         (session.active, [(2, 20)]),
         (session.active, [(2, 8), (2, 20)]),
     ]
+
+
+def test_a_manual_bout_goes_into_the_active_entrys_own_bouts_in_start_order(
+    tmp_path, monkeypatch
+):
+    # Set End wrote the panel's own list over them: here the bouts it had detected
+    # on another recording, and after reopening the panel only the new bout.
+    monkeypatch.setattr(
+        bout_detection,
+        "orthogonal_variance",
+        lambda points, center_node, fps, n_nodes: ([(30, 45)], None, None, None),
+    )
+    session = _recording(tmp_path, frames=50)
+    panel = _bout_panel(session)
+    shown = []
+    panel._bout_count_label = SimpleNamespace(setText=shown.append)
+    AnalysisPanel._on_detect(panel)
+    fish2 = session.add(tmp_path / "fish2_DLC.h5")
+    fish2.coords_data = session.entries[0].coords_data
+    bouts = [{"start": 0, "end": 4, "label": 1}, {"start": 12, "end": 20}]
+    fish2.bouts = bouts
+    session.activate(1)
+    ranges = []
+    panel._manual_range_label = SimpleNamespace(setText=ranges.append)
+    panel._manual_start = 5
+
+    AnalysisPanel._on_set_end(panel)  # the viewer is on frame 8
+
+    assert fish2.bouts is bouts
+    assert [(b["start"], b["end"], b.get("label")) for b in bouts] == [
+        (0, 4, 1),
+        (5, 8, None),
+        (12, 20, None),
+    ]
+    assert [(b["start"], b["end"]) for b in session.entries[0].bouts] == [(30, 45)]
+    assert shown == ["Bouts detected: 1", "Bouts detected: 3"]
+    assert ranges == ["Added: 5 → 8  (total 3 bouts)"]
+    listed = AnalysisPanel.bouts.fget(panel)
+    assert listed is not bouts
+    assert [(b["start"], b["end"]) for b in listed] == [(0, 4), (5, 8), (12, 20)]
 
 
 def test_added_manual_bout_is_logged(tmp_path, caplog):
