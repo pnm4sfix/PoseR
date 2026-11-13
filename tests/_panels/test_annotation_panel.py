@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
+import torch
 from qtpy.QtCore import Qt
 from qtpy.QtWidgets import QApplication, QPushButton, QShortcut
 
@@ -580,6 +581,8 @@ def test_a_loaded_session_shows_its_bouts_under_its_label_names(tmp_path):
         _session=session,
         _entry=None,
         _bout_list=SimpleNamespace(clear=lambda: None),
+        _predictions=None,
+        _label_from_predictions_button=SimpleNamespace(setEnabled=lambda on: None),
         load_bouts=listed.append,
         _rebuild_label_buttons=lambda: buttons.append(dict(session.behaviour_labels)),
         labels_changed=SimpleNamespace(emit=sent.append),
@@ -615,3 +618,176 @@ def test_label_track_and_training_data_come_from_the_entry_shown(
     assert len(labels) == 10
     assert dialogs.opened == [tmp_path / "data" / "training" / "rec_DLC_pose.npy"]
     assert np.load(tmp_path / "fish1_pose.npy").shape == (3, 10, 3, 1)  # (C, T, V, M)
+
+
+def _predicted_panel(tmp_path, bouts, predictions, checkpoint) -> SimpleNamespace:
+    """The stand-in panel listing bouts, with predictions kept; calls records output."""
+    panel = _panel(tmp_path)  # labels other (0) and swim (1)
+    panel.calls = []
+    panel._current_bouts = bouts
+    panel._predictions = predictions
+    panel._checkpoint = checkpoint
+    panel._map_classes_to_labels = lambda names, votes: (
+        AnnotationPanel._map_classes_to_labels(panel, names, votes)
+    )
+    panel._rebuild_label_buttons = lambda: panel.calls.append("buttons")
+    panel.labels_changed = SimpleNamespace(emit=panel.calls.append)
+    panel.load_bouts = panel.calls.append
+    panel._current_label_display = SimpleNamespace(setText=panel.calls.append)
+    return panel
+
+
+def test_bouts_without_a_hand_label_are_labelled_from_the_predictions(tmp_path):
+    # Nothing labelled bouts from a decoder, although the docs said it would.
+    checkpoint = tmp_path / "decoder.ckpt"
+    names = {0: "other", 1: "turn", 2: "swim"}
+    torch.save({"hyper_parameters": {"data_cfg": {"label_dict": names}}}, checkpoint)
+    predictions = np.repeat([1, 2, 2, 2, 0], 4)  # 20 frames
+    bouts = [
+        {"start": 0, "end": 4},
+        {"start": 4, "end": 8, "label": 1, "label_source": "hand"},
+        {"start": 8, "end": 12, "label": 0},  # no source, so perhaps by hand
+        {"start": 12, "end": 16, "label": 0, "label_source": "decoder"},
+        {"start": 16, "end": 20, "label": -1},
+        {"start": 30, "end": 35},  # no predicted frame
+    ]
+    panel = _predicted_panel(tmp_path, bouts, predictions, checkpoint)
+
+    AnnotationPanel._on_label_from_predictions(panel)
+
+    assert panel._session.behaviour_labels == {0: "other", 1: "swim", 2: "turn"}
+    assert bouts == [
+        {"start": 0, "end": 4, "label": 2, "label_source": "decoder"},
+        {"start": 4, "end": 8, "label": 1, "label_source": "hand"},
+        {"start": 8, "end": 12, "label": 0},
+        {"start": 12, "end": 16, "label": 1, "label_source": "decoder"},
+        {"start": 16, "end": 20, "label": 0, "label_source": "decoder"},
+        {"start": 30, "end": 35},
+    ]
+    assert panel.calls == [
+        "buttons",
+        {0: "other", 1: "swim", 2: "turn"},  # the new name, before the labels
+        bouts,
+        "Labelled 3 bouts from predictions; kept 2 hand labels",
+    ]
+
+
+def test_without_class_names_decoder_class_c_gives_label_c(tmp_path):
+    # Older checkpoints store no names; a decoder trained on exported labels
+    # predicts the label indices themselves.
+    checkpoint = tmp_path / "old.ckpt"
+    numbers = {0: 0, 1: 1, 3: 3}
+    torch.save({"hyper_parameters": {"data_cfg": {"label_dict": numbers}}}, checkpoint)
+    bouts = [{"start": 0, "end": 4}, {"start": 4, "end": 8}, {"start": 8, "end": 12}]
+    panel = _predicted_panel(tmp_path, bouts, np.repeat([1, 3, 0], 4), checkpoint)
+
+    AnnotationPanel._on_label_from_predictions(panel)
+
+    assert panel._session.behaviour_labels == {0: "other", 1: "swim", 3: "class_3"}
+    assert [b["label"] for b in bouts] == [1, 3, 0]
+
+
+def test_the_decoder_class_other_gives_label_0_when_two_labels_are_named_other(
+    tmp_path,
+):
+    # Add accepts a name already in the map; the last label named other was used.
+    checkpoint = tmp_path / "decoder.ckpt"
+    names = {0: "other", 1: "swim"}
+    torch.save({"hyper_parameters": {"data_cfg": {"label_dict": names}}}, checkpoint)
+    bouts = [{"start": 0, "end": 4}, {"start": 4, "end": 8}]
+    panel = _predicted_panel(tmp_path, bouts, np.repeat([0, 1], 4), checkpoint)
+    panel._session.behaviour_labels = {0: "other", 1: "swim", 2: "other"}
+
+    AnnotationPanel._on_label_from_predictions(panel)
+
+    assert [b["label"] for b in bouts] == [0, 1]
+    assert panel._session.behaviour_labels == {0: "other", 1: "swim", 2: "other"}
+
+
+def test_bouts_stay_unlabelled_when_the_decoder_cannot_be_read(
+    tmp_path, monkeypatch, caplog
+):
+    # Taking class c as label c instead would label every bout of class 0 other.
+    caplog.set_level(logging.ERROR, logger="poser")
+    shown = []
+    monkeypatch.setattr(
+        annotation_panel,
+        "QMessageBox",
+        SimpleNamespace(warning=lambda *args: shown.append(args[1])),
+    )
+    bouts = [{"start": 0, "end": 4}]
+    moved = tmp_path / "moved.ckpt"
+    panel = _predicted_panel(tmp_path, bouts, np.zeros(4, dtype=int), moved)
+
+    AnnotationPanel._on_label_from_predictions(panel)
+
+    assert bouts == [{"start": 0, "end": 4}]
+    assert shown == ["Cannot read the decoder"]
+    [error] = _messages(caplog, logging.ERROR)
+    assert f"No bouts labelled from predictions: cannot read {moved}" in error
+
+
+def test_decoder_labels_are_listed_and_counted_apart_from_hand_labels(
+    tmp_path, monkeypatch
+):
+    texts, stats = [], []
+    monkeypatch.setattr(
+        annotation_panel,
+        "QListWidgetItem",
+        lambda text: texts.append(text) or SimpleNamespace(setData=lambda *args: None),
+    )
+    panel = _panel(tmp_path)  # labels other (0) and swim (1)
+    panel._bout_list = SimpleNamespace(
+        currentItem=lambda: None,
+        clear=lambda: None,
+        addItem=lambda item: None,
+        blockSignals=lambda block: None,
+        setCurrentRow=lambda row: None,
+    )
+    panel._on_bout_selected = lambda row, seek: None
+    panel._emit_annotations = lambda: None
+    panel._stats_label = SimpleNamespace(setText=stats.append)
+    panel._update_stats = lambda: AnnotationPanel._update_stats(panel)
+
+    AnnotationPanel.load_bouts(
+        panel,
+        [
+            {"start": 2, "end": 5, "label": 1, "label_source": "decoder"},
+            {"start": 6, "end": 9, "label": 1, "label_source": "hand"},
+            {"start": 10, "end": 12},
+        ],
+    )
+
+    assert texts == [
+        "Bout 001  frames 2–5  [swim, decoder]",
+        "Bout 002  frames 6–9  [swim]",
+        "Bout 003  frames 10–12  [unlabelled]",
+    ]
+    assert stats == ["2/3 labelled (1 by decoder)  |  swim: 2"]
+
+
+def test_predictions_can_label_bouts_until_another_entry_is_shown(tmp_path, qtbot):
+    session = SessionManager()
+    fish1 = session.add(tmp_path / "fish1_DLC.h5")
+    fish2 = session.add(tmp_path / "fish2_DLC.h5")
+    fish1.bouts = [{"start": 0, "end": 4}]
+    viewer = SimpleNamespace(dims=SimpleNamespace(set_point=lambda axis, frame: None))
+    panel = AnnotationPanel(viewer, session=session)
+    qtbot.addWidget(panel)
+    panel.show_entry(fish1)
+    button = panel._label_from_predictions_button
+    assert not button.isEnabled()
+
+    panel.set_predictions(np.full(4, 2), None)  # as the Inference panel sends them
+    panel.show_entry(fish1)  # Detect again and manual bouts send the same entry
+    assert button.isEnabled()
+    button.click()
+
+    assert fish1.bouts == [
+        {"start": 0, "end": 4, "label": 2, "label_source": "decoder"}
+    ]
+    assert panel._bout_list.item(0).text() == (
+        "Bout 001  frames 0–4  [behaviour_2, decoder]"
+    )
+    panel.show_entry(fish2)  # the predictions are for fish1's frames
+    assert not button.isEnabled()

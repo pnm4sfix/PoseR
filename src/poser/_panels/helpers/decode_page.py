@@ -334,11 +334,13 @@ class DecodePage(QWidget):
             result.prefix,
             result.entry is self._session.active,
         )
-        # The Ethogram and Metrics follow the file on screen, so a batch run
-        # does not leave them showing whichever file happened to finish last.
+        # The Ethogram, Metrics and Annotation panels follow the file on screen, so a
+        # batch run does not leave them showing whichever file happened to finish last.
         if result.entry is self._session.active:
             log.info(
-                "Sending predictions for %s to the Ethogram and Metrics", result.prefix
+                "Sending predictions for %s to the Ethogram, Metrics and Annotation "
+                "panels",
+                result.prefix,
             )
             self._shown = result
             self.predictions_ready.emit(result.predictions, self._checkpoint)

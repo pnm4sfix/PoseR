@@ -107,6 +107,7 @@ def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
             labels_changed=_Signal(),
             show_entry=lambda entry: None,
             resend=lambda: resent.append(True),
+            set_predictions=lambda predictions, checkpoint: None,
         ),
         "_ethogram_cache": SimpleNamespace(
             load_annotations=lambda labels: None,
@@ -137,7 +138,11 @@ def test_each_connection_between_panels_is_logged_once(monkeypatch, caplog):
         "Connected the Inference panel's predictions to the Metrics panel",
         "Connected the Data panel's active entry to the Annotation panel",
         "Connected the Analysis panel's bouts to the Annotation panel",
+        "Connected the Inference panel's predictions to the Annotation panel",
     ]
+    assert panels["_inference_cache"].predictions_ready.slots[-1] is (
+        panels["_annotation_cache"].set_predictions
+    )
     assert panels["_data_cache"].active_entry_changed.slots == [
         panels["_annotation_cache"].show_entry
     ]

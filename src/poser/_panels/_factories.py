@@ -176,6 +176,15 @@ def _wire_panels(viewer) -> None:
             _wired.add(pair)
             log.info("Connected the Analysis panel's bouts to the Annotation panel")
 
+    if inference is not None and annotation is not None:
+        pair = (id(inference), id(annotation), "annotation_predictions")
+        if pair not in _wired:
+            inference.predictions_ready.connect(annotation.set_predictions)
+            _wired.add(pair)
+            log.info(
+                "Connected the Inference panel's predictions to the Annotation panel"
+            )
+
 
 def make_data_panel() -> DataPanel:
     _configure_logging()

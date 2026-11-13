@@ -38,6 +38,11 @@ from qtpy.QtWidgets import (
     QWidget,
 )
 
+from poser.core.scoring import (
+    bout_classes,
+    class_names_from_checkpoint,
+    labels_for_classes,
+)
 from poser.core.session import SessionEntry, SessionManager
 from poser.core.settings import resolve_output_dir
 
@@ -73,6 +78,9 @@ class AnnotationPanel(QWidget):
         self._session = session or SessionManager(viewer=viewer)
         self._entry: SessionEntry | None = None
         self._current_bouts: List[dict] = []
+        # A decoder's per-frame predictions for the shown entry, and its checkpoint.
+        self._predictions: np.ndarray | None = None
+        self._checkpoint: Path | None = None
 
         self._build_ui()
         if behaviour_labels:
@@ -124,6 +132,19 @@ class AnnotationPanel(QWidget):
         scroll.setWidget(self._label_buttons_widget)
         scroll.setMaximumHeight(150)
         label_lay.addWidget(scroll)
+
+        self._label_from_predictions_button = QPushButton(
+            "Label bouts from predictions"
+        )
+        self._label_from_predictions_button.setToolTip(
+            "Gives each bout without a hand label the class the decoder predicted most "
+            "often in it. Predict in the Inference panel first."
+        )
+        self._label_from_predictions_button.setEnabled(False)
+        self._label_from_predictions_button.clicked.connect(
+            self._on_label_from_predictions
+        )
+        label_lay.addWidget(self._label_from_predictions_button)
 
         root.addWidget(label_grp)
 
@@ -225,6 +246,16 @@ class AnnotationPanel(QWidget):
             # A bout of another recording over the same frames is another bout, so
             # it must not stay selected.
             self._bout_list.clear()
+            # Predictions label the frames of one recording, never another's bouts.
+            if self._predictions is not None:
+                log.debug(
+                    "Dropped the predictions from %s: they are not for %s",
+                    self._checkpoint,
+                    entry.pose_path if entry is not None else None,
+                )
+            self._predictions = None
+            self._checkpoint = None
+            self._label_from_predictions_button.setEnabled(False)
         self._entry = entry
         # Load Session replaces the session's label map and then sends its active
         # entry here, so the buttons are rebuilt from the map now in use.
@@ -253,6 +284,8 @@ class AnnotationPanel(QWidget):
         for i, b in enumerate(bouts):
             label_idx = b.get("label", -1)
             label_name = self._session.behaviour_labels.get(label_idx, "unlabelled")
+            if b.get("label_source") == "decoder":
+                label_name += ", decoder"
             item = QListWidgetItem(
                 f"Bout {i+1:03d}  frames {b['start']}–{b['end']}  [{label_name}]"
             )
@@ -314,6 +347,20 @@ class AnnotationPanel(QWidget):
         )
         self.labels_changed.emit(dict(self._session.behaviour_labels))
         self._emit_annotations()
+
+    def set_predictions(
+        self, predictions: np.ndarray, checkpoint: Path | None = None
+    ) -> None:
+        """Keep a decoder's per-frame predictions to label the shown entry's bouts."""
+        self._predictions = np.asarray(predictions)
+        self._checkpoint = checkpoint
+        self._label_from_predictions_button.setEnabled(True)
+        log.info(
+            "Kept %d frames of predictions from %s to label the bouts of %s",
+            len(self._predictions),
+            checkpoint,
+            self._entry.pose_path if self._entry is not None else None,
+        )
 
     # ------------------------------------------------------------------
     # Slots
@@ -502,6 +549,92 @@ class AnnotationPanel(QWidget):
         # Auto-advance to next bout
         if row + 1 < self._bout_list.count():
             self._bout_list.setCurrentRow(row + 1)
+
+    def _on_label_from_predictions(self) -> None:
+        """Label each bout without a hand label with the class predicted most in it."""
+        bouts = self._current_bouts
+        log.debug(
+            "Label bouts from predictions: %d bouts, %d frames of predictions from %s",
+            len(bouts),
+            len(self._predictions),
+            self._checkpoint,
+        )
+        if not bouts:
+            log.warning("No bouts labelled from predictions: no bouts are listed")
+            self._current_label_display.setText("No bouts to label")
+            return
+        classes = None
+        if self._checkpoint is not None:
+            try:
+                import torch  # lazy: torch is slow to import
+
+                raw = torch.load(
+                    str(self._checkpoint), map_location="cpu", weights_only=False
+                )
+            except Exception as exc:
+                log.exception(
+                    "No bouts labelled from predictions: cannot read %s",
+                    self._checkpoint,
+                )
+                QMessageBox.warning(
+                    self,
+                    "Cannot read the decoder",
+                    f"No bouts labelled: cannot read {self._checkpoint}.\n{exc}",
+                )
+                return
+            classes = class_names_from_checkpoint(raw)
+        votes = bout_classes(self._predictions, bouts)
+        to_label = self._map_classes_to_labels(
+            classes.names if classes is not None else None, votes
+        )
+        labelled = hand = 0
+        for bout, cls in zip(bouts, votes, strict=True):
+            # A label of no known source may be the user's, so it is kept too.
+            if bout.get("label", -1) >= 0 and bout.get("label_source") != "decoder":
+                hand += 1
+            elif cls is not None:
+                bout["label"] = to_label[cls]
+                bout["label_source"] = "decoder"
+                labelled += 1
+        log.info(
+            "Labelled %d of %d bouts from the predictions of %s (decoder class to "
+            "label %s); kept %d hand labels; %d bouts have no predicted frame",
+            labelled,
+            len(bouts),
+            self._checkpoint,
+            to_label,
+            hand,
+            len(bouts) - labelled - hand,
+        )
+        self.load_bouts(bouts)
+        self._current_label_display.setText(
+            f"Labelled {labelled} bouts from predictions; kept {hand} hand labels"
+        )
+
+    def _map_classes_to_labels(
+        self, names: dict[int, str] | None, votes: list[int | None]
+    ) -> dict[int, int]:
+        """Map decoder classes to label indices, adding labels for new class names."""
+        labels = self._session.behaviour_labels
+        voted = {c for c in votes if c is not None}
+        log.debug(
+            "Mapping decoder classes %s (names %s) to the labels %s",
+            sorted(voted),
+            names,
+            labels,
+        )
+        before = set(labels)
+        to_label = labels_for_classes(names, voted, labels)
+        added = {i: labels[i] for i in sorted(labels.keys() - before)}
+        if added:
+            log.info(
+                "Added the decoder's classes as labels %s; labels are now %s",
+                added,
+                labels,
+            )
+            self._rebuild_label_buttons()
+            self.labels_changed.emit(dict(labels))
+        return to_label
 
     # ------------------------------------------------------------------
     # Ethogram integration
@@ -714,6 +847,11 @@ class AnnotationPanel(QWidget):
     def _update_stats(self) -> None:
         total = len(self._current_bouts)
         labelled = sum(1 for b in self._current_bouts if b.get("label", -1) >= 0)
+        by_decoder = sum(
+            1
+            for b in self._current_bouts
+            if b.get("label", -1) >= 0 and b.get("label_source") == "decoder"
+        )
         counts: Dict[int, int] = {}
         for b in self._current_bouts:
             lbl = b.get("label", -1)
@@ -721,6 +859,7 @@ class AnnotationPanel(QWidget):
 
         parts = [f"{self._session.behaviour_labels.get(k, k)}: {v}"
                  for k, v in counts.items() if k >= 0]
+        decoder_note = f" ({by_decoder} by decoder)" if by_decoder else ""
         self._stats_label.setText(
-            f"{labelled}/{total} labelled  |  " + ",  ".join(parts)
+            f"{labelled}/{total} labelled{decoder_note}  |  " + ",  ".join(parts)
         )

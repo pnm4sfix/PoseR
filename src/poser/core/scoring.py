@@ -128,6 +128,48 @@ def score_bouts(
     )
 
 
+def bout_classes(predictions: np.ndarray, bouts: list[dict]) -> list[int | None]:
+    """Give each bout the class predicted most often across its frames.
+
+    A bout covers frames start to end - 1, as in score_bouts, clipped to the
+    predictions; a bout with no predicted frame gets None.
+    """
+    classes: list[int | None] = []
+    for bout in bouts:
+        start = max(0, int(bout["start"]))
+        end = min(len(predictions), int(bout["end"]))
+        frames = predictions[start:end]
+        if len(frames) == 0:
+            classes.append(None)
+        else:
+            classes.append(int(Counter(frames.tolist()).most_common(1)[0][0]))
+    return classes
+
+
+def labels_for_classes(
+    names: dict[int, str] | None, classes: set[int], labels: dict[int, str]
+) -> dict[int, int]:
+    """Map decoder classes to label indices; new class names are added to labels."""
+    to_label: dict[int, int] = {}
+    if names is None:
+        # Without names, class c is taken as label c: a decoder trained on the
+        # labels the Annotation panel exports predicts those indices.
+        for c in sorted(classes):
+            if c not in labels:
+                labels[c] = f"class_{c}"
+            to_label[c] = c
+    else:
+        # The lowest index wins for a repeated name, so other is always label 0.
+        index_of = {name: idx for idx, name in sorted(labels.items(), reverse=True)}
+        for c in sorted(names.keys() | classes):
+            name = names.get(c, f"class_{c}")
+            if name not in index_of:
+                index_of[name] = max(labels) + 1
+                labels[index_of[name]] = name
+            to_label[c] = index_of[name]
+    return to_label
+
+
 def save_score_csv(score: DecoderScore, base: Path) -> list[Path]:
     """Write a score as <base>_metrics.csv and <base>_matrix.csv.
 
